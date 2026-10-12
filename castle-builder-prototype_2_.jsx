@@ -690,7 +690,93 @@ const PETITIONER_DEFS = {
     text: '„Mein König, wir sind gekommen, um im Namen unseres Herrschers eine jährliche Abgabe zu fordern. Verweigert Ihr dies, so betrachtet es als Kriegserklärung."',
     image: COURT_IMG_DELEGATION,
   },
+  // ---- Neue Bittsteller & Ereignisse. `image: null` zeigt vorerst ein gestaltetes Platzhalter-
+  // bild (emoji + tint); sobald ein Bild existiert, einfach `image: COURT_IMG_…` eintragen.
+  fluechtlinge: {
+    title: 'Flüchtlinge aus dem Grenzland erbitten Einlass:',
+    text: '„Gnade, mein König! Die Sachsen haben unsere Dörfer niedergebrannt. Wir sind fleißige Leute — gebt uns Land und Brot, und wir dienen Euch treu."',
+    image: null, emoji: '🧳', tint: '#4a5a6a',
+  },
+  alchemist: {
+    title: 'Ein Alchemist in schwarzem Gewand tritt vor den Thron:',
+    text: '„Mein König! In meinem Tiegel verwandelt sich Blei in reines Gold — gewährt mir nur ein wenig Startkapital, und Eure Schatzkammer wird überquellen."',
+    image: null, emoji: '⚗️', tint: '#4a3a6a',
+  },
+  turnier: {
+    title: 'Ein Herold verkündet:',
+    text: '„Mein König! Die Ritter des Landes brennen darauf, sich zu messen. Richtet ein Turnier aus, und Euer Name wird in allen Burgen besungen!"',
+    image: null, emoji: '🏇', tint: '#7a3a2a',
+  },
+  wilderer: {
+    title: 'Der Förster bringt einen gefesselten Wilderer:',
+    text: '„Mein König, dieser Kerl hat in Euren Wäldern einen Hirsch erlegt. Was soll mit ihm geschehen?" Der Mann fleht: „Meine Kinder hungern, Herr!"',
+    image: null, emoji: '🦌', tint: '#3a5a2a',
+  },
+  wilderer_folge: {
+    title: 'Eine Wildererbande treibt ihr Unwesen:',
+    text: 'Der begnadigte Wilderer hat Freunde gefunden — eine ganze Bande plündert nun Wildbestand und Vorratskammern.',
+    image: null, emoji: '🏹', tint: '#2a3a1a',
+  },
+  gilde: {
+    title: 'Ein Gesandter der Kaufmannsgilde bittet um Gehör:',
+    text: '„Mein König! Die Gilde plant eine Handelsfahrt nach Flandern. Beteiligt Euch an der Unternehmung, und Ihr erhaltet drei Jahre lang Euren Anteil am Gewinn."',
+    image: null, emoji: '⚖️', tint: '#6a5a2a',
+  },
+  baumeister: {
+    title: 'Ein berühmter Baumeister bietet seine Dienste an:',
+    text: '„Mein König! Ich habe Kathedralen errichtet. Mit meinen Plänen und Kniffen bauen Eure Leute schneller, als Ihr es für möglich haltet."',
+    image: null, emoji: '📐', tint: '#5a4a3a',
+  },
+  soeldner: {
+    title: 'Ein Söldnerhauptmann tritt vor den Thron:',
+    text: '„Mein König, man munkelt, die Sachsen rüsten zum Angriff. Meine Männer kämpfen für jeden, der zahlt — für eine Schlacht, keinen Tag länger."',
+    image: null, emoji: '🗡️', tint: '#4a2a2a',
+  },
+  spion: {
+    title: 'Die Wache hat einen sächsischen Spion gefasst:',
+    text: 'Der Mann wurde dabei ertappt, wie er die Mauern abschritt und Zeichnungen anfertigte. Er schweigt beharrlich.',
+    image: null, emoji: '🕵️', tint: '#2a2a3a',
+  },
+  verraeter: {
+    title: 'Ein Verräter wurde enttarnt!',
+    text: 'Einer der aufgenommenen Flüchtlinge stand im Sold der Sachsen. Bevor man ihn fasste, hat er Gold aus der Schatzkammer beiseitegeschafft.',
+    image: null, emoji: '🗝️', tint: '#3a1a1a',
+  },
+  silberfund: {
+    title: 'Die Steinmetze melden einen Fund:',
+    text: '„Mein König! Im Steinbruch sind wir auf eine Silberader gestoßen! Noch weiß niemand davon…"',
+    image: null, emoji: '💎', tint: '#4a5a6a',
+  },
+  unwetter: {
+    title: 'Ein Hagelsturm verwüstet die Felder!',
+    text: 'In einer einzigen Nacht hat der Hagel die halbe Ernte vernichtet. Die Bauern blicken bang zur Burg hinauf.',
+    image: null, emoji: '⛈️', tint: '#2a3a4a',
+  },
+  seuche: {
+    title: 'Eine Seuche bricht im Dorf aus!',
+    text: 'Fieber und Husten gehen von Haus zu Haus. Schon sind die ersten Bauern zu schwach für die Feldarbeit.',
+    image: null, emoji: '🐀', tint: '#3a4a2a',
+  },
+  brand: {
+    title: 'Feuer! Feuer!',
+    text: 'Aus einem Gebäude im Burghof schlagen Flammen. Die Leute laufen mit Eimern zusammen und warten auf Euren Befehl.',
+    image: null, emoji: '🔥', tint: '#6a2a1a',
+  },
 };
+
+// "Ruf" (reputation, 0–100): how the realm and its neighbours see the king. Choices in the
+// petitions move it; it shapes who comes to court, how content the village is, and what
+// mercenaries charge.
+const REPUTATION_START = 50;
+function reputationLabel(r) {
+  if (r < 25) return 'Verrufen';
+  if (r < 45) return 'Umstritten';
+  if (r < 65) return 'Geachtet';
+  if (r < 85) return 'Angesehen';
+  return 'Legendär';
+}
+const BAUMEISTER_WAGE = 0.3;
+const BAUMEISTER_BUILD_SPEED = 1.35;
 
 // The three knights ("Ritter") who can individually be recruited via the 'ritter'
 // petitioner — each fights in battle as its own 'champion' unit (see computeSiegePositions
@@ -4003,7 +4089,7 @@ function computeWorkerPath(fromI, fromJ, toI, toJ, nav) {
   return navSmooth(nav, pts, exA, exB);
 }
 
-function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, haulPriority, fleeMode, treesIn, rocksIn, currentDay) {
+function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, haulPriority, fleeMode, treesIn, rocksIn, currentDay, buildSpeed = 1) {
   let structures = { ...structuresIn };
   let avail = { ...resourcesIn };
   const storageCap = storageCapacity(structures);
@@ -4265,7 +4351,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     const site = structures[key];
     const crew = crewCount[key] || 0;
     if (crew === 0) { structures[key] = { ...site, crew: 0 }; return; }
-    const gain = crew * PROGRESS_GAIN_PER_WORKER_PER_TICK;
+    const gain = crew * PROGRESS_GAIN_PER_WORKER_PER_TICK * buildSpeed;
     const newProgress = site.progress + gain;
     // Once a crew is actually back on site, any "these are ruins from the last siege"
     // visual should fade in favour of the normal in-progress look — the moment work
@@ -5327,7 +5413,53 @@ export default function CastleBuilder() {
     }
   }, []);
 
-  const buildPetitionEvent = useCallback((type, currentYear) => {
+  // ---- Ereignis-Mechaniken: Ruf, Ereignisketten, Wagnisse, Verträge, Söldner -------------
+  const [reputation, setReputation] = useState(REPUTATION_START);
+  const reputationRef = useRef(REPUTATION_START);
+  useEffect(() => { reputationRef.current = reputation; }, [reputation]);
+  // Follow-up events scheduled by earlier choices: { type, day, data }. A due entry always
+  // takes precedence over a random petitioner.
+  const [storyQueue, setStoryQueue] = useState([]);
+  const storyQueueRef = useRef([]);
+  useEffect(() => { storyQueueRef.current = storyQueue; }, [storyQueue]);
+  // Result popup for gambles and follow-ups: { emoji, tone, title, text }.
+  const [eventOutcome, setEventOutcome] = useState(null);
+  // Running income streams (trade ventures, a silver vein): paid monthly until untilDay,
+  // each month at risk of failing with failChance.
+  const [contracts, setContracts] = useState([]);
+  const contractsRef = useRef([]);
+  useEffect(() => { contractsRef.current = contracts; }, [contracts]);
+  const [baumeisterHired, setBaumeisterHired] = useState(false);
+  const baumeisterHiredRef = useRef(false);
+  useEffect(() => { baumeisterHiredRef.current = baumeisterHired; }, [baumeisterHired]);
+  // Mercenaries hired for the next battle only, and a multiplier on the size of the next
+  // Saxon attack (spies, traitors, rumours of silver).
+  const [mercenaryCount, setMercenaryCount] = useState(0);
+  const mercenaryCountRef = useRef(0);
+  useEffect(() => { mercenaryCountRef.current = mercenaryCount; }, [mercenaryCount]);
+  const [nextAttackMult, setNextAttackMult] = useState(1);
+  const nextAttackMultRef = useRef(1);
+  useEffect(() => { nextAttackMultRef.current = nextAttackMult; }, [nextAttackMult]);
+  // The last `n` foot soldiers of a freshly spawned battle are the hired mercenaries: their
+  // deaths don't cost the garrison anything, and they leave once the battle is over.
+  const markMercenaries = (units, n) => {
+    let left = n;
+    for (let k = units.length - 1; k >= 0 && left > 0; k--) {
+      if (units[k].side === 'defender' && units[k].type === 'soldier') { units[k].merc = true; left--; }
+    }
+  };
+  const adjustRep = (d) => setReputation((r) => Math.max(0, Math.min(100, r + d)));
+  const scheduleStory = (storyType, inDays, data = null) => setStoryQueue((q) => [...q, { type: storyType, day: dayRef.current + inDays, data }]);
+  // Turns one random finished amenity into a ruin; returns its label (or null if none).
+  const ruinRandomAmenity = () => {
+    const list = Object.entries(structuresRef.current).filter(([, st]) => st.type === 'amenity' && st.stage === 'done');
+    if (!list.length) return null;
+    const [k, st] = list[Math.floor(Math.random() * list.length)];
+    setStructures((prev) => (prev[k] ? { ...prev, [k]: { ...prev[k], stage: 'foundation', progress: 0, blocked: false, ruined: true, upgrading: false } } : prev));
+    return AMENITY_TYPES[st.kind].label;
+  };
+
+  const buildPetitionEvent = useCallback((type, currentYear, data = null) => {
     const def = PETITIONER_DEFS[type];
     if (type === 'bauer') {
       return {
@@ -5339,6 +5471,7 @@ export default function CastleBuilder() {
             apply: () => {
               setTaxRate((t) => Math.max(0, t - 15));
               setTaxLockedUntilYear(currentYear + 3);
+              adjustRep(4);
             },
           },
           {
@@ -5351,8 +5484,8 @@ export default function CastleBuilder() {
           },
           {
             label: 'Ignorieren',
-            desc: 'Die Unzufriedenheit im Dorf steigt für 3 Jahre spürbar an.',
-            apply: () => setUnhappinessPenaltyUntilYear(currentYear + 3),
+            desc: 'Die Unzufriedenheit im Dorf steigt für 3 Jahre spürbar an. Ruf −4.',
+            apply: () => { setUnhappinessPenaltyUntilYear(currentYear + 3); adjustRep(-4); },
           },
         ],
       };
@@ -5369,6 +5502,7 @@ export default function CastleBuilder() {
             apply: () => {
               setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost), food: Math.min(storageCapacity(structuresRef.current), r.food + 20) }));
               setHappiness((h) => Math.min(100, h + 3));
+              adjustRep(2);
             },
           },
           { label: 'Ablehnen', desc: 'Die Bauern ziehen enttäuscht ab.', apply: () => {} },
@@ -5396,16 +5530,17 @@ export default function CastleBuilder() {
       const availableKnights = KNIGHT_IDS.filter((id) => !recruitedKnightsRef.current[id]);
       const knightId = availableKnights[Math.floor(Math.random() * availableKnights.length)] || KNIGHT_IDS[0];
       const knightDef = KNIGHT_DEFS[knightId];
-      const canAfford = resourcesRef.current.gold >= CHAMPION_JOIN_COST;
+      const joinCost = data && data.discount ? Math.round(CHAMPION_JOIN_COST / 2) : CHAMPION_JOIN_COST;
+      const canAfford = resourcesRef.current.gold >= joinCost;
       return {
         type, ...def, image: knightDef.image,
         options: [
           {
-            label: `${knightDef.name} aufnehmen (${CHAMPION_JOIN_COST} 🪙 einmalig + höherer Unterhalt)`,
+            label: `${knightDef.name} aufnehmen (${joinCost} 🪙 einmalig + höherer Unterhalt)`,
             desc: `${knightDef.name} verstärkt fortan dauerhaft die Garnison als starker, berittener Kämpfer.`,
             disabled: !canAfford,
             apply: () => {
-              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - CHAMPION_JOIN_COST) }));
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - joinCost) }));
               setRecruitedKnights((k) => ({ ...k, [knightId]: true }));
             },
           },
@@ -5648,11 +5783,12 @@ export default function CastleBuilder() {
         options: [
           {
             label: `Lösegeld zahlen (${demand} 🪙)`,
-            desc: `${captive.name} kommt frei und kehrt an den Hof zurück.`,
+            desc: `${captive.name} kommt frei und kehrt an den Hof zurück. Ruf +3.`,
             disabled: resourcesRef.current.gold < demand,
             apply: () => {
               setResources((r) => ({ ...r, gold: Math.max(0, r.gold - demand) }));
               captive.release();
+              adjustRep(3);
             },
           },
           {
@@ -5801,8 +5937,8 @@ export default function CastleBuilder() {
           },
           {
             label: 'Zehnt verweigern',
-            desc: 'Der Bischof verhängt den Kirchenbann: 5 Jahre lang leiden Zufriedenheit im Dorf und Stimmung bei Hofe, und keine Heirat ist möglich.',
-            apply: () => setChurchUnrestUntilYear(currentYear + 5),
+            desc: 'Der Bischof verhängt den Kirchenbann: 5 Jahre lang leiden Zufriedenheit im Dorf und Stimmung bei Hofe, und keine Heirat ist möglich. Ruf −6.',
+            apply: () => { setChurchUnrestUntilYear(currentYear + 5); adjustRep(-6); },
           },
         ],
       };
@@ -5910,6 +6046,7 @@ export default function CastleBuilder() {
             apply: () => {
               setResources((r) => ({ ...r, gold: Math.max(0, r.gold - goldDemand) }));
               setDelegationStage(0);
+              adjustRep(-3);
             },
           },
           {
@@ -5926,6 +6063,7 @@ export default function CastleBuilder() {
               ? 'Der fremde König erklärt den Krieg. Im kommenden Sommer greift eine eigenständige, gut ausgestattete Streitmacht an — unabhängig von den Sachsen.'
               : 'Die Delegation zieht verärgert ab und droht mit einer noch höheren Forderung beim nächsten Mal.',
             apply: () => {
+              adjustRep(4);
               if (stage >= 1) {
                 setPendingFeudAttacks((arr) => [...arr, { type: 'delegation', day: dayCountForDate(currentYear + 1, 7, 1) }]);
                 setDelegationStage(0);
@@ -5937,6 +6075,317 @@ export default function CastleBuilder() {
         ],
       };
     }
+    // ------------------------------------------------------------ neue Ereignisse --
+    const gold = resourcesRef.current.gold;
+    const pct = (p) => `${Math.round(p * 100)} %`;
+    if (type === 'fluechtlinge') {
+      return {
+        type, ...def,
+        options: [
+          {
+            label: 'Aufnehmen',
+            desc: '+2 Dorfbewohner, −25 Nahrung, Ruf +6. Doch nicht jeder Fremde kommt in guter Absicht…',
+            disabled: resourcesRef.current.food < 25,
+            apply: () => {
+              setVillagePop((p) => Math.min(MAX_VILLAGE_POP, p + 2));
+              setResources((r) => ({ ...r, food: Math.max(0, r.food - 25) }));
+              adjustRep(6);
+              // One in four times a Saxon agent slipped in with them — he'll be found out
+              // a few months later, but only after he's done his damage.
+              if (Math.random() < 0.25) scheduleStory('verraeter', 120 + Math.floor(Math.random() * 120));
+            },
+          },
+          {
+            label: 'Nur Brot geben (15 Nahrung)',
+            desc: 'Sie ziehen gestärkt weiter. Ruf +2.',
+            disabled: resourcesRef.current.food < 15,
+            apply: () => { setResources((r) => ({ ...r, food: Math.max(0, r.food - 15) })); adjustRep(2); },
+          },
+          { label: 'Abweisen', desc: 'Die Tore bleiben zu. Ruf −4.', apply: () => adjustRep(-4) },
+        ],
+      };
+    }
+    if (type === 'verraeter') {
+      const stolen = Math.round(gold * 0.25);
+      setResources((r) => ({ ...r, gold: Math.max(0, r.gold - stolen) }));
+      return {
+        type, ...def,
+        text: `${def.text} Es fehlen ${stolen} 🪙.`,
+        options: [
+          { label: 'Öffentlich hinrichten', desc: 'Ein abschreckendes Beispiel. Ruf −3, aber die Sachsen erfahren nichts mehr über die Burg.', apply: () => adjustRep(-3) },
+          {
+            label: 'Verhören und verbannen',
+            desc: 'Er verrät, wo die Sachsen angreifen wollen — der nächste Angriff fällt um 10 % schwächer aus. Ruf +1.',
+            apply: () => { adjustRep(1); setNextAttackMult((m) => m * 0.9); },
+          },
+        ],
+      };
+    }
+    if (type === 'alchemist') {
+      const stake = 60;
+      return {
+        type, ...def,
+        options: [
+          {
+            label: `Experiment finanzieren (${stake} 🪙)`,
+            desc: 'Ein Wagnis — und der Laborkeller liegt unter einem Eurer Gebäude.',
+            odds: [{ p: 0.3, label: '+220 🪙', tone: 'good' }, { p: 0.55, label: 'nichts', tone: 'neutral' }, { p: 0.15, label: 'Explosion', tone: 'bad' }],
+            disabled: gold < stake,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - stake) }));
+              const roll = Math.random();
+              if (roll < 0.3) {
+                setResources((r) => ({ ...r, gold: r.gold + 220 }));
+                setEventOutcome({ emoji: '✨', tone: 'good', title: 'Gold im Tiegel!', text: 'Unter Rauch und Funken glänzt tatsächlich Gold im Tiegel: 220 🪙 fließen in die Schatzkammer. Der Alchemist verneigt sich und verschwindet ebenso rätselhaft, wie er kam.' });
+              } else if (roll < 0.85) {
+                setEventOutcome({ emoji: '💨', tone: 'neutral', title: 'Viel Rauch um nichts', text: 'Tagelang qualmt und stinkt es aus dem Keller — dann ist der Alchemist samt Eurem Gold verschwunden.' });
+              } else {
+                const victim = ruinRandomAmenity();
+                setEventOutcome({ emoji: '💥', tone: 'bad', title: 'Explosion!', text: victim ? `Ein gewaltiger Knall erschüttert die Burg: ${victim} ist nur noch eine rauchende Ruine.` : 'Ein gewaltiger Knall erschüttert die Burg — zum Glück stand über dem Keller nichts von Wert.' });
+              }
+            },
+          },
+          { label: 'Als Scharlatan davonjagen', desc: 'Das Volk lacht über den Gaukler. Ruf +2.', apply: () => adjustRep(2) },
+        ],
+      };
+    }
+    if (type === 'turnier') {
+      const cost = 120;
+      const knights = KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]);
+      const winP = knights.length ? Math.min(0.75, 0.4 + 0.1 * knights.length + 0.05 * knightRaisesRef.current) : 0;
+      return {
+        type, ...def,
+        options: [
+          {
+            label: `Turnier ausrichten (${cost} 🪙)`,
+            desc: knights.length
+              ? `Ruf +10, Stimmung bei Hofe +10, Zufriedenheit +5. Eure Ritter treten an: ${pct(winP)} Chance auf den Siegpreis (150 🪙, Ruf +5).`
+              : 'Ruf +10, Stimmung bei Hofe +10, Zufriedenheit +5. Ohne eigene Ritter bleibt der Preis bei Fremden — vielleicht wird einer auf Euch aufmerksam.',
+            odds: knights.length ? [{ p: winP, label: 'Sieg', tone: 'good' }, { p: 1 - winP, label: 'Niederlage', tone: 'neutral' }] : null,
+            disabled: gold < cost,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost) }));
+              adjustRep(10);
+              setCourtMorale((m) => Math.min(100, m + 10));
+              setHappiness((h) => Math.min(100, h + 5));
+              if (knights.length) {
+                const name = KNIGHT_DEFS[knights[Math.floor(Math.random() * knights.length)]].name;
+                if (Math.random() < winP) {
+                  setResources((r) => ({ ...r, gold: r.gold + 150 }));
+                  adjustRep(5);
+                  setEventOutcome({ emoji: '🏆', tone: 'good', title: `${name} siegt!`, text: `Unter dem Jubel der Menge wirft ${name} den letzten Gegner aus dem Sattel. Der Siegpreis von 150 🪙 geht an die Krone, und Euer Ruhm verbreitet sich im ganzen Land.` });
+                } else {
+                  setEventOutcome({ emoji: '🎺', tone: 'neutral', title: 'Ein prächtiges Fest', text: `${name} kämpft tapfer, unterliegt aber knapp. Das Fest selbst ist ein voller Erfolg — man wird noch lange davon sprechen.` });
+                }
+              } else if (Math.random() < 0.5) {
+                scheduleStory('ritter', 30 + Math.floor(Math.random() * 60), { discount: true });
+                setEventOutcome({ emoji: '🛡️', tone: 'good', title: 'Ein Ritter wird aufmerksam', text: 'Ein fahrender Ritter war vom Turnier so beeindruckt, dass er bald an Euren Hof kommen will — zu einem Freundschaftspreis.' });
+              } else {
+                setEventOutcome({ emoji: '🎺', tone: 'neutral', title: 'Ein prächtiges Fest', text: 'Drei Tage lang klirren die Lanzen. Das Volk feiert, der Hof strahlt.' });
+              }
+            },
+          },
+          { label: 'Ablehnen', desc: 'Für Spiele ist kein Gold übrig.', apply: () => {} },
+        ],
+      };
+    }
+    if (type === 'wilderer') {
+      return {
+        type, ...def,
+        options: [
+          { label: 'Hängen lassen', desc: 'Das Gesetz ist das Gesetz. Ruf −6, Zufriedenheit −4.', apply: () => { adjustRep(-6); setHappiness((h) => Math.max(0, h - 4)); } },
+          {
+            label: 'Begnadigen',
+            desc: 'Ruf +5, Zufriedenheit +4. Doch Gnade spricht sich herum…',
+            apply: () => {
+              adjustRep(5);
+              setHappiness((h) => Math.min(100, h + 4));
+              if (Math.random() < 0.4) scheduleStory('wilderer_folge', 150 + Math.floor(Math.random() * 120));
+            },
+          },
+          {
+            label: 'Zur Fronarbeit verurteilen',
+            desc: 'Er schuftet fortan als Arbeiter auf Euren Baustellen (ein zusätzlicher Bauer ohne Lohn). Ruf −1.',
+            apply: () => { adjustRep(-1); setWorkerUnits((prev) => [...prev, makeWorker('laborer', prev.length)]); },
+          },
+        ],
+      };
+    }
+    if (type === 'wilderer_folge') {
+      return {
+        type, ...def,
+        options: [
+          { label: 'Mit 30 🪙 abfinden', desc: 'Die Bande zieht weiter. Ruf −2.', disabled: gold < 30, apply: () => { setResources((r) => ({ ...r, gold: Math.max(0, r.gold - 30) })); adjustRep(-2); } },
+          {
+            label: 'Die Garnison ausschicken',
+            desc: 'Ein Gefecht in den Wäldern. Ruf +4 bei Erfolg.',
+            odds: [{ p: 0.7, label: 'Bande zerschlagen', tone: 'good' }, { p: 0.3, label: '1 Soldat fällt', tone: 'bad' }],
+            disabled: soldiersRef.current.soldier + soldiersRef.current.archer === 0,
+            apply: () => {
+              if (Math.random() < 0.7) {
+                adjustRep(4);
+                setEventOutcome({ emoji: '⚔️', tone: 'good', title: 'Die Bande ist zerschlagen', text: 'Eure Männer stellen die Wilderer im Unterholz. Das Land atmet auf.' });
+              } else {
+                setSoldiers((s) => (s.soldier > 0 ? { ...s, soldier: s.soldier - 1 } : { ...s, archer: Math.max(0, s.archer - 1) }));
+                setEventOutcome({ emoji: '🪦', tone: 'bad', title: 'Ein Hinterhalt', text: 'Die Wilderer kennen den Wald besser. Ein Eurer Männer kehrt nicht zurück, die Bande entkommt.' });
+              }
+            },
+          },
+          { label: 'Gewähren lassen', desc: 'Sie plündern die Vorräte: −40 Nahrung, Ruf −3.', apply: () => { setResources((r) => ({ ...r, food: Math.max(0, r.food - 40) })); adjustRep(-3); } },
+        ],
+      };
+    }
+    if (type === 'gilde') {
+      const deals = [
+        { stake: 100, perMonth: 8, label: 'Kleiner Anteil' },
+        { stake: 250, perMonth: 22, label: 'Großer Anteil' },
+      ];
+      return {
+        type, ...def,
+        options: [
+          ...deals.map((dl) => ({
+            label: `${dl.label} (${dl.stake} 🪙)`,
+            desc: `${dl.perMonth} 🪙 pro Monat für 3 Jahre (bis zu ${dl.perMonth * 36} 🪙). Jeden Monat 2 % Risiko, dass die Fahrt scheitert und die Zahlungen enden.`,
+            disabled: gold < dl.stake || contractsRef.current.length >= 2,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - dl.stake) }));
+              setContracts((cs) => [...cs, { id: Date.now(), label: 'Handelsfahrt der Gilde', perMonth: dl.perMonth, untilDay: dayRef.current + 36 * MONTH_LENGTH, failChance: 0.02, failText: 'Die Handelsflotte der Gilde ist im Sturm gesunken — Eure Beteiligung ist verloren.' }]);
+              adjustRep(1);
+            },
+          })),
+          { label: 'Ablehnen', desc: 'Die Krone treibt keinen Handel.', apply: () => {} },
+        ],
+      };
+    }
+    if (type === 'baumeister') {
+      const cost = 120;
+      return {
+        type, ...def,
+        options: [
+          {
+            label: `Anstellen (${cost} 🪙)`,
+            desc: `Alle Baustellen kommen dauerhaft 35 % schneller voran. Kostet ${BAUMEISTER_WAGE.toFixed(2)} 🪙 Lohn pro Tag.`,
+            disabled: gold < cost,
+            apply: () => { setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost) })); setBaumeisterHired(true); },
+          },
+          { label: 'Ablehnen', desc: 'Der Baumeister zieht zur nächsten Baustelle.', apply: () => {} },
+        ],
+      };
+    }
+    if (type === 'soeldner') {
+      const priceMult = reputationRef.current < 30 ? 1.3 : reputationRef.current >= 70 ? 0.85 : 1;
+      const offers = [{ n: 4, cost: Math.round(45 * priceMult) }, { n: 8, cost: Math.round(80 * priceMult) }];
+      return {
+        type, ...def,
+        options: [
+          ...offers.map((o) => ({
+            label: `${o.n} Söldner anwerben (${o.cost} 🪙)`,
+            desc: `Kämpfen in der nächsten Schlacht als Fußsoldaten mit — ohne Sold und Nahrung, danach ziehen sie ab. Gefallene Söldner kosten Euch nichts.${priceMult !== 1 ? (priceMult > 1 ? ' (Euer schlechter Ruf treibt den Preis.)' : ' (Euer guter Ruf drückt den Preis.)') : ''}`,
+            disabled: gold < o.cost,
+            apply: () => { setResources((r) => ({ ...r, gold: Math.max(0, r.gold - o.cost) })); setMercenaryCount((m) => m + o.n); },
+          })),
+          { label: 'Ablehnen', desc: 'Eure eigenen Männer müssen genügen.', apply: () => {} },
+        ],
+      };
+    }
+    if (type === 'spion') {
+      return {
+        type, ...def,
+        options: [
+          {
+            label: 'Peinlich befragen',
+            desc: 'Er gibt die Angriffspläne preis: der nächste Sachsenangriff fällt um 20 % schwächer aus. Ruf −4.',
+            apply: () => { adjustRep(-4); setNextAttackMult((m) => m * 0.8); },
+          },
+          {
+            label: 'Als Doppelagent zurückschicken (40 🪙)',
+            desc: 'Gelingt es, lockt er die Sachsen in die Irre. Doch wem gilt seine Treue wirklich?',
+            odds: [{ p: 0.6, label: 'Angriff −35 %', tone: 'good' }, { p: 0.4, label: 'Verrat: Angriff +20 %', tone: 'bad' }],
+            disabled: gold < 40,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - 40) }));
+              // The outcome stays hidden until the Sachsen actually show up.
+              setNextAttackMult((m) => m * (Math.random() < 0.6 ? 0.65 : 1.2));
+              setEventOutcome({ emoji: '🎭', tone: 'neutral', title: 'Ein gefährliches Spiel', text: 'Der Spion verschwindet in der Nacht Richtung Sachsenland. Ob er Euch dient oder verrät, zeigt erst der nächste Angriff.' });
+            },
+          },
+          { label: 'Freilassen', desc: 'Eine Geste der Großmut. Ruf +3.', apply: () => adjustRep(3) },
+        ],
+      };
+    }
+    if (type === 'silberfund') {
+      return {
+        type, ...def,
+        options: [
+          {
+            label: 'Heimlich abbauen',
+            desc: '35 🪙 pro Monat für ein Jahr. Doch Silber lockt Begehrlichkeiten…',
+            odds: [{ p: 0.7, label: 'bleibt geheim', tone: 'good' }, { p: 0.3, label: 'Sachsen erfahren davon: +15 % Angreifer', tone: 'bad' }],
+            apply: () => {
+              setContracts((cs) => [...cs, { id: Date.now(), label: 'Silberader', perMonth: 35, untilDay: dayRef.current + 12 * MONTH_LENGTH, failChance: 0, failText: '' }]);
+              if (Math.random() < 0.3) setNextAttackMult((m) => m * 1.15);
+            },
+          },
+          { label: 'Dem Lehnsherrn melden', desc: 'Ein ehrlicher Finderlohn: +60 🪙 sofort, Ruf +4.', apply: () => { setResources((r) => ({ ...r, gold: r.gold + 60 })); adjustRep(4); } },
+        ],
+      };
+    }
+    if (type === 'unwetter') {
+      return {
+        type, ...def,
+        options: [
+          { label: 'Kornspeicher öffnen (−40 Nahrung)', desc: 'Niemand muss hungern. Zufriedenheit +4, Ruf +3.', disabled: resourcesRef.current.food < 40, apply: () => { setResources((r) => ({ ...r, food: Math.max(0, r.food - 40) })); setHappiness((h) => Math.min(100, h + 4)); adjustRep(3); } },
+          { label: 'Getreide zukaufen (−50 🪙)', desc: 'Händler liefern Ersatz. Zufriedenheit bleibt stabil.', disabled: gold < 50, apply: () => setResources((r) => ({ ...r, gold: Math.max(0, r.gold - 50) })) },
+          { label: 'Die Bauern müssen selbst sehen', desc: 'Zufriedenheit −10, Ruf −4.', apply: () => { setHappiness((h) => Math.max(0, h - 10)); adjustRep(-4); } },
+        ],
+      };
+    }
+    if (type === 'seuche') {
+      const hasMedicus = medicusHiredRef.current && !capturedCourtiersRef.current.medicus;
+      const hasChapel = hasDoneAmenity(structuresRef.current, 'kapelle');
+      const opts = [];
+      if (hasMedicus) opts.push({ label: 'Den Medicus schicken (20 🪙)', desc: 'Mit Kräutern und Reinlichkeit wird die Seuche schnell eingedämmt. Ruf +2.', disabled: gold < 20, apply: () => { setResources((r) => ({ ...r, gold: Math.max(0, r.gold - 20) })); adjustRep(2); } });
+      opts.push({ label: 'Quarantäne verhängen', desc: '1 Dorfbewohner stirbt, Zufriedenheit −3 — aber die Seuche ist gebannt.', apply: () => { setVillagePop((p) => Math.max(1, p - 1)); setHappiness((h) => Math.max(0, h - 3)); } });
+      if (hasChapel) {
+        opts.push({
+          label: 'Bittgottesdienst in der Kapelle',
+          desc: 'Das Volk betet um Rettung.',
+          odds: [{ p: 0.5, label: 'Seuche erlischt', tone: 'good' }, { p: 0.5, label: '−2 Dorfbewohner', tone: 'bad' }],
+          apply: () => {
+            if (Math.random() < 0.5) { setHappiness((h) => Math.min(100, h + 5)); setEventOutcome({ emoji: '🙏', tone: 'good', title: 'Ein Wunder!', text: 'Das Fieber weicht so schnell, wie es kam. Das Volk preist die Kapelle — Zufriedenheit +5.' }); }
+            else { setVillagePop((p) => Math.max(1, p - 2)); setEventOutcome({ emoji: '⚰️', tone: 'bad', title: 'Die Gebete verhallen', text: 'Die Seuche fordert zwei Opfer, ehe sie abklingt.' }); }
+          },
+        });
+      }
+      opts.push({ label: 'Nichts unternehmen', desc: '2 Dorfbewohner sterben, Zufriedenheit −8, Ruf −3.', apply: () => { setVillagePop((p) => Math.max(1, p - 2)); setHappiness((h) => Math.max(0, h - 8)); adjustRep(-3); } });
+      return { type, ...def, options: opts };
+    }
+    if (type === 'brand') {
+      const burning = Object.entries(structuresRef.current).filter(([, s]) => s.type === 'amenity' && s.stage === 'done');
+      if (!burning.length) return null;
+      const [bKey, bSite] = burning[Math.floor(Math.random() * burning.length)];
+      const label = AMENITY_TYPES[bSite.kind].label;
+      const saveP = hasDoneAmenity(structuresRef.current, 'brunnen') ? 0.9 : 0.6;
+      const burnDown = () => setStructures((prev) => (prev[bKey] ? { ...prev, [bKey]: { ...prev[bKey], stage: 'foundation', progress: 0, blocked: false, ruined: true, upgrading: false } } : prev));
+      return {
+        type, ...def,
+        text: `${label} steht in Flammen! ${def.text}`,
+        options: [
+          {
+            label: 'Eimerkette bilden',
+            desc: `Alle packen mit an (Zufriedenheit −2).${hasDoneAmenity(structuresRef.current, 'brunnen') ? ' Der Brunnen im Burghof ist Gold wert.' : ' Ohne Brunnen muss das Wasser weit getragen werden.'}`,
+            odds: [{ p: saveP, label: 'gerettet', tone: 'good' }, { p: 1 - saveP, label: 'brennt nieder', tone: 'bad' }],
+            apply: () => {
+              setHappiness((h) => Math.max(0, h - 2));
+              if (Math.random() < saveP) setEventOutcome({ emoji: '💧', tone: 'good', title: 'Gelöscht!', text: `Rußgeschwärzt, aber stolz: Die Leute haben ${label} gerettet.` });
+              else { burnDown(); setEventOutcome({ emoji: '🔥', tone: 'bad', title: 'Zu spät', text: `Trotz aller Mühe brennt ${label} bis auf die Grundmauern nieder.` }); }
+            },
+          },
+          { label: 'Brennen lassen', desc: `${label} wird zur Ruine, niemand riskiert etwas.`, apply: burnDown },
+        ],
+      };
+    }
+
     // hochzeit
     const spouseName = NOBLE_DAUGHTER_NAMES[Math.floor(Math.random() * NOBLE_DAUGHTER_NAMES.length)];
     return {
@@ -5956,7 +6405,15 @@ export default function CastleBuilder() {
   }, [triggerSuccession, hireCourtFigure]);
 
   useEffect(() => {
-    if (petitionEvent || battlePhase || gameOverEvent || !kingName) return;
+    if (petitionEvent || battlePhase || gameOverEvent || !kingName || eventOutcome) return;
+    // A follow-up from an earlier decision comes first, as soon as it's due.
+    const dueStory = storyQueue.find((st) => day >= st.day);
+    if (dueStory) {
+      setStoryQueue((q) => q.filter((st) => st !== dueStory));
+      const ev = buildPetitionEvent(dueStory.type, getCalendarDate(day).year, dueStory.data);
+      if (ev) setPetitionEvent(ev);
+      return;
+    }
     if (day < nextPetitionDay) return;
     const eligible = ['bauer', 'soldat', 'hexe', 'bauer_folge'];
     if (!hofnarrHired) eligible.push('hofnarr');
@@ -5990,10 +6447,27 @@ export default function CastleBuilder() {
     // Threats with a whole war attached don't show up in the very first years.
     if (reignYear >= 2) eligible.push('waldlaeufer');
     if (reignYear >= 4) eligible.push('delegation');
-    const type = eligible[Math.floor(Math.random() * eligible.length)];
-    setPetitionEvent(buildPetitionEvent(type, currentYear));
-    setNextPetitionDay(day + 150 + Math.floor(Math.random() * 150));
-  }, [day, petitionEvent, battlePhase, structures, recruitedKnights, royalFamily, buildPetitionEvent, nextPetitionDay, gameOverEvent, waffenschmiedHired, hofnarrHired, moorishHired, monkHired, ladyHired, falconerHired, medicusHired, crossbowUpgraded, crossbowUpgraded2, armbrustHired, capturedCourtiers, bakeryUpgraded, knightRaises, churchUnrestUntilYear]);
+    // Neue Bittsteller und Ereignisse.
+    eligible.push('alchemist', 'wilderer', 'unwetter', 'seuche');
+    if (reputation >= 30) eligible.push('fluechtlinge');
+    if (reignYear >= 2 && contracts.length < 2) eligible.push('gilde');
+    if (!baumeisterHired) eligible.push('baumeister');
+    if (reignYear >= 3) eligible.push('spion', 'turnier');
+    if (daysUntilYearEnd(day) <= 150 && mercenaryCount === 0) eligible.push('soeldner', 'soeldner');
+    if (workerUnits.some((w) => w.type === 'quarrier')) eligible.push('silberfund');
+    if (Object.values(structures).some((st) => st.type === 'amenity' && st.stage === 'done')) eligible.push('brand');
+    // Reputation tilts who shows up: a renowned king draws knights, merchants and tournaments,
+    // a disreputable one spies, bandits and demanding neighbours.
+    if (reputation >= 65) eligible.push('turnier', 'haendler', 'gilde', ...(eligible.includes('ritter') ? ['ritter'] : []));
+    if (reputation < 35) eligible.push('spion', 'wilderer_folge', ...(reignYear >= 4 ? ['delegation'] : []));
+    let ev = null;
+    for (let tries = 0; tries < 5 && !ev; tries++) {
+      const type = eligible[Math.floor(Math.random() * eligible.length)];
+      ev = buildPetitionEvent(type, currentYear);
+    }
+    if (ev) setPetitionEvent(ev);
+    setNextPetitionDay(day + 110 + Math.floor(Math.random() * 120));
+  }, [day, petitionEvent, battlePhase, structures, recruitedKnights, royalFamily, buildPetitionEvent, nextPetitionDay, gameOverEvent, eventOutcome, storyQueue, reputation, contracts, baumeisterHired, mercenaryCount, workerUnits, waffenschmiedHired, hofnarrHired, moorishHired, monkHired, ladyHired, falconerHired, medicusHired, crossbowUpgraded, crossbowUpgraded2, armbrustHired, capturedCourtiers, bakeryUpgraded, knightRaises, churchUnrestUntilYear]);
 
 
   const [isPaused, setIsPaused] = useState(true);
@@ -6001,8 +6475,8 @@ export default function CastleBuilder() {
   // time doesn't keep running (and workers/battles don't keep progressing) underneath it.
   // Not having named the king yet counts as one of these — nothing should run before that.
   useEffect(() => {
-    if (petitionEvent || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName) setIsPaused(true);
-  }, [petitionEvent, gameOverEvent, dynastyEvent, desertionForecast, courtRivalryEvent, kingName]);
+    if (petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName) setIsPaused(true);
+  }, [petitionEvent, eventOutcome, gameOverEvent, dynastyEvent, desertionForecast, courtRivalryEvent, kingName]);
   // ...and once that same popup is answered/dismissed, time should just pick back up on its
   // own rather than leaving the player to go hunt down a separate "Weiter" button. A true
   // game-over (type 'end'/'keepFallen') never actually clears gameOverEvent again — its
@@ -6013,8 +6487,8 @@ export default function CastleBuilder() {
   // already running the instant they've typed a name in. So auto-resume watches only the
   // *other* popups (petitions, dynasty events, etc.) — !kingName still forces isPaused back
   // to true above, it just isn't one of the things that un-pauses it again on its own.
-  const blockingEventActive = !!(petitionEvent || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName);
-  const autoResumeWatchActive = !!(petitionEvent || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent);
+  const blockingEventActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName);
+  const autoResumeWatchActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent);
   const prevAutoResumeWatchActiveRef = useRef(autoResumeWatchActive);
   useEffect(() => {
     if (prevAutoResumeWatchActiveRef.current && !autoResumeWatchActive) setIsPaused(false);
@@ -6193,7 +6667,7 @@ export default function CastleBuilder() {
       // brief pre-battle warning and then froze in place once fighting actually started.
       const fleeMode = !!battlePhaseRef.current;
       const onStrike = happinessRef.current < STRIKE_THRESHOLD;
-      const result = computeTick(structuresRef.current, workersRef.current, resourcesRef.current, pilesRef.current, onStrike, haulPriorityRef.current, fleeMode, forestTreesRef.current, hillRocksRef.current, dayRef.current);
+      const result = computeTick(structuresRef.current, workersRef.current, resourcesRef.current, pilesRef.current, onStrike, haulPriorityRef.current, fleeMode, forestTreesRef.current, hillRocksRef.current, dayRef.current, baumeisterHiredRef.current ? BAUMEISTER_BUILD_SPEED : 1);
       setStructures(result.structures);
       setWorkerUnits(result.workers);
       setForestTrees(result.trees);
@@ -6232,7 +6706,8 @@ export default function CastleBuilder() {
         + (ladyHiredRef.current && !capturedCourtiersRef.current.lady ? LADY_WAGE : 0)
         + (falconerHiredRef.current && !capturedCourtiersRef.current.falconer ? FALCONER_WAGE : 0)
         + (armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust ? ARMBRUST_WAGE : 0)
-        + (SMITH_UPKEEP_PER_DAY[smithTierRef.current] || 0);
+        + (SMITH_UPKEEP_PER_DAY[smithTierRef.current] || 0)
+        + (baumeisterHiredRef.current ? BAUMEISTER_WAGE : 0);
       const totalFood = (hiredCounts.laborer + hiredCounts.arbeiter + hiredCounts.carpenter + hiredCounts.mason + hiredCounts.quarrier + hiredCounts.lumberjack) * FOOD_PER_WORKER
         + (soldiersRef.current.soldier + soldiersRef.current.archer) * FOOD_PER_SOLDIER
         + KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]).length * FOOD_PER_SOLDIER * 1.5;
@@ -6317,7 +6792,9 @@ export default function CastleBuilder() {
           const kapelleBonus = kapelleHappiness(structuresRef.current);
           const brauhausBonus = brauhausHappiness(structuresRef.current);
           const monkBonus = (monkHiredRef.current && !capturedCourtiersRef.current.monk) ? MONK_HAPPINESS_BONUS : 0;
-          const delta = (HAPPINESS_RECOVERY_PER_MONTH + churchBonus + kapelleBonus + brauhausBonus + monkBonus - taxPenalty - frohndienstPenalty - unrestPenalty - churchUnrestPenalty) / MONTH_LENGTH;
+          // A well-regarded king makes for a content village, a disreputable one the opposite.
+          const repBonus = (reputationRef.current - 50) / 50;
+          const delta = (HAPPINESS_RECOVERY_PER_MONTH + repBonus + churchBonus + kapelleBonus + brauhausBonus + monkBonus - taxPenalty - frohndienstPenalty - unrestPenalty - churchUnrestPenalty) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, h + delta));
         });
 
@@ -6344,6 +6821,22 @@ export default function CastleBuilder() {
           const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, m + delta));
         });
+
+        // Monthly payouts from trade ventures and the like — each month at risk of failing.
+        if (newDay % MONTH_LENGTH === 0 && contractsRef.current.length) {
+          let payout = 0;
+          const failed = [];
+          const keep = [];
+          contractsRef.current.forEach((c) => {
+            if (newDay > c.untilDay) return;
+            if (c.failChance && Math.random() < c.failChance) { failed.push(c); return; }
+            payout += c.perMonth;
+            keep.push(c);
+          });
+          setContracts(keep);
+          if (payout) setResources((r) => ({ ...r, gold: r.gold + payout }));
+          if (failed.length) setEventOutcome({ emoji: '🌊', tone: 'bad', title: 'Schlechte Nachrichten', text: failed[0].failText });
+        }
 
         // The village grows twice a year while people are content (Zufriedenheit 60+), once a
         // year otherwise — and not at all while the peasants are on strike.
@@ -6429,11 +6922,14 @@ export default function CastleBuilder() {
           }
 
           const yearIdx = newDate.year - START_YEAR;
-          const attackerCount = attackersForYear(yearIdx);
+          // Spies, traitors and rumours from the petitions scale this one attack.
+          const attackerCount = Math.max(1, Math.round(attackersForYear(yearIdx) * nextAttackMultRef.current));
+          setNextAttackMult(1);
           setPreBattleSoldiers({ ...soldiersRef.current });
           setPendingBattleYear(newDate.year - 1);
           setPendingBattleSource('sachsen');
-          const spawned = spawnBattleUnits(structuresRef.current, soldiersRef.current, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
+          const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
+          markMercenaries(spawned.units, mercenaryCountRef.current);
           setBattleUnits(spawned.units);
           setBattleObstacles(spawned.obstacles);
           setAttackerMorale(1);
@@ -6457,7 +6953,8 @@ export default function CastleBuilder() {
             setPreBattleSoldiers({ ...soldiersRef.current });
             setPendingBattleYear(newDate.year);
             setPendingBattleSource(due.type);
-            const spawned = spawnBattleUnits(structuresRef.current, soldiersRef.current, forced.length, newDate.year - START_YEAR, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]), forced);
+            const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, forced.length, newDate.year - START_YEAR, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]), forced);
+            markMercenaries(spawned.units, mercenaryCountRef.current);
             setBattleUnits(spawned.units);
             setBattleObstacles(spawned.obstacles);
             setAttackerMorale(1);
@@ -6654,7 +7151,8 @@ export default function CastleBuilder() {
     const routedAndSurvived = battleUnits.some((u) => u.side === 'attacker' && u.hp > 0 && u.routed);
     const moraleBroken = (won && routedAndSurvived) ? 'attacker' : null;
 
-    const lostSoldiers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'soldier' && u.hp <= 0).length;
+    const lostSoldiers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'soldier' && u.hp <= 0 && !u.merc).length;
+    setMercenaryCount(0);
     const lostArchers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'archer' && u.hp <= 0).length;
     const fallenKnightIds = battleUnits.filter((u) => u.side === 'defender' && u.type === 'champion' && u.hp <= 0 && u.knightId).map((u) => u.knightId);
     const fallenKnightNames = fallenKnightIds.map((id) => KNIGHT_DEFS[id] && KNIGHT_DEFS[id].name).filter(Boolean);
@@ -6672,6 +7170,8 @@ export default function CastleBuilder() {
     }
 
     let destroyedCount = 0;
+    // Word of a victory (or a defeat) travels.
+    setReputation((r) => Math.max(0, Math.min(100, r + (won ? 3 : -4))));
     if (!won) {
       // A lost battle is hard on the king too — the stress and danger of nearly losing the
       // castle takes a real, immediate toll on his health, distinct from the slow yearly
@@ -6740,6 +7240,8 @@ export default function CastleBuilder() {
       });
       setResources((r) => ({ ...r, gold: 0 }));
       setCourtMorale((m) => Math.max(0, m - 15));
+      setMercenaryCount(0);
+      setReputation((r) => Math.max(0, r - 8));
       setBattleEvent({
         raided: true, year: pendingBattleYear, attackerCount: raidEvent.totalAttackers,
         burnTargets: raidEvent.burnTargets, capturedNames: raidEvent.capturedNames, deadNames: raidEvent.deadNames,
@@ -7413,7 +7915,8 @@ export default function CastleBuilder() {
     + (moorishHired && !capturedCourtiers.moorish ? MOORISH_WAGE : 0) + (monkHired && !capturedCourtiers.monk ? MONK_WAGE : 0)
     + (medicusHired && !capturedCourtiers.medicus ? MEDICUS_WAGE : 0) + (ladyHired && !capturedCourtiers.lady ? LADY_WAGE : 0) + (falconerHired && !capturedCourtiers.falconer ? FALCONER_WAGE : 0)
     + (armbrustHired && !capturedCourtiers.armbrust ? ARMBRUST_WAGE : 0)
-    + (SMITH_UPKEEP_PER_DAY[smithTier] || 0);
+    + (SMITH_UPKEEP_PER_DAY[smithTier] || 0)
+    + (baumeisterHired ? BAUMEISTER_WAGE : 0);
   const foodPerDayTotal = (hired.laborer + hired.arbeiter + hired.carpenter + hired.mason + hired.quarrier + hired.lumberjack) * FOOD_PER_WORKER
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
   const financeRows = [
@@ -7550,14 +8053,29 @@ export default function CastleBuilder() {
         </div>
       )}
 
+      {eventOutcome && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 56, padding: 16 }}>
+          <div style={{ background: '#EAE0C4', border: `4px solid ${eventOutcome.tone === 'good' ? '#5d8a3c' : eventOutcome.tone === 'bad' ? '#7a2318' : '#5C554A'}`, borderRadius: 6, maxWidth: 440, width: '100%', padding: '22px 24px', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.6)' }}>
+            <div style={{ fontSize: '3rem', lineHeight: 1 }}>{eventOutcome.emoji}</div>
+            <div className="cb-title" style={{ fontSize: '1.15rem', color: eventOutcome.tone === 'bad' ? '#7a2318' : '#2B2420', margin: '10px 0 8px' }}>{eventOutcome.title}</div>
+            <p style={{ fontSize: '0.95rem', lineHeight: 1.6, color: '#2B2420', margin: '0 0 16px' }}>{eventOutcome.text}</p>
+            <button onClick={() => setEventOutcome(null)} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>Weiter</button>
+          </div>
+        </div>
+      )}
+
       {petitionEvent && (
         <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 55, padding: 16, overflowY: 'auto' }}>
           <div style={{ background: '#1a1512', border: '4px solid #5C554A', borderRadius: 6, maxWidth: 620, width: '100%', overflow: 'hidden', boxShadow: '0 10px 40px rgba(0,0,0,0.6)' }}>
             {petitionEvent.image ? (
               <img src={petitionEvent.image} alt="" style={{ width: '100%', display: 'block' }} />
             ) : (
-              <div style={{ width: '100%', aspectRatio: '16/9', background: 'linear-gradient(160deg,#2b2118,#1a1512)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: '3.5rem' }}>🐎</span>
+              // Placeholder until the event's own illustration exists: a tinted vault with the
+              // event's emblem, framed like the painted scenes.
+              <div style={{ width: '100%', aspectRatio: '16/9', position: 'relative', overflow: 'hidden', background: `radial-gradient(ellipse at 50% 60%, ${petitionEvent.tint || '#3a2c1e'} 0%, #1a1512 75%)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ position: 'absolute', inset: 14, border: '2px solid rgba(201,162,75,0.35)', borderRadius: 4 }} />
+                <div style={{ position: 'absolute', left: '50%', top: '50%', width: 190, height: 190, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,220,150,0.18), rgba(0,0,0,0) 70%)' }} />
+                <span style={{ fontSize: '5rem', filter: 'drop-shadow(0 6px 10px rgba(0,0,0,0.6))', position: 'relative' }}>{petitionEvent.emoji || '📜'}</span>
               </div>
             )}
             <div style={{ background: '#C9A24B', borderTop: '3px solid #7a5f2f', padding: '14px 18px' }}>
@@ -7578,6 +8096,17 @@ export default function CastleBuilder() {
                   >
                     <div style={{ fontWeight: 700, color: '#2B2420', fontSize: '0.92rem' }}>{opt.label}</div>
                     <div style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 2 }}>{opt.desc}</div>
+                    {opt.odds && (
+                      // Visible odds for a gamble: one coloured segment per outcome.
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(43,36,32,0.4)' }}>
+                          {opt.odds.map((o, k) => <div key={k} style={{ width: `${o.p * 100}%`, background: o.tone === 'good' ? '#5d8a3c' : o.tone === 'bad' ? '#a8402c' : '#b5a27a' }} />)}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', fontSize: '0.72rem', color: '#5A5044', marginTop: 2 }}>
+                          {opt.odds.map((o, k) => <span key={k}><span style={{ color: o.tone === 'good' ? '#3d6a24' : o.tone === 'bad' ? '#8a2a1c' : '#6b5a3a', fontWeight: 700 }}>{Math.round(o.p * 100)} %</span> {o.label}</span>)}
+                        </div>
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -7902,6 +8431,8 @@ export default function CastleBuilder() {
             <div className="cb-res-item">🪨 <strong>{resources.stone.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
             <div className="cb-res-item">🪵 <strong>{resources.wood.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
             <div className="cb-res-item">🌾 <strong>{resources.food.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
+            <div className="cb-res-item" title="Ruf: beeinflusst, wer an den Hof kommt, die Zufriedenheit im Dorf und die Preise der Söldner.">⚜️ <strong>{Math.round(reputation)}</strong> <span style={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#5A5044' }}>{reputationLabel(reputation)}</span></div>
+            {mercenaryCount > 0 && <div className="cb-res-item" title="Angeworbene Söldner für die nächste Schlacht">🗡️ <strong>{mercenaryCount}</strong></div>}
             <div style={{ flex: 1 }} />
             <button onClick={() => setOpenPanel('finanzen')} className="cb-tool-btn"
               style={{ padding: '5px 10px', borderRadius: 3, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
