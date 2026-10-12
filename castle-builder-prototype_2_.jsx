@@ -12,6 +12,7 @@ const TOWER_H = 40;
 const KEEP_H = 66;
 const MERLON_H = 9;
 const AMENITY_H = 18;
+const GATEHOUSE_H = 33; // drawn height of a finished gatehouse (hit areas still use PILLAR_H)
 
 const PAD = 40;
 const PAD_TOP = 130;
@@ -730,31 +731,174 @@ const MORALE_MIN_TICKS = 12;
 const MORALE_DMG_FLOOR = 0.4; // damage multiplier at zero morale
 const ROUT_SPEED_MULT = 1.7; // routed units sprint for the exit
 
-const PALETTE_RUINS = { top: '#6b6155', left: '#514940', right: '#3a352e' };
-// Raw, unpainted stone/timber — what a structure looks like while it's still being built,
-// regardless of what colour it'll end up once finished. Keeping this one consistent grey
-// across every building type makes "still under construction" instantly readable at a
-// glance, distinct from the final palette it only gets once truly done.
-const PALETTE_HALFBUILT = { top: '#8f8a7c', left: '#6f6a5e', right: '#524e45' };
-function stageVisual(stage, progress, finalHeight, finalPal, ghost, ghostBlocked, ruined = false) {
-  if (ghost) return { height: finalHeight, pal: ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost, opacity: 0.65 };
-  if (stage === 'done' || !stage) return { height: finalHeight, pal: finalPal, opacity: 1 };
-  if (stage === 'foundation') {
-    // A freshly-cleared plot (never built on) is a low dirt mound; a plot that was just
-    // knocked back to "foundation" by an enemy breach instead reads as a burnt-out ruin —
-    // same footprint, but visibly wrecked rather than pristine, so it's obvious at a glance
-    // this needs active repair, not that it's simply a new build queued up.
-    if (ruined) return { height: 5 + progress * 6, pal: PALETTE_RUINS, opacity: 0.95 };
-    return { height: 3 + progress * 5, pal: PALETTE.dirt, opacity: 0.9 };
+// ============================================================================================
+// GRAFIK — shared drawing helpers. Everything below is pure presentation: the game logic only
+// ever talks to these components through the same props it always used (stage, progress,
+// damageFrac, ...), so the look can evolve without touching a single rule of the simulation.
+// ============================================================================================
+
+// Deterministic per-position pseudo random number in [0,1) — keeps every tuft of grass, every
+// stone in a wall and every tree's shape stable across re-renders instead of flickering.
+function hash2(a, b, s = 0) {
+  const x = Math.sin(a * 127.1 + b * 311.7 + s * 74.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+function ptStr(p) { return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }
+function ptsStr(pts) { return pts.map(ptStr).join(' '); }
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function rgbToHex([r, g, b]) {
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+// amt > 0 lightens towards white, amt < 0 darkens towards black. Non-hex colours (the
+// translucent ghost palettes) pass through untouched.
+function shade(hex, amt) {
+  if (typeof hex !== 'string' || hex[0] !== '#' || hex.length !== 7) return hex;
+  const rgb = hexToRgb(hex);
+  return rgbToHex(rgb.map((v) => (amt >= 0 ? v + (255 - v) * amt : v * (1 + amt))));
+}
+function mixHex(a, b, t) {
+  if (a[0] !== '#' || b[0] !== '#') return t < 0.5 ? a : b;
+  const A = hexToRgb(a), B = hexToRgb(b);
+  return rgbToHex(A.map((v, k) => v + (B[k] - v) * t));
+}
+function shadePal(pal, amt) {
+  return { ...pal, top: shade(pal.top, amt), left: shade(pal.left, amt), right: shade(pal.right, amt) };
+}
+// Axis-aligned square footprint around a point.
+function sq(i, j, h) {
+  return [[i - h, j - h], [i + h, j - h], [i + h, j + h], [i - h, j + h]];
+}
+// Footprint of an arbitrarily oriented rectangle: centre (ci,cj), unit direction (ux,uy),
+// half-length a along it and half-width b across it. Winding matches sq() so the lit/shaded
+// face assignment in Block stays consistent for every orientation.
+function orientedRect(ci, cj, ux, uy, a, b) {
+  const px = -uy, py = ux;
+  return [
+    [ci - ux * a - px * b, cj - uy * a - py * b],
+    [ci + ux * a - px * b, cj + uy * a - py * b],
+    [ci + ux * a + px * b, cj + uy * a + py * b],
+    [ci - ux * a + px * b, cj - uy * a + py * b],
+  ];
+}
+// Push every edge of a convex footprint outward by d (grid units) — used to stand scaffolding
+// and survey stakes just outside a building instead of inside its walls.
+function expandCorners(corners, d) {
+  const n = corners.length;
+  return corners.map(([ci, cj], k) => {
+    const [pi, pj] = corners[(k - 1 + n) % n];
+    const [ni, nj] = corners[(k + 1) % n];
+    const l1 = Math.hypot(ci - pi, cj - pj) || 1;
+    const l2 = Math.hypot(ci - ni, cj - nj) || 1;
+    return [ci + ((ci - pi) / l1 + (ci - ni) / l2) * d, cj + ((cj - pj) / l1 + (cj - nj) / l2) * d];
+  });
+}
+function centroid(corners) {
+  return [corners.reduce((s, c) => s + c[0], 0) / corners.length, corners.reduce((s, c) => s + c[1], 0) / corners.length];
+}
+// Index of the corner nearest the viewer (largest screen y) — the two faces adjacent to it are
+// the visible ones, the two opposite edges are hidden behind the building.
+function frontIndex(corners) {
+  let best = 0, bestV = -Infinity;
+  corners.forEach(([ci, cj], k) => {
+    const v = ci + cj + (ci - cj) * 1e-4;
+    if (v > bestV) { bestV = v; best = k; }
+  });
+  return best;
+}
+// A point inside a face quad [topLeft, topRight, bottomRight, bottomLeft] — u runs along the
+// face, v from its top edge (0) down to its base (1).
+function facePt(face, u, v) {
+  const [tl, tr, br, bl] = face;
+  const t = { x: tl.x + (tr.x - tl.x) * u, y: tl.y + (tr.y - tl.y) * u };
+  const b = { x: bl.x + (br.x - bl.x) * u, y: bl.y + (br.y - bl.y) * u };
+  return { x: t.x + (b.x - t.x) * v, y: t.y + (b.y - t.y) * v };
+}
+function convexHull(points) {
+  const pts = points.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  if (pts.length < 3) return pts;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  const upper = [];
+  for (let k = pts.length - 1; k >= 0; k--) { const p = pts[k]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
+
+// The sun stands to the right of the scene (the +i faces are the lit ones in every palette),
+// so everything throws its shadow off to the left across the ground. Shadow length grows
+// with height: a keep throws a long one, a wall a short band, a tuft of grass none at all.
+const SHADOW_DI = -0.0062;
+const SHADOW_DJ = 0.0105;
+const SHADOW_FILL = 'rgba(16,12,4,0.27)';
+function castShadowPoints(corners, height) {
+  const pts = [];
+  corners.forEach(([ci, cj]) => {
+    pts.push(gridToScreen(ci, cj, 0));
+    pts.push(gridToScreen(ci + height * SHADOW_DI, cj + height * SHADOW_DJ, 0));
+  });
+  return ptsStr(convexHull(pts));
+}
+
+// Course lines, staggered joints and a scatter of lighter/darker stones across one wall face —
+// drawn as just three <path>s per face so even a long curtain wall stays cheap to render.
+function masonryPaths(face, heightPx, seed) {
+  const [tl, tr] = face;
+  const w = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  if (w < 3 || heightPx < 2.5) return null;
+  const rows = Math.max(1, Math.round(heightPx / 5.2));
+  const cols = Math.max(1, Math.round(w / 10));
+  const seg = (a, b) => `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+  const quad = (u0, u1, v0, v1) => {
+    const a = facePt(face, u0, v0), b = facePt(face, u1, v0), c = facePt(face, u1, v1), d = facePt(face, u0, v1);
+    return `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}L${c.x.toFixed(1)} ${c.y.toFixed(1)}L${d.x.toFixed(1)} ${d.y.toFixed(1)}Z`;
+  };
+  let lines = '', light = '', dark = '';
+  for (let r = 1; r < rows; r++) lines += seg(facePt(face, 0, r / rows), facePt(face, 1, r / rows));
+  for (let r = 0; r < rows; r++) {
+    const off = (r % 2) * 0.5 + (hash2(seed, r, 3) - 0.5) * 0.25;
+    for (let c = -1; c <= cols; c++) {
+      const u = (c + off) / cols;
+      if (u > 0.03 && u < 0.97) lines += seg(facePt(face, u, r / rows), facePt(face, u, (r + 1) / rows));
+      const u0 = Math.max(0, u), u1 = Math.min(1, (c + 1 + off) / cols);
+      if (u1 - u0 < 0.02) continue;
+      const h = hash2(seed + c * 3.3, r * 7.1, 11);
+      if (h > 0.84) light += quad(u0, u1, r / rows, (r + 1) / rows);
+      else if (h < 0.2) dark += quad(u0, u1, r / rows, (r + 1) / rows);
+    }
   }
-  if (stage === 'scaffold') return { height: 8 + progress * (finalHeight * 0.65 - 8), pal: PALETTE_HALFBUILT, opacity: 0.9 };
-  if (stage === 'masonry') {
-    const startH = finalHeight * 0.65;
-    // Still the raw half-built grey, not the finished colour — that only arrives once the
-    // structure is actually done, not partway through masonry.
-    return { height: startH + progress * (finalHeight - startH), pal: PALETTE_HALFBUILT, opacity: 0.94 };
+  return { lines, light, dark };
+}
+function plankPaths(face, seed) {
+  const [tl, tr] = face;
+  const w = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const cols = Math.max(2, Math.round(w / 3.6));
+  let lines = '';
+  for (let c = 1; c < cols; c++) {
+    const u = c / cols + (hash2(seed, c, 5) - 0.5) * 0.02;
+    const a = facePt(face, u, 0), b = facePt(face, u, 1);
+    lines += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
   }
-  return { height: finalHeight, pal: finalPal, opacity: 1 };
+  return lines;
+}
+function FaceTexture({ face, heightPx, texture, seed }) {
+  if (texture === 'stone') {
+    const m = masonryPaths(face, heightPx, seed);
+    if (!m) return null;
+    return (
+      <g>
+        {m.dark && <path d={m.dark} fill="rgba(20,14,6,0.09)" />}
+        {m.light && <path d={m.light} fill="rgba(255,248,230,0.10)" />}
+        <path d={m.lines} stroke="rgba(32,24,14,0.32)" strokeWidth="0.6" fill="none" />
+      </g>
+    );
+  }
+  if (texture === 'wood') return <path d={plankPaths(face, seed)} stroke="rgba(30,18,8,0.38)" strokeWidth="0.7" fill="none" />;
+  return null;
 }
 
 function isoPrismPath(corners, baseElev, topElev) {
@@ -779,198 +923,945 @@ function scaleCorners(corners, factor) {
   return corners.map(([ci, cj]) => [cx + (ci - cx) * factor, cy + (cj - cy) * factor]);
 }
 
-function Block({ corners, baseElev, topElev, topFill, faceLeft, faceRight }) {
+// The basic isometric box everything is built from — now with a cast shadow, a soft
+// top-to-bottom light falloff on the side faces, an optional surface texture (masonry or
+// planks) and a crisp highlight along the sunlit top edges.
+//   texture:      'stone' | 'wood' | null
+//   shadowHeight: cast a ground shadow as if the object were this tall (lets a plinth throw
+//                 the shadow of the whole tower standing on it); defaults to topElev for
+//                 anything standing on the ground and to no shadow for anything raised.
+//   outline:      dashed outline colour for construction-plan ghosts.
+function Block({ corners, baseElev, topElev, topFill, faceLeft, faceRight, texture = null, seed = 0, shadowHeight, outline = null, shade: doShade = true }) {
   const { top, faceA, faceB } = isoPrismPath(corners, baseElev, topElev);
-  const stroke = 'rgba(30,22,14,0.35)';
-  let shadow = null;
-  if (baseElev === 0) {
-    const pts = scaleCorners(corners, 1.18).map(([ci, cj]) => gridToScreen(ci, cj, 0));
-    shadow = <polygon points={pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} fill="rgba(0,0,0,0.24)" />;
-  }
+  const stroke = outline || 'rgba(30,22,14,0.38)';
+  const sh = shadowHeight != null ? shadowHeight : (baseElev === 0 ? topElev : 0);
+  const quads = (texture || doShade) ? computeFaceQuads(corners, baseElev, topElev) : null;
+  const hPx = topElev - baseElev;
+  const dash = outline ? '4,3' : undefined;
   return (
     <g pointerEvents="none">
-      {shadow}
-      <polygon points={faceA} fill={faceLeft} stroke={stroke} strokeWidth="1" />
-      <polygon points={faceB} fill={faceRight} stroke={stroke} strokeWidth="1" />
-      <polygon points={top} fill={topFill} stroke={stroke} strokeWidth="1" />
+      {sh > 0.5 && !outline && <polygon points={castShadowPoints(corners, sh)} fill={SHADOW_FILL} />}
+      <polygon points={faceA} fill={faceLeft} stroke={stroke} strokeWidth="1" strokeDasharray={dash} />
+      {texture && <FaceTexture face={quads.faceA} heightPx={hPx} texture={texture} seed={seed} />}
+      {doShade && !outline && hPx > 3 && <polygon points={faceA} fill="url(#cbFaceShade)" />}
+      <polygon points={faceB} fill={faceRight} stroke={stroke} strokeWidth="1" strokeDasharray={dash} />
+      {texture && <FaceTexture face={quads.faceB} heightPx={hPx} texture={texture} seed={seed + 50} />}
+      {doShade && !outline && hPx > 3 && <polygon points={faceB} fill="url(#cbFaceShade)" />}
+      <polygon points={top} fill={topFill} stroke={stroke} strokeWidth="1" strokeDasharray={dash} />
+      {doShade && !outline && quads && (
+        <polyline points={ptsStr([quads.faceA[0], quads.faceA[1], quads.faceB[1]])} fill="none" stroke="rgba(255,246,222,0.28)" strokeWidth="0.9" strokeLinejoin="round" />
+      )}
     </g>
   );
 }
 
-function ScaffoldRig({ corners, height }) {
-  const wood = '#8a6a3f';
-  const lightWood = '#d4b073';
-  const posts = corners.map(([ci, cj]) => ({ b: gridToScreen(ci, cj, 0), t: gridToScreen(ci, cj, height) }));
-  const ringAt = (h) => corners.map(([ci, cj]) => gridToScreen(ci, cj, h));
-  const ring1 = ringAt(height * 0.48);
-  const ring2 = ringAt(Math.max(height * 0.9, height - 2));
-  const toPts = (pts) => `${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+// Crenellations: a row of small stone teeth, painted back-to-front so the far ones never
+// overlap the near ones.
+function Merlons({ centers, ux = 1, uy = 0, along, across, base, height, pal, seed = 0 }) {
+  const sorted = centers.slice().sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
   return (
     <g pointerEvents="none">
-      {posts.map((p, idx) => (
-        <line key={`post-${idx}`} x1={p.b.x} y1={p.b.y} x2={p.t.x} y2={p.t.y} stroke={wood} strokeWidth="2.2" strokeLinecap="round" />
+      {sorted.map(([ci, cj], k) => (
+        <Block key={k} corners={orientedRect(ci, cj, ux, uy, along, across)} baseElev={base} topElev={base + height}
+          topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} seed={seed + k} shadowHeight={0} />
       ))}
-      <polyline points={toPts(ring1)} fill="none" stroke={wood} strokeWidth="1.6" />
-      <polyline points={toPts(ring2)} fill="none" stroke={lightWood} strokeWidth="2.2" />
-      <line x1={posts[0].b.x} y1={posts[0].b.y} x2={posts[1].t.x} y2={posts[1].t.y} stroke={wood} strokeWidth="1.2" opacity="0.75" />
-      <line x1={posts[1].b.x} y1={posts[1].b.y} x2={posts[0].t.x} y2={posts[0].t.y} stroke={wood} strokeWidth="1.2" opacity="0.75" />
-      <line x1={posts[2].b.x} y1={posts[2].b.y} x2={posts[3].t.x} y2={posts[3].t.y} stroke={wood} strokeWidth="1.2" opacity="0.75" />
-      <line x1={posts[3].b.x} y1={posts[3].b.y} x2={posts[2].t.x} y2={posts[2].t.y} stroke={wood} strokeWidth="1.2" opacity="0.75" />
     </g>
   );
 }
 
-function TileFace({ i, j }) {
+// A pointed tile/slate roof over a square footprint (turret caps, the chapel's bell turret).
+function PyramidRoof({ corners, baseElev, apexElev, color }) {
+  const [ci, cj] = centroid(corners);
+  const apex = gridToScreen(ci, cj, apexElev);
+  const n = corners.length;
+  const faces = corners.map((c, k) => {
+    const d = corners[(k + 1) % n];
+    const mi = (c[0] + d[0]) / 2 - ci, mj = (c[1] + d[1]) / 2 - cj;
+    return { a: c, b: d, depth: mi + mj, lit: mi - mj };
+  }).sort((x, y) => x.depth - y.depth);
+  return (
+    <g pointerEvents="none">
+      {faces.map((f, k) => {
+        const pa = gridToScreen(f.a[0], f.a[1], baseElev), pb = gridToScreen(f.b[0], f.b[1], baseElev);
+        const fill = shade(color, f.lit > 0.01 ? 0.12 : f.lit < -0.01 ? -0.18 : 0);
+        return <polygon key={k} points={ptsStr([pa, pb, apex])} fill={fill} stroke="rgba(25,20,15,0.45)" strokeWidth="0.8" />;
+      })}
+    </g>
+  );
+}
+
+// A pitched roof with a horizontal ridge, overhanging eaves, visible gable end and tile
+// courses — what turns a plain box into a recognisable house, stable or chapel.
+// axis 'i' runs the ridge along the i direction, 'j' along j.
+function GableRoof({ i, j, half, baseElev, roofH, color, wallPal, axis = 'i', overhang = 0.06 }) {
+  const P = (a, b, e) => gridToScreen(a, b, e);
+  const B = baseElev, T = baseElev + roofH;
+  const lines = (eA, eB, rA, rB) => {
+    let d = '';
+    for (const t of [0.22, 0.44, 0.66, 0.86]) {
+      const a = lerpPt(eA, rA, t), b = lerpPt(eB, rB, t);
+      d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+    }
+    return d;
+  };
+  const stroke = 'rgba(28,20,12,0.5)';
+  if (axis === 'i') {
+    const hi = half + overhang * 0.4, hj = half + overhang;
+    const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
+    const r0 = P(i - hi, j, T), r1 = P(i + hi, j, T);
+    const g0 = P(i + half, j - half, B), g1 = P(i + half, j + half, B), gr = P(i + half, j, T - roofH * (overhang * 0.6 / hj));
+    return (
+      <g pointerEvents="none">
+        <polygon points={ptsStr([e0, e1, r1, r0])} fill={shade(color, 0.14)} stroke={stroke} strokeWidth="0.8" />
+        <polygon points={ptsStr([g0, g1, gr])} fill={wallPal.left} stroke={stroke} strokeWidth="0.8" />
+        <polygon points={ptsStr([e3, e2, r1, r0])} fill={color} stroke={stroke} strokeWidth="0.8" />
+        <path d={lines(e3, e2, r0, r1)} stroke="rgba(25,15,8,0.28)" strokeWidth="0.8" fill="none" />
+        <line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke={shade(color, -0.35)} strokeWidth="1.6" strokeLinecap="round" />
+      </g>
+    );
+  }
+  const hi = half + overhang, hj = half + overhang * 0.4;
+  const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
+  const r0 = P(i, j - hj, T), r1 = P(i, j + hj, T);
+  const g0 = P(i - half, j + half, B), g1 = P(i + half, j + half, B), gr = P(i, j + half, T - roofH * (overhang * 0.6 / hi));
+  return (
+    <g pointerEvents="none">
+      <polygon points={ptsStr([e0, e3, r1, r0])} fill={shade(color, -0.12)} stroke={stroke} strokeWidth="0.8" />
+      <polygon points={ptsStr([g0, g1, gr])} fill={wallPal.right} stroke={stroke} strokeWidth="0.8" />
+      <polygon points={ptsStr([e1, e2, r1, r0])} fill={shade(color, 0.1)} stroke={stroke} strokeWidth="0.8" />
+      <path d={lines(e1, e2, r0, r1)} stroke="rgba(25,15,8,0.28)" strokeWidth="0.8" fill="none" />
+      <line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke={shade(color, -0.35)} strokeWidth="1.6" strokeLinecap="round" />
+    </g>
+  );
+}
+
+// Arched window/door cut into a face (u = centre along the face, v0 = top of the arch,
+// dv = full height, du = width; all in face coordinates).
+function ArchOpening({ face, u, v0, dv, du, fill, stroke = 'rgba(20,14,8,0.8)', glow = false }) {
+  const P = (uu, vv) => facePt(face, uu, vv);
+  const bl = P(u - du / 2, v0 + dv), br = P(u + du / 2, v0 + dv);
+  const sl = P(u - du / 2, v0 + dv * 0.38), sr = P(u + du / 2, v0 + dv * 0.38);
+  const cl = P(u - du / 2, v0), cr = P(u + du / 2, v0), top = P(u, v0);
+  const d = `M${bl.x.toFixed(1)} ${bl.y.toFixed(1)}L${sl.x.toFixed(1)} ${sl.y.toFixed(1)}Q${cl.x.toFixed(1)} ${cl.y.toFixed(1)} ${top.x.toFixed(1)} ${top.y.toFixed(1)}Q${cr.x.toFixed(1)} ${cr.y.toFixed(1)} ${sr.x.toFixed(1)} ${sr.y.toFixed(1)}L${br.x.toFixed(1)} ${br.y.toFixed(1)}Z`;
+  return (
+    <g pointerEvents="none">
+      <path d={d} fill={fill} stroke={stroke} strokeWidth="0.8" />
+      {glow && <path d={d} fill="url(#cbWindowGlow)" className="cb-window-glow" />}
+    </g>
+  );
+}
+// Narrow arrow slit — a dark vertical cut with a tiny cross-shaped widening.
+function ArrowSlit({ face, u, v0, dv }) {
+  const a = facePt(face, u, v0), b = facePt(face, u, v0 + dv);
+  const m1 = facePt(face, u - 0.06, v0 + dv * 0.45), m2 = facePt(face, u + 0.06, v0 + dv * 0.45);
+  return (
+    <g pointerEvents="none">
+      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#1d1710" strokeWidth="1.7" strokeLinecap="round" />
+      <line x1={m1.x} y1={m1.y} x2={m2.x} y2={m2.y} stroke="#1d1710" strokeWidth="1.2" strokeLinecap="round" />
+    </g>
+  );
+}
+
+const PALETTE_RUINS = { top: '#5f564b', left: '#4a423a', right: '#332e28' };
+// Freshly cut, unweathered stone — what a structure looks like while it's still being built,
+// regardless of what colour it'll end up once finished. A light sandstone tone surrounded by
+// timber scaffolding makes "still under construction" readable at a glance, distinct from the
+// weathered final palette it only gets once truly done.
+const PALETTE_HALFBUILT = { top: '#c4b796', left: '#a99b7b', right: '#857a62' };
+// Packed earth of a freshly dug foundation trench.
+const PALETTE_EARTH = { top: '#6a5038', left: '#4f3a27', right: '#3a2a1c' };
+// Construction now reads as a story rather than one grey box growing taller:
+//   foundation — surveyors' stakes and string, an excavated trench, the first footing stones;
+//   scaffold   — carpenters raise a timber scaffold to full height while the stone body only
+//                climbs to about a third (the scaffold leads, the masonry follows);
+//   masonry    — masons fill the scaffold course by course up to the full height.
+// `scaffoldH` tells the renderer how tall the timber rig currently stands.
+function stageVisual(stage, progress, finalHeight, finalPal, ghost, ghostBlocked, ruined = false) {
+  if (ghost) return { height: finalHeight, pal: ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost, opacity: 0.7, scaffoldH: 0 };
+  if (stage === 'done' || !stage) return { height: finalHeight, pal: finalPal, opacity: 1, scaffoldH: 0 };
+  const lowH = Math.max(4, Math.min(finalHeight, finalHeight * 0.35));
+  if (stage === 'foundation') {
+    if (ruined) return { height: 5 + progress * 6, pal: PALETTE_RUINS, opacity: 1, scaffoldH: 0 };
+    return { height: 1.5 + progress * 3.5, pal: PALETTE_HALFBUILT, opacity: 1, scaffoldH: 0 };
+  }
+  if (stage === 'scaffold') {
+    return { height: 5 + progress * (lowH - 5), pal: PALETTE_HALFBUILT, opacity: 1, scaffoldH: Math.max(8, finalHeight * (0.3 + 0.7 * progress)) };
+  }
+  if (stage === 'masonry') {
+    return { height: lowH + progress * (finalHeight - lowH), pal: PALETTE_HALFBUILT, opacity: 1, scaffoldH: finalHeight };
+  }
+  return { height: finalHeight, pal: finalPal, opacity: 1, scaffoldH: 0 };
+}
+
+// ---------------------------------------------------------------- construction site pieces --
+
+// Timber scaffolding standing just outside the footprint: poles every half tile, ledgers
+// every storey, walk boards along the visible sides, cross-bracing and a ladder. Rendered in
+// two parts — the far side before the building body, the near side after it — so the poles
+// genuinely stand around the masonry instead of floating in front of it.
+function ScaffoldRig({ corners, height, part = 'all', seed = 0 }) {
+  if (height < 4) return null;
+  const outer = expandCorners(corners, 0.07);
+  const n = outer.length;
+  const f = frontIndex(outer);
+  const wood = '#7d5a32', light = '#c9a468', dark = '#4e3820';
+  const levels = [];
+  for (let h = 9; h < height - 2; h += 10) levels.push(h);
+  levels.push(height);
+  const edges = [];
+  for (let k = 0; k < n; k++) {
+    const a = outer[k], b = outer[(k + 1) % n];
+    const isFront = k === f || (k + 1) % n === f;
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const segs = Math.max(1, Math.round(len / 0.5));
+    edges.push({ a, b, k, isFront, segs });
+  }
+  const want = (isFront) => part === 'all' || (part === 'front' ? isFront : !isFront);
+  const els = [];
+  edges.forEach((e) => {
+    if (!want(e.isFront)) return;
+    const pole = (t) => {
+      const gi = e.a[0] + (e.b[0] - e.a[0]) * t, gj = e.a[1] + (e.b[1] - e.a[1]) * t;
+      return { b: gridToScreen(gi, gj, 0), t: gridToScreen(gi, gj, height + 4) };
+    };
+    for (let s = (e.isFront ? 0 : 1); s <= e.segs; s++) {
+      if (!e.isFront && s === e.segs) continue;
+      const p = pole(s / e.segs);
+      els.push(<line key={`p${e.k}-${s}`} x1={p.b.x} y1={p.b.y} x2={p.t.x} y2={p.t.y} stroke={wood} strokeWidth="1.8" strokeLinecap="round" />);
+    }
+    levels.forEach((h, li) => {
+      const p1 = gridToScreen(e.a[0], e.a[1], h), p2 = gridToScreen(e.b[0], e.b[1], h);
+      els.push(<line key={`l${e.k}-${li}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={dark} strokeWidth="1.1" />);
+      if (e.isFront) els.push(<line key={`b${e.k}-${li}`} x1={p1.x} y1={p1.y - 1.4} x2={p2.x} y2={p2.y - 1.4} stroke={light} strokeWidth="1.8" strokeLinecap="round" />);
+    });
+    if (e.isFront) {
+      let prevH = 0;
+      levels.forEach((h, li) => {
+        for (let s = 0; s < e.segs; s++) {
+          const t0 = s / e.segs, t1 = (s + 1) / e.segs;
+          const flip = (s + li) % 2 === 0;
+          const A = gridToScreen(e.a[0] + (e.b[0] - e.a[0]) * t0, e.a[1] + (e.b[1] - e.a[1]) * t0, flip ? prevH : h);
+          const Bp = gridToScreen(e.a[0] + (e.b[0] - e.a[0]) * t1, e.a[1] + (e.b[1] - e.a[1]) * t1, flip ? h : prevH);
+          els.push(<line key={`x${e.k}-${li}-${s}`} x1={A.x} y1={A.y} x2={Bp.x} y2={Bp.y} stroke={wood} strokeWidth="0.9" opacity="0.8" />);
+        }
+        prevH = h;
+      });
+    }
+  });
+  // Ladder on the first visible side.
+  if (part !== 'back') {
+    const e = edges.find((ed) => ed.isFront && ed.k !== f) || edges[f];
+    const t = 0.18 + hash2(seed, 1) * 0.2;
+    const gi = e.a[0] + (e.b[0] - e.a[0]) * t, gj = e.a[1] + (e.b[1] - e.a[1]) * t;
+    const [ci, cj] = centroid(corners);
+    const oi = gi - ci, oj = gj - cj, ol = Math.hypot(oi, oj) || 1;
+    const li0 = gi + (oi / ol) * 0.05, lj0 = gj + (oj / ol) * 0.05;
+    const ux = e.b[0] - e.a[0], uy = e.b[1] - e.a[1], ul = Math.hypot(ux, uy) || 1;
+    const w = 0.05;
+    const r1b = gridToScreen(li0 - (ux / ul) * w, lj0 - (uy / ul) * w, 0), r1t = gridToScreen(li0 - (ux / ul) * w, lj0 - (uy / ul) * w, Math.min(height, levels[0] + 1));
+    const r2b = gridToScreen(li0 + (ux / ul) * w, lj0 + (uy / ul) * w, 0), r2t = gridToScreen(li0 + (ux / ul) * w, lj0 + (uy / ul) * w, Math.min(height, levels[0] + 1));
+    els.push(<line key="lad1" x1={r1b.x} y1={r1b.y} x2={r1t.x} y2={r1t.y} stroke={light} strokeWidth="1" />);
+    els.push(<line key="lad2" x1={r2b.x} y1={r2b.y} x2={r2t.x} y2={r2t.y} stroke={light} strokeWidth="1" />);
+    for (let h = 2; h < Math.min(height, levels[0]); h += 2.6) {
+      const a = gridToScreen(li0 - (ux / ul) * w, lj0 - (uy / ul) * w, h), b = gridToScreen(li0 + (ux / ul) * w, lj0 + (uy / ul) * w, h);
+      els.push(<line key={`rung${h}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={light} strokeWidth="0.8" />);
+    }
+  }
+  return <g pointerEvents="none">{els}</g>;
+}
+
+// Unfinished top course: a ragged line of stones still being set on the wall head.
+function RaggedTop({ corners, elev, pal, seed }) {
+  const n = corners.length;
+  const [ci, cj] = centroid(corners);
+  const stones = [];
+  for (let k = 0; k < n; k++) {
+    const a = corners[k], b = corners[(k + 1) % n];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const cnt = Math.max(1, Math.round(len / 0.16));
+    const ux = (b[0] - a[0]) / (len || 1), uy = (b[1] - a[1]) / (len || 1);
+    for (let m = 0; m < cnt; m++) {
+      const h = hash2(seed + k * 9.7, m * 3.1, 21);
+      if (h < 0.35) continue;
+      const t = (m + 0.5) / cnt;
+      let si = a[0] + (b[0] - a[0]) * t, sj = a[1] + (b[1] - a[1]) * t;
+      si += (ci - si) * 0.12; sj += (cj - sj) * 0.12;
+      stones.push({ si, sj, ux, uy, h, len: Math.min(0.06, len / cnt * 0.42) });
+    }
+  }
+  stones.sort((x, y) => (x.si + x.sj) - (y.si + y.sj));
+  return (
+    <g pointerEvents="none">
+      {stones.map((s, k) => (
+        <Block key={k} corners={orientedRect(s.si, s.sj, s.ux, s.uy, s.len, 0.04)} baseElev={elev} topElev={elev + 1.5 + s.h * 3}
+          topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} shadowHeight={0} shade={false} />
+      ))}
+    </g>
+  );
+}
+
+// A medieval treadwheel crane beside the bigger builds (towers, keep): wooden mast, jib
+// reaching over the work, and a stone block swinging gently on its rope.
+function TreadwheelCrane({ corners, height, seed }) {
+  const n = corners.length;
+  const f = frontIndex(corners);
+  const side = corners[(f - 1 + n) % n];
+  const [ci, cj] = centroid(corners);
+  const oi = side[0] - ci, oj = side[1] - cj, ol = Math.hypot(oi, oj) || 1;
+  const bi = side[0] + (oi / ol) * 0.3, bj = side[1] + (oj / ol) * 0.3;
+  const mastH = height + 22;
+  const base = gridToScreen(bi, bj, 0);
+  const top = gridToScreen(bi, bj, mastH);
+  const tip = gridToScreen(ci + (bi - ci) * 0.15, cj + (bj - cj) * 0.15, mastH - 3);
+  const load = gridToScreen(ci + (bi - ci) * 0.15, cj + (bj - cj) * 0.15, height + 7);
+  const dur = `${(2.6 + hash2(seed, 4) * 1.2).toFixed(2)}s`;
+  return (
+    <g pointerEvents="none">
+      <ellipse cx={base.x - 4} cy={base.y + 1} rx="12" ry="4" fill={SHADOW_FILL} />
+      <g transform={`translate(${(base.x - 2).toFixed(1)},${(base.y - 9).toFixed(1)})`}>
+        <ellipse cx="0" cy="0" rx="4.2" ry="8.5" fill="none" stroke="#6b4a28" strokeWidth="2" />
+        <line x1="0" y1="-8.5" x2="0" y2="8.5" stroke="#6b4a28" strokeWidth="0.8" />
+        <line x1="-4" y1="0" x2="4" y2="0" stroke="#6b4a28" strokeWidth="0.8" />
+        <line x1="-3" y1="-6" x2="3" y2="6" stroke="#6b4a28" strokeWidth="0.6" />
+        <line x1="-3" y1="6" x2="3" y2="-6" stroke="#6b4a28" strokeWidth="0.6" />
+      </g>
+      <line x1={base.x - 5} y1={base.y} x2={top.x} y2={top.y + 6} stroke="#5c4024" strokeWidth="1.3" />
+      <line x1={base.x} y1={base.y} x2={top.x} y2={top.y} stroke="#6e4d2b" strokeWidth="2.6" strokeLinecap="round" />
+      <line x1={top.x} y1={top.y} x2={tip.x} y2={tip.y} stroke="#6e4d2b" strokeWidth="2.2" strokeLinecap="round" />
+      <line x1={top.x} y1={top.y + 10} x2={tip.x} y2={tip.y} stroke="#5c4024" strokeWidth="1" />
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values={`-5 ${tip.x.toFixed(1)} ${tip.y.toFixed(1)};5 ${tip.x.toFixed(1)} ${tip.y.toFixed(1)};-5 ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`} dur={dur} repeatCount="indefinite" />
+        <line x1={tip.x} y1={tip.y} x2={load.x} y2={load.y - 4} stroke="#3a2a18" strokeWidth="0.8" />
+        <polygon points={`${load.x - 5},${load.y - 4} ${load.x},${load.y - 6.5} ${load.x + 5},${load.y - 4} ${load.x},${load.y - 1.5}`} fill="#d3c7a8" stroke="#5c5244" strokeWidth="0.5" />
+        <polygon points={`${load.x - 5},${load.y - 4} ${load.x},${load.y - 1.5} ${load.x},${load.y + 2} ${load.x - 5},${load.y - 0.5}`} fill="#b3a585" stroke="#5c5244" strokeWidth="0.5" />
+        <polygon points={`${load.x + 5},${load.y - 4} ${load.x},${load.y - 1.5} ${load.x},${load.y + 2} ${load.x + 5},${load.y - 0.5}`} fill="#8f8268" stroke="#5c5244" strokeWidth="0.5" />
+      </g>
+    </g>
+  );
+}
+
+// Building materials piled up beside a site — timber while the scaffold goes up, cut stone
+// and a mortar tub once the masons take over.
+function SiteMaterials({ corners, stage, seed }) {
+  const n = corners.length;
+  const f = frontIndex(corners);
+  const side = corners[(f + 1) % n];
+  const [ci, cj] = centroid(corners);
+  const oi = side[0] - ci, oj = side[1] - cj, ol = Math.hypot(oi, oj) || 1;
+  const p = gridToScreen(side[0] + (oi / ol) * 0.2, side[1] + (oj / ol) * 0.2, 0);
+  if (stage === 'scaffold') {
+    return (
+      <g pointerEvents="none" transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}>
+        <ellipse cx="-2" cy="1.5" rx="11" ry="3.5" fill={SHADOW_FILL} />
+        {[[-7, -1.5], [-1, -1.5], [-4, -5]].map(([x, y], k) => (
+          <g key={k}>
+            <rect x={x - 5} y={y - 2} width="11" height="4" rx="1.8" fill="#8a6338" stroke="#4a3018" strokeWidth="0.5" />
+            <ellipse cx={x + 6} cy={y} rx="1.4" ry="2" fill="#d6b07a" stroke="#4a3018" strokeWidth="0.4" />
+          </g>
+        ))}
+      </g>
+    );
+  }
+  if (stage === 'masonry') {
+    return (
+      <g pointerEvents="none" transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}>
+        <ellipse cx="0" cy="1.5" rx="12" ry="3.8" fill={SHADOW_FILL} />
+        <polygon points="-11,-1 -5,-4 1,-1 -5,2" fill="#cfc3a3" stroke="#6b604c" strokeWidth="0.5" />
+        <polygon points="-11,-1 -5,2 -5,5 -11,2" fill="#ada083" stroke="#6b604c" strokeWidth="0.5" />
+        <polygon points="1,-1 -5,2 -5,5 1,2" fill="#8c8068" stroke="#6b604c" strokeWidth="0.5" />
+        <polygon points="-9,-4.5 -5,-6.5 -1,-4.5 -5,-2.5" fill="#d8ccad" stroke="#6b604c" strokeWidth="0.5" />
+        <ellipse cx="7" cy="0" rx="4.5" ry="2.2" fill="#6b4d2e" stroke="#3a2a18" strokeWidth="0.5" />
+        <ellipse cx="7" cy="-0.6" rx="3.4" ry="1.5" fill="#e6e0d0" />
+      </g>
+    );
+  }
+  return null;
+}
+
+// Wisps of smoke curling up from a burnt-out ruin.
+function RuinSmoke({ i, j, elev, seed }) {
+  const b = gridToScreen(i, j, elev);
+  return (
+    <g pointerEvents="none">
+      {[0, 1, 2].map((k) => {
+        const dur = 3.6 + hash2(seed, k) * 1.2;
+        return (
+          <circle key={k} cx={b.x} cy={b.y} r="3" fill="rgba(70,64,58,0.5)">
+            <animate attributeName="cy" values={`${b.y};${b.y - 30}`} dur={`${dur}s`} begin={`${k * 1.2}s`} repeatCount="indefinite" />
+            <animate attributeName="cx" values={`${b.x};${b.x - 6 - k * 2}`} dur={`${dur}s`} begin={`${k * 1.2}s`} repeatCount="indefinite" />
+            <animate attributeName="r" values="2.5;7" dur={`${dur}s`} begin={`${k * 1.2}s`} repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.65;0" dur={`${dur}s`} begin={`${k * 1.2}s`} repeatCount="indefinite" />
+          </circle>
+        );
+      })}
+    </g>
+  );
+}
+
+// Stage "foundation": a surveyed, excavated plot with the first footing stones going in —
+// or, for a structure knocked back by the enemy, a charred and smoking ruin.
+function FoundationSite({ corners, progress, ruined, seed, height }) {
+  const [ci, cj] = centroid(corners);
+  if (ruined) {
+    return (
+      <g pointerEvents="none">
+        <polygon points={ptsStr(expandCorners(corners, 0.1).map(([a, b]) => gridToScreen(a, b, 0)))} fill="rgba(28,22,16,0.55)" />
+        <Block corners={corners} baseElev={0} topElev={height} topFill={PALETTE_RUINS.top} faceLeft={PALETTE_RUINS.left} faceRight={PALETTE_RUINS.right} texture="stone" seed={seed} />
+        <RaggedTop corners={corners} elev={height} pal={PALETTE_RUINS} seed={seed + 3} />
+        <RubbleDecor i={ci} j={cj} frac={1} />
+        <RuinSmoke i={ci} j={cj} elev={height + 2} seed={seed} />
+      </g>
+    );
+  }
+  const pit = expandCorners(corners, 0.05);
+  const stakes = expandCorners(corners, 0.12);
+  const f = frontIndex(stakes);
+  const n = stakes.length;
+  const stakePts = stakes.map(([a, b]) => ({ b: gridToScreen(a, b, 0), t: gridToScreen(a, b, 6) }));
+  const back = [(f + 2) % n, (f + 1) % n, (f + 3) % n];
+  const rope = (idxs) => idxs.map((k) => ptStr(stakePts[k].t)).join(' ');
+  return (
+    <g pointerEvents="none">
+      <polygon points={ptsStr(pit.map(([a, b]) => gridToScreen(a, b, 0)))} fill={PALETTE_EARTH.top} stroke="#3a2a1c" strokeWidth="0.8" />
+      <polygon points={ptsStr(corners.map(([a, b]) => gridToScreen(a, b, 0)))} fill="rgba(20,12,6,0.35)" />
+      {back.map((k) => <line key={`sb${k}`} x1={stakePts[k].b.x} y1={stakePts[k].b.y} x2={stakePts[k].t.x} y2={stakePts[k].t.y} stroke="#6b4a28" strokeWidth="1.3" />)}
+      <polyline points={rope([(f + 1) % n, (f + 2) % n, (f + 3) % n])} fill="none" stroke="#eadfba" strokeWidth="0.6" opacity="0.9" />
+      {progress > 0.08 && (
+        <Block corners={corners} baseElev={0} topElev={height} topFill={PALETTE_HALFBUILT.top} faceLeft={PALETTE_HALFBUILT.left} faceRight={PALETTE_HALFBUILT.right} texture="stone" seed={seed} />
+      )}
+      {progress > 0.08 && <RaggedTop corners={corners} elev={height} pal={PALETTE_HALFBUILT} seed={seed} />}
+      <polyline points={rope([(f + 3) % n, f, (f + 1) % n])} fill="none" stroke="#eadfba" strokeWidth="0.6" opacity="0.9" />
+      <line x1={stakePts[f].b.x} y1={stakePts[f].b.y} x2={stakePts[f].t.x} y2={stakePts[f].t.y} stroke="#6b4a28" strokeWidth="1.3" />
+      {(() => {
+        const p = gridToScreen(stakes[(f + 1) % n][0], stakes[(f + 1) % n][1], 0);
+        return <path d={`M ${p.x - 12} ${p.y + 2} Q ${p.x - 6} ${p.y - 7} ${p.x} ${p.y + 2} Z`} fill="#5c4430" stroke="#3a2a1c" strokeWidth="0.6" />;
+      })()}
+    </g>
+  );
+}
+
+// Stages "scaffold" and "masonry" for any box-shaped building.
+function BuildingSite({ corners, v, stage, seed, texture = 'stone', crane = false }) {
+  return (
+    <g pointerEvents="none">
+      <ScaffoldRig corners={corners} height={v.scaffoldH} part="back" seed={seed} />
+      <Block corners={corners} baseElev={0} topElev={v.height} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} texture={texture} seed={seed} shadowHeight={Math.max(v.height, v.scaffoldH * 0.5)} />
+      <RaggedTop corners={corners} elev={v.height} pal={v.pal} seed={seed} />
+      <ScaffoldRig corners={corners} height={v.scaffoldH} part="front" seed={seed} />
+      {crane && <TreadwheelCrane corners={corners} height={Math.max(v.height, v.scaffoldH)} seed={seed} />}
+      <SiteMaterials corners={corners} stage={stage} seed={seed} />
+    </g>
+  );
+}
+
+// A plan-view "blueprint" of what's about to be placed.
+function GhostBlock({ corners, height, pal, blocked }) {
+  const outline = blocked ? 'rgba(220,80,60,0.95)' : 'rgba(240,210,130,0.95)';
+  return (
+    <g pointerEvents="none">
+      <polygon points={ptsStr(corners.map(([a, b]) => gridToScreen(a, b, 0)))} fill="none" stroke={outline} strokeWidth="1.4" strokeDasharray="4,3" />
+      <Block corners={corners} baseElev={0} topElev={height} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} outline={outline} />
+    </g>
+  );
+}
+
+// ------------------------------------------------------------------------------ terrain --
+
+const TERRAIN_TINTS = {
+  grass: ['#6f874b', '#86985a'],
+  forest: ['#4f673a', '#5f7845'],
+  hill: ['#8a7b5d', '#a08f6b'],
+  village: ['#8f9a62', '#a0a870'],
+  villageYard: ['#9a8763', '#ad9a72'],
+  water: ['#3d6f86', '#4b7f96'],
+};
+function terrainTint(terrain, i, j) {
+  const key = terrain === 'village' && (i + j) % 2 === 0 ? 'villageYard' : terrain;
+  const [a, b] = TERRAIN_TINTS[key] || TERRAIN_TINTS.grass;
+  // Broad soft meadow patches plus a little per-tile jitter instead of a hard checkerboard.
+  const broad = 0.5 + 0.5 * Math.sin(i * 0.37 + j * 0.21 + 1.3) * Math.cos(i * 0.19 - j * 0.31);
+  const t = Math.max(0, Math.min(1, broad * 0.75 + hash2(i, j, 1) * 0.25));
+  return mixHex(a, b, t);
+}
+function isWaterAt(i, j) {
+  if (i < 0 || i >= GRID_COLS || j < 0 || j >= GRID_ROWS) return null;
+  return TERRAIN[j][i] === 'water';
+}
+
+const TileFace = React.memo(function TileFace({ i, j }) {
   const terrain = terrainAt(i, j);
   const corners = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
   const pts = corners.map(([ci, cj]) => gridToScreen(ci, cj, 0));
-  const even = (i + j) % 2 === 0;
-  let fill;
-  if (terrain === 'water') fill = even ? '#4a7a8c' : '#537f90';
-  else if (terrain === 'hill') fill = even ? '#8a7a5c' : '#93835f';
-  else if (terrain === 'forest') fill = even ? '#5f7a48' : '#6a8350';
-  else if (terrain === 'village') fill = even ? '#8f9a6a' : '#98a273';
-  else fill = even ? '#7c8f5a' : '#87996a';
-  return <polygon points={pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} fill={fill} stroke="rgba(30,22,14,0.12)" strokeWidth="0.5" pointerEvents="none" />;
+  const fill = terrainTint(terrain, i, j);
+  const rnd = (k) => hash2(i, j, k);
+  const at = (a, b) => gridToScreen(i + a, j + b, 0);
+  const deco = [];
+  if (terrain === 'water') {
+    // Sandy, foam-edged banks wherever the river meets dry land.
+    const sides = [
+      { n: [i, j - 1], a: [0, 0], b: [1, 0], inA: [0, 0.16], inB: [1, 0.16] },
+      { n: [i + 1, j], a: [1, 0], b: [1, 1], inA: [0.84, 0], inB: [0.84, 1] },
+      { n: [i, j + 1], a: [1, 1], b: [0, 1], inA: [1, 0.84], inB: [0, 0.84] },
+      { n: [i - 1, j], a: [0, 1], b: [0, 0], inA: [0.16, 1], inB: [0.16, 0] },
+    ];
+    sides.forEach((s, k) => {
+      const w = isWaterAt(s.n[0], s.n[1]);
+      if (w !== false) return;
+      const A = at(...s.a), Bp = at(...s.b), IA = at(...s.inA), IB = at(...s.inB);
+      deco.push(<polygon key={`sh${k}`} points={ptsStr([A, Bp, IB, IA])} fill="#a99a6c" opacity="0.92" />);
+      deco.push(<line key={`fo${k}`} x1={IA.x} y1={IA.y} x2={IB.x} y2={IB.y} stroke="rgba(232,240,235,0.55)" strokeWidth="1.1" strokeLinecap="round" />);
+    });
+    for (let k = 0; k < 2; k++) {
+      const c = at(0.25 + rnd(10 + k) * 0.5, 0.25 + rnd(20 + k) * 0.5);
+      deco.push(
+        <path key={`gl${k}`} d={`M ${c.x - 5} ${c.y} q 2.5 -1.6 5 0 t 5 0`} stroke="rgba(214,236,242,0.7)" strokeWidth="0.9" fill="none"
+          className="cb-glint" style={{ animationDelay: `${(rnd(30 + k) * 3).toFixed(2)}s` }} />
+      );
+    }
+  } else if (terrain === 'grass' || terrain === 'village') {
+    const yard = terrain === 'village' && (i + j) % 2 === 0;
+    if (yard) {
+      // Vegetable rows in the village gardens.
+      if (rnd(2) < 0.6) {
+        let d = '';
+        for (let r = 0; r < 4; r++) {
+          const a = at(0.2, 0.25 + r * 0.16), b = at(0.8, 0.25 + r * 0.16);
+          d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+        }
+        deco.push(<path key="rows" d={d} stroke="#5d6b35" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="2,1.6" fill="none" opacity="0.75" />);
+      }
+    } else {
+      const tufts = rnd(3) < 0.55 ? 1 + Math.floor(rnd(4) * 3) : 0;
+      let d = '';
+      for (let k = 0; k < tufts; k++) {
+        const c = at(0.15 + rnd(40 + k) * 0.7, 0.15 + rnd(50 + k) * 0.7);
+        d += `M${c.x.toFixed(1)} ${c.y.toFixed(1)}l-1.6 -3.6M${c.x.toFixed(1)} ${c.y.toFixed(1)}l0.2 -4.6M${c.x.toFixed(1)} ${c.y.toFixed(1)}l1.8 -3.4`;
+      }
+      if (d) deco.push(<path key="tuft" d={d} stroke="#4f6a33" strokeWidth="0.9" strokeLinecap="round" fill="none" opacity="0.85" />);
+      if (rnd(5) < 0.12) {
+        const cols = ['#f1ead2', '#e8c94a', '#b58ad6', '#e57b6a'];
+        for (let k = 0; k < 4; k++) {
+          const c = at(0.2 + rnd(60 + k) * 0.6, 0.2 + rnd(70 + k) * 0.6);
+          deco.push(<circle key={`fl${k}`} cx={c.x} cy={c.y} r="1.1" fill={cols[Math.floor(rnd(80) * cols.length)]} />);
+        }
+      }
+      if (rnd(6) < 0.06) {
+        const c = at(0.3 + rnd(90) * 0.4, 0.3 + rnd(91) * 0.4);
+        deco.push(<ellipse key="peb" cx={c.x} cy={c.y} rx="2.4" ry="1.4" fill="#9a9384" stroke="#5f5a50" strokeWidth="0.4" />);
+      }
+    }
+  } else if (terrain === 'hill') {
+    let d = '';
+    for (let k = 0; k < 4; k++) {
+      const c = at(0.12 + rnd(40 + k) * 0.76, 0.12 + rnd(50 + k) * 0.76);
+      const r = 1 + rnd(60 + k) * 1.6;
+      d += `M${(c.x - r).toFixed(1)} ${c.y.toFixed(1)}a${r.toFixed(1)} ${(r * 0.6).toFixed(1)} 0 1 0 ${(2 * r).toFixed(1)} 0a${r.toFixed(1)} ${(r * 0.6).toFixed(1)} 0 1 0 ${(-2 * r).toFixed(1)} 0`;
+    }
+    deco.push(<path key="pebbles" d={d} fill="#b2a588" stroke="#6b604a" strokeWidth="0.5" />);
+    if (rnd(7) < 0.5) {
+      const a = at(0.2, 0.3 + rnd(8) * 0.4), b = at(0.55, 0.45), c = at(0.8, 0.35 + rnd(9) * 0.4);
+      deco.push(<polyline key="crack" points={ptsStr([a, b, c])} fill="none" stroke="rgba(60,48,30,0.4)" strokeWidth="0.8" />);
+    }
+  } else if (terrain === 'forest') {
+    let d = '';
+    for (let k = 0; k < 6; k++) {
+      const c = at(0.1 + rnd(40 + k) * 0.8, 0.1 + rnd(50 + k) * 0.8);
+      d += `M${c.x.toFixed(1)} ${c.y.toFixed(1)}h1.6`;
+    }
+    deco.push(<path key="leaves" d={d} stroke="#8a6a35" strokeWidth="1.3" strokeLinecap="round" opacity="0.6" />);
+    let f = '';
+    for (let k = 0; k < 2; k++) {
+      const c = at(0.2 + rnd(70 + k) * 0.6, 0.2 + rnd(80 + k) * 0.6);
+      f += `M${c.x.toFixed(1)} ${c.y.toFixed(1)}q-3 -2 -5 -1M${c.x.toFixed(1)} ${c.y.toFixed(1)}q3 -2 5 -1M${c.x.toFixed(1)} ${c.y.toFixed(1)}l0 -4`;
+    }
+    deco.push(<path key="fern" d={f} stroke="#3c5a2a" strokeWidth="1" fill="none" strokeLinecap="round" />);
+  }
+  return (
+    <g pointerEvents="none">
+      <polygon points={ptsStr(pts)} fill={fill} stroke="rgba(30,22,14,0.07)" strokeWidth="0.6" />
+      {deco}
+    </g>
+  );
+});
+
+// The board itself as a slab of earth: the two near edges of the map show a cut through the
+// ground (turf, topsoil, clay, bedrock) so the whole map reads as a tabletop diorama.
+const MAP_BASE_DEPTH = 30;
+function MapBase() {
+  const D = MAP_BASE_DEPTH;
+  const sideJ = [gridToScreen(0, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, -D), gridToScreen(0, GRID_ROWS, -D)];
+  const sideI = [gridToScreen(GRID_COLS, 0, 0), gridToScreen(GRID_COLS, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, -D), gridToScreen(GRID_COLS, 0, -D)];
+  const strata = (side, frac, color, w) => {
+    const a = lerpPt(side[0], side[3], frac), b = lerpPt(side[1], side[2], frac);
+    return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={w} />;
+  };
+  const stones = (side, seed) => {
+    const out = [];
+    for (let k = 0; k < 26; k++) {
+      const u = hash2(seed, k, 1), v = 0.35 + hash2(seed, k, 2) * 0.55;
+      const p = facePt([side[0], side[1], side[2], side[3]], u, v);
+      out.push(<ellipse key={k} cx={p.x} cy={p.y} rx={1.5 + hash2(seed, k, 3) * 2.5} ry={1 + hash2(seed, k, 4) * 1.2} fill="rgba(140,128,110,0.55)" />);
+    }
+    return out;
+  };
+  return (
+    <g pointerEvents="none">
+      <polygon points={ptsStr(sideJ)} fill="url(#cbSoilDark)" stroke="#20160c" strokeWidth="1" />
+      {strata(sideJ, 0.3, 'rgba(30,20,10,0.35)', 1)}
+      {strata(sideJ, 0.65, 'rgba(30,20,10,0.3)', 1)}
+      {stones(sideJ, 3)}
+      <polygon points={ptsStr(sideI)} fill="url(#cbSoilLight)" stroke="#20160c" strokeWidth="1" />
+      {strata(sideI, 0.3, 'rgba(30,20,10,0.3)', 1)}
+      {strata(sideI, 0.65, 'rgba(30,20,10,0.25)', 1)}
+      {stones(sideI, 7)}
+      <polyline points={ptsStr([sideJ[0], sideJ[1], sideI[0]])} fill="none" stroke="#56743a" strokeWidth="3" strokeLinejoin="round" />
+    </g>
+  );
 }
 
-function TreeProp({ i, j }) {
-  const b = gridToScreen(i + 0.5, j + 0.5, 0);
+// Gradients shared by every component above — rendered once at the top of the map <svg>.
+function SceneDefs() {
+  return (
+    <defs>
+      <linearGradient id="cbFaceShade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#fff3d6" stopOpacity="0.10" />
+        <stop offset="0.55" stopColor="#000" stopOpacity="0" />
+        <stop offset="1" stopColor="#000" stopOpacity="0.24" />
+      </linearGradient>
+      <linearGradient id="cbSoilLight" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#6e5236" />
+        <stop offset="0.45" stopColor="#5a4029" />
+        <stop offset="1" stopColor="#3b2a1b" />
+      </linearGradient>
+      <linearGradient id="cbSoilDark" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#57402a" />
+        <stop offset="0.45" stopColor="#45311f" />
+        <stop offset="1" stopColor="#2a1e13" />
+      </linearGradient>
+      <radialGradient id="cbBackdrop" cx="0.5" cy="0.5" r="0.75">
+        <stop offset="0" stopColor="#3b4430" />
+        <stop offset="1" stopColor="#151811" />
+      </radialGradient>
+      <radialGradient id="cbCloud" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stopColor="#0a0d06" stopOpacity="0.16" />
+        <stop offset="0.6" stopColor="#0a0d06" stopOpacity="0.08" />
+        <stop offset="1" stopColor="#0a0d06" stopOpacity="0" />
+      </radialGradient>
+      <radialGradient id="cbWindowGlow" cx="0.5" cy="0.7" r="0.6">
+        <stop offset="0" stopColor="#ffd98a" stopOpacity="0.95" />
+        <stop offset="1" stopColor="#e09a3a" stopOpacity="0.55" />
+      </radialGradient>
+    </defs>
+  );
+}
+
+// Slow-drifting cloud shadows gliding across the whole board.
+function CloudShadows() {
+  const clouds = [
+    { y: VIEW_H * 0.3, rx: 260, ry: 95, dur: 150, begin: -20 },
+    { y: VIEW_H * 0.62, rx: 340, ry: 120, dur: 190, begin: -110 },
+    { y: VIEW_H * 0.85, rx: 220, ry: 80, dur: 170, begin: -60 },
+  ];
   return (
     <g pointerEvents="none">
-      <ellipse cx={b.x} cy={b.y + 2} rx="10" ry="4" fill="rgba(0,0,0,0.2)" />
-      <rect x={b.x - 2.5} y={b.y - 10} width="5" height="10" fill="#5c4630" />
-      <path d={`M ${b.x} ${b.y - 34} L ${b.x - 13} ${b.y - 8} L ${b.x + 13} ${b.y - 8} Z`} fill="#3f5a30" stroke="#25381d" strokeWidth="1" />
-      <path d={`M ${b.x} ${b.y - 26} L ${b.x - 10} ${b.y - 6} L ${b.x + 10} ${b.y - 6} Z`} fill="#4a6b38" stroke="#25381d" strokeWidth="1" />
+      {clouds.map((c, k) => (
+        <ellipse key={k} cx="0" cy={c.y} rx={c.rx} ry={c.ry} fill="url(#cbCloud)">
+          <animateTransform attributeName="transform" type="translate" from={`${-c.rx * 1.5} 0`} to={`${VIEW_W + c.rx * 1.5} 0`} dur={`${c.dur}s`} begin={`${c.begin}s`} repeatCount="indefinite" />
+        </ellipse>
+      ))}
     </g>
   );
 }
-function RockProp({ i, j }) {
-  const b = gridToScreen(i + 0.5, j + 0.5, 0);
+
+// ------------------------------------------------------------------------- nature props --
+
+function ConiferShape({ x, y, s, hue = 0 }) {
+  const dark = shade('#2f4a26', hue), mid = shade('#3f6030', hue), lit = shade('#5a7f3e', hue);
+  const tier = (top, bottom, w, k) => (
+    <g key={k}>
+      <path d={`M ${x} ${y - top * s} L ${x - w * s} ${y - bottom * s} L ${x + w * s} ${y - bottom * s} Z`} fill={mid} stroke={dark} strokeWidth="0.8" strokeLinejoin="round" />
+      <path d={`M ${x} ${y - top * s} L ${x + w * s} ${y - bottom * s} L ${x + w * 0.15 * s} ${y - bottom * s + 1.5 * s} Z`} fill={lit} opacity="0.8" />
+    </g>
+  );
   return (
-    <g pointerEvents="none">
-      <ellipse cx={b.x} cy={b.y + 3} rx="14" ry="5" fill="rgba(0,0,0,0.2)" />
-      <path d={`M ${b.x - 14} ${b.y} L ${b.x - 6} ${b.y - 16} L ${b.x + 4} ${b.y - 12} L ${b.x + 15} ${b.y} Z`} fill="#8a8074" stroke="#5a5348" strokeWidth="1" />
-      <path d={`M ${b.x - 6} ${b.y - 16} L ${b.x + 4} ${b.y - 12} L ${b.x} ${b.y - 4} Z`} fill="#a39a8c" />
+    <g>
+      <rect x={x - 1.8 * s} y={y - 9 * s} width={3.6 * s} height={9 * s} fill="#5a4129" />
+      {tier(24, 6, 12, 0)}
+      {tier(33, 14, 9.5, 1)}
+      {tier(40, 22, 6.5, 2)}
     </g>
   );
 }
-function HouseProp({ i, j }) {
-  const b = gridToScreen(i + 0.5, j + 0.5, 0);
-  const w = 16, h = 12, roofH = 10;
+function DeciduousShape({ x, y, s, hue = 0 }) {
+  const dark = shade('#3d5a28', hue), mid = shade('#4f7334', hue), lit = shade('#6f9446', hue);
   return (
-    <g pointerEvents="none">
-      <ellipse cx={b.x} cy={b.y + 4} rx="14" ry="5" fill="rgba(0,0,0,0.2)" />
-      <rect x={b.x - w / 2} y={b.y - h} width={w} height={h} fill="#c9b48a" stroke="#5a4a30" strokeWidth="1" />
-      <path d={`M ${b.x - w / 2 - 2} ${b.y - h} L ${b.x} ${b.y - h - roofH} L ${b.x + w / 2 + 2} ${b.y - h} Z`} fill="#8c4632" stroke="#5a2a1c" strokeWidth="1" />
+    <g>
+      <path d={`M ${x - 1.8 * s} ${y} L ${x - 1.2 * s} ${y - 14 * s} L ${x + 1.2 * s} ${y - 14 * s} L ${x + 1.8 * s} ${y} Z`} fill="#5a4129" />
+      <circle cx={x - 6 * s} cy={y - 17 * s} r={7.5 * s} fill={dark} />
+      <circle cx={x + 6 * s} cy={y - 18 * s} r={7.5 * s} fill={mid} />
+      <circle cx={x} cy={y - 25 * s} r={8.5 * s} fill={mid} />
+      <circle cx={x + 3.5 * s} cy={y - 27 * s} r={5 * s} fill={lit} opacity="0.9" />
+      <circle cx={x + 7.5 * s} cy={y - 20 * s} r={3.6 * s} fill={lit} opacity="0.7" />
     </g>
   );
 }
+const TreeProp = React.memo(function TreeProp({ i, j }) {
+  const r = (k) => hash2(i, j, k);
+  const b = gridToScreen(i + 0.5 + (r(1) - 0.5) * 0.3, j + 0.5 + (r(2) - 0.5) * 0.3, 0);
+  const s = 0.85 + r(3) * 0.35;
+  const hue = (r(4) - 0.5) * 0.25;
+  return (
+    <g pointerEvents="none">
+      <ellipse cx={b.x - 9 * s} cy={b.y + 1.5} rx={13 * s} ry={4.5 * s} fill={SHADOW_FILL} />
+      {r(5) < 0.62 ? <ConiferShape x={b.x} y={b.y} s={s} hue={hue} /> : <DeciduousShape x={b.x} y={b.y} s={s} hue={hue} />}
+    </g>
+  );
+});
+const RockProp = React.memo(function RockProp({ i, j }) {
+  const r = (k) => hash2(i, j, k);
+  const b = gridToScreen(i + 0.5 + (r(1) - 0.5) * 0.2, j + 0.5 + (r(2) - 0.5) * 0.2, 0);
+  const s = 0.8 + r(3) * 0.4;
+  const boulder = (x, y, w, h, k) => (
+    <g key={k}>
+      <path d={`M ${x - w} ${y} L ${x - w * 0.7} ${y - h * 0.7} L ${x - w * 0.1} ${y - h} L ${x + w * 0.6} ${y - h * 0.8} L ${x + w} ${y - h * 0.15} L ${x + w * 0.8} ${y} Z`} fill="#8a8072" stroke="#4f483e" strokeWidth="0.8" strokeLinejoin="round" />
+      <path d={`M ${x - w * 0.1} ${y - h} L ${x + w * 0.6} ${y - h * 0.8} L ${x + w} ${y - h * 0.15} L ${x + w * 0.15} ${y - h * 0.35} Z`} fill="#a89e8e" />
+      <path d={`M ${x - w} ${y} L ${x - w * 0.7} ${y - h * 0.7} L ${x - w * 0.1} ${y - h} L ${x + w * 0.15} ${y - h * 0.35} L ${x - w * 0.2} ${y} Z`} fill="#6c6458" />
+    </g>
+  );
+  return (
+    <g pointerEvents="none">
+      <ellipse cx={b.x - 6} cy={b.y + 2} rx={17 * s} ry={5 * s} fill={SHADOW_FILL} />
+      {boulder(b.x - 4 * s, b.y, 10 * s, 14 * s, 0)}
+      {boulder(b.x + 8 * s, b.y + 2, 6 * s, 8 * s, 1)}
+      {r(4) < 0.5 && boulder(b.x - 12 * s, b.y + 3, 4 * s, 5 * s, 2)}
+    </g>
+  );
+});
+// Village cottages: whitewashed half-timbered walls under thatch or red tile.
+const HouseProp = React.memo(function HouseProp({ i, j }) {
+  const r = (k) => hash2(i, j, k);
+  const ci = i + 0.5, cj = j + 0.5;
+  const half = 0.2;
+  const corners = sq(ci, cj, half);
+  const wallH = 10;
+  const wallPal = { top: '#e3d6b4', left: '#e0d2ad', right: '#bfae88' };
+  const roofCol = r(1) < 0.5 ? '#b59552' : '#a2493a';
+  const axis = r(2) < 0.5 ? 'i' : 'j';
+  const door = computeFaceQuads(corners, 0, wallH);
+  return (
+    <g pointerEvents="none">
+      <Block corners={corners} baseElev={0} topElev={wallH} topFill={wallPal.top} faceLeft={wallPal.left} faceRight={wallPal.right} shadowHeight={wallH + 9} />
+      <TimberFrameDecor corners={corners} baseElev={0} topElev={wallH} />
+      <ArchOpening face={door.faceB} u={0.5} v0={0.35} dv={0.65} du={0.28} fill="#4e3420" />
+      {r(3) < 0.4 && <ArchOpening face={door.faceA} u={0.5} v0={0.25} dv={0.4} du={0.26} fill="#3a2e22" glow />}
+      <GableRoof i={ci} j={cj} half={half} baseElev={wallH} roofH={9} color={roofCol} wallPal={wallPal} axis={axis} overhang={0.05} />
+    </g>
+  );
+});
 
 function FellingTree({ i, j, active }) {
   const b = gridToScreen(i, j, 0);
   return (
     <g pointerEvents="none">
-      <ellipse cx={b.x} cy={b.y + 2} rx="12" ry="4.5" fill="rgba(0,0,0,0.22)" />
+      <ellipse cx={b.x - 9} cy={b.y + 2} rx="13" ry="4.5" fill={SHADOW_FILL} />
       <g className={active ? 'cb-tree-fell' : ''} style={{ transformBox: 'fill-box', transformOrigin: `${b.x}px ${b.y}px` }}>
-        <rect x={b.x - 3} y={b.y - 11} width="6" height="11" fill="#5c4630" />
-        <path d={`M ${b.x} ${b.y - 37} L ${b.x - 14} ${b.y - 9} L ${b.x + 14} ${b.y - 9} Z`} fill="#3f5a30" stroke="#25381d" strokeWidth="1" />
-        <path d={`M ${b.x} ${b.y - 28} L ${b.x - 11} ${b.y - 7} L ${b.x + 11} ${b.y - 7} Z`} fill="#4a6b38" stroke="#25381d" strokeWidth="1" />
+        <ConiferShape x={b.x} y={b.y} s={1.05} hue={0.05} />
       </g>
+      <ellipse cx={b.x} cy={b.y - 0.5} rx="2.6" ry="1.2" fill="#d2ad74" stroke="#5a4129" strokeWidth="0.5" />
     </g>
   );
 }
 
 function PileProp({ i, j, amount, kind }) {
   const b = gridToScreen(i, j, 0);
-  const n = Math.max(1, Math.min(5, Math.ceil(amount / 3)));
-  const colA = kind === 'stone' ? '#8a8074' : '#9a7a4a';
-  const colB = kind === 'stone' ? '#6f6659' : '#7a5c34';
+  const n = Math.max(1, Math.min(6, Math.ceil(amount / 3)));
   const chunks = [];
   for (let k = 0; k < n; k++) {
-    const ox = ((k % 3) - 1) * 7;
+    const ox = ((k % 3) - 1) * 8 + (Math.floor(k / 3) % 2) * 4;
     const oy = -Math.floor(k / 3) * 5;
-    chunks.push(kind === 'stone'
-      ? <circle key={k} cx={b.x + ox} cy={b.y - 3 + oy} r="5" fill={k % 2 ? colA : colB} stroke="#3a3428" strokeWidth="0.6" />
-      : <rect key={k} x={b.x + ox - 6} y={b.y - 6 + oy} width="12" height="4" rx="1.5" fill={k % 2 ? colA : colB} stroke="#3a2c18" strokeWidth="0.6" />);
+    if (kind === 'stone') {
+      const x = b.x + ox, y = b.y - 1 + oy;
+      chunks.push(
+        <g key={k}>
+          <polygon points={`${x - 5},${y - 2} ${x},${y - 4.5} ${x + 5},${y - 2} ${x},${y + 0.5}`} fill="#b9ae96" stroke="#5c5446" strokeWidth="0.5" />
+          <polygon points={`${x - 5},${y - 2} ${x},${y + 0.5} ${x},${y + 3.5} ${x - 5},${y + 1}`} fill="#9a8f78" stroke="#5c5446" strokeWidth="0.5" />
+          <polygon points={`${x + 5},${y - 2} ${x},${y + 0.5} ${x},${y + 3.5} ${x + 5},${y + 1}`} fill="#7a705e" stroke="#5c5446" strokeWidth="0.5" />
+        </g>
+      );
+    } else {
+      chunks.push(
+        <g key={k}>
+          <rect x={b.x + ox - 6} y={b.y - 6 + oy} width="12" height="4.4" rx="2" fill="#8a6338" stroke="#4a3018" strokeWidth="0.6" />
+          <ellipse cx={b.x + ox + 6} cy={b.y - 3.8 + oy} rx="1.5" ry="2.2" fill="#d6b07a" stroke="#4a3018" strokeWidth="0.5" />
+        </g>
+      );
+    }
   }
   return (
     <g pointerEvents="none">
-      <ellipse cx={b.x} cy={b.y + 2} rx="12" ry="4" fill="rgba(0,0,0,0.2)" />
+      <ellipse cx={b.x - 3} cy={b.y + 2} rx="15" ry="4.5" fill={SHADOW_FILL} />
       {chunks}
-      <rect x={b.x - 20} y={b.y - 30} width="40" height="14" rx="2" fill="rgba(20,16,10,0.72)" />
-      <text x={b.x} y={b.y - 19.5} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{kind === 'stone' ? '🪨' : '🪵'} {amount.toFixed(1)}</text>
+      <rect x={b.x - 21} y={b.y - 31} width="42" height="14" rx="7" fill="rgba(20,16,10,0.78)" stroke="rgba(201,162,75,0.6)" strokeWidth="0.8" />
+      <text x={b.x} y={b.y - 20.5} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{kind === 'stone' ? '🪨' : '🪵'} {amount.toFixed(1)}</text>
     </g>
   );
 }
 
+// Floating status badge over a building site — stage, a gold progress bar, or a red warning.
 function ProgressLabel({ i, j, height, stage, progress, blocked, ruined = false }) {
   if (!stage || stage === 'done') return null;
-  const p = gridToScreen(i, j, height + 16);
-  const text = blocked ? '🚫 Material fehlt' : (ruined && stage === 'foundation') ? '🔥 Ruine — muss repariert werden' : `${STAGE_EMOJI[stage]} ${STAGE_LABEL[stage]} ${Math.round(progress * 100)}%`;
-  const bg = blocked ? 'rgba(96,20,16,0.85)' : (ruined && stage === 'foundation') ? 'rgba(96,20,16,0.85)' : 'rgba(20,16,10,0.72)';
-  const w = blocked ? 84 : (ruined && stage === 'foundation') ? 128 : 56;
+  const p = gridToScreen(i, j, height + 18);
+  const isRuin = ruined && stage === 'foundation';
+  const text = blocked ? '🚫 Material fehlt' : isRuin ? '🔥 Ruine — muss repariert werden' : `${STAGE_EMOJI[stage]} ${STAGE_LABEL[stage]} ${Math.round(progress * 100)}%`;
+  const warn = blocked || isRuin;
+  const w = Math.max(64, text.length * 5.3 + 14);
   return (
     <g pointerEvents="none">
-      <rect x={p.x - w / 2} y={p.y - 12} width={w} height="16" rx="2" fill={bg} />
+      <rect x={p.x - w / 2} y={p.y - 13} width={w} height={warn ? 17 : 21} rx="4" fill={warn ? 'rgba(110,24,18,0.9)' : 'rgba(20,16,10,0.8)'} stroke={warn ? 'rgba(240,140,110,0.7)' : 'rgba(201,162,75,0.65)'} strokeWidth="0.8" />
       <text x={p.x} y={p.y} textAnchor="middle" fontSize="10.5" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{text}</text>
-    </g>
-  );
-}
-
-function TowerNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, damageFrac = 0, ruined = false }) {
-  const half = 0.32;
-  const corners = [[i - half, j - half], [i + half, j - half], [i + half, j + half], [i - half, j + half]];
-  const v = stageVisual(stage, progress, TOWER_H, PALETTE.tower, ghost, ghostBlocked, ruined);
-  const mh = 0.09;
-  const useScaffold = !ghost && stage === 'scaffold';
-  const crumbledHeight = (!ghost && stage === 'done') ? v.height * (1 - Math.min(0.3, damageFrac * 0.3)) : v.height;
-  const showMerlons = !ghost && stage === 'done' && damageFrac < 0.45;
-  const showRuins = !ghost && stage === 'foundation' && ruined;
-  return (
-    <g opacity={v.opacity}>
-      <Block corners={corners} baseElev={0} topElev={crumbledHeight} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />
-      {useScaffold && <ScaffoldRig corners={corners} height={v.height} />}
-      {showMerlons && corners.map(([ci, cj], idx) => {
-        const mc = [[ci - mh, cj - mh], [ci + mh, cj - mh], [ci + mh, cj + mh], [ci - mh, cj + mh]];
-        return <Block key={idx} corners={mc} baseElev={TOWER_H} topElev={TOWER_H + MERLON_H} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />;
-      })}
-      {!ghost && stage === 'done' && <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />}
-      {!ghost && stage === 'done' && <RubbleDecor i={i} j={j} frac={damageFrac} />}
-      {showRuins && <RubbleDecor i={i} j={j} frac={1} />}
-      {!ghost && <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
-    </g>
-  );
-}
-
-function KeepNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
-  const half = 0.48;
-  const corners = [[i - half, j - half], [i + half, j - half], [i + half, j + half], [i - half, j + half]];
-  const v = stageVisual(stage, progress, KEEP_H, PALETTE.keep, ghost, ghostBlocked, ruined);
-  const mh = 0.11;
-  const flagBase = gridToScreen(i, j, KEEP_H + MERLON_H);
-  const flagTop = gridToScreen(i, j, KEEP_H + MERLON_H + 20);
-  const useScaffold = !ghost && stage === 'scaffold';
-  const showRuins = !ghost && stage === 'foundation' && ruined;
-  return (
-    <g opacity={v.opacity}>
-      <Block corners={corners} baseElev={0} topElev={v.height} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />
-      {useScaffold && <ScaffoldRig corners={corners} height={v.height} />}
-      {showRuins && <RubbleDecor i={i} j={j} frac={1} />}
-      {!ghost && stage === 'done' && corners.map(([ci, cj], idx) => {
-        const mc = [[ci - mh, cj - mh], [ci + mh, cj - mh], [ci + mh, cj + mh], [ci - mh, cj + mh]];
-        return <Block key={idx} corners={mc} baseElev={KEEP_H} topElev={KEEP_H + MERLON_H} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />;
-      })}
-      {!ghost && stage === 'done' && (
-        <g pointerEvents="none">
-          <line x1={flagBase.x} y1={flagBase.y} x2={flagTop.x} y2={flagTop.y} stroke="#2b2118" strokeWidth="1.5" />
-          <path d={`M ${flagTop.x} ${flagTop.y} l 16 5 l -16 5 z`} fill="#a8632e" stroke="#2b2118" strokeWidth="1" />
-        </g>
+      {!warn && (
+        <>
+          <rect x={p.x - w / 2 + 5} y={p.y + 3} width={w - 10} height="2.6" rx="1.3" fill="rgba(255,255,255,0.12)" />
+          <rect x={p.x - w / 2 + 5} y={p.y + 3} width={Math.max(0, (w - 10) * Math.min(1, progress))} height="2.6" rx="1.3" fill="#C9A24B" />
+        </>
       )}
-      {!ghost && <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
     </g>
   );
 }
+
+
+// ---------------------------------------------------------------------------- towers --
+
+// Points along the rim of a square parapet: corners plus `perSide` evenly spaced in between.
+function rimPoints(i, j, r, perSide, skipCorners = false) {
+  const pts = [];
+  const steps = perSide + 1;
+  for (let s = 0; s <= steps; s++) {
+    const t = -1 + (2 * s) / steps;
+    const isCorner = s === 0 || s === steps;
+    if (isCorner && skipCorners) continue;
+    pts.push([i + t * r, j - r]);
+    pts.push([i + t * r, j + r]);
+    if (!isCorner) { pts.push([i - r, j + t * r]); pts.push([i + r, j + t * r]); }
+  }
+  return pts;
+}
+
+const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, damageFrac = 0, ruined = false }) {
+  const half = 0.32;
+  const corners = sq(i, j, half);
+  const v = stageVisual(stage, progress, TOWER_H, PALETTE.tower, ghost, ghostBlocked, ruined);
+  const seed = i * 17.3 + j * 5.1;
+  if (ghost) return <GhostBlock corners={corners} height={TOWER_H} pal={v.pal} blocked={ghostBlocked} />;
+  if (stage === 'foundation') {
+    return (
+      <g>
+        <FoundationSite corners={corners} progress={progress} ruined={ruined} seed={seed} height={v.height} />
+        <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  if (stage !== 'done') {
+    return (
+      <g>
+        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} crane />
+        <ProgressLabel i={i} j={j} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  const pal = PALETTE.tower;
+  const topH = TOWER_H * (1 - Math.min(0.3, damageFrac * 0.3));
+  const showMerlons = damageFrac < 0.45;
+  const parBase = Math.max(8, topH - 7);
+  const ph = half * 1.12;
+  const bodyQuads = computeFaceQuads(corners, 5, parBase);
+  return (
+    <g>
+      <Block corners={sq(i, j, half * 1.1)} baseElev={0} topElev={5} topFill={shade(pal.top, -0.1)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 1} shadowHeight={topH + MERLON_H} />
+      <Block corners={corners} baseElev={5} topElev={parBase} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
+      <ArrowSlit face={bodyQuads.faceA} u={0.5} v0={0.12} dv={0.22} />
+      <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.12} dv={0.22} />
+      <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.56} dv={0.2} />
+      <Block corners={sq(i, j, ph)} baseElev={parBase - 1.5} topElev={parBase} topFill={shade(pal.top, -0.3)} faceLeft={shade(pal.left, -0.35)} faceRight={shade(pal.right, -0.35)} shadowHeight={0} shade={false} />
+      <Block corners={sq(i, j, ph)} baseElev={parBase} topElev={topH} topFill={shade(pal.top, -0.22)} faceLeft={shade(pal.left, 0.04)} faceRight={shade(pal.right, 0.04)} texture="stone" seed={seed + 2} shadowHeight={0} />
+      {showMerlons && <Merlons centers={rimPoints(i, j, ph - 0.065, 1)} along={0.065} across={0.065} base={topH} height={MERLON_H * 0.85} pal={shadePal(pal, 0.04)} seed={seed} />}
+      <CrackOverlay corners={corners} baseElev={5} topElev={parBase} frac={damageFrac} />
+      <RubbleDecor i={i} j={j} frac={damageFrac} />
+    </g>
+  );
+});
+
+const KeepNode = React.memo(function KeepNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
+  const half = 0.48;
+  const corners = sq(i, j, half);
+  const v = stageVisual(stage, progress, KEEP_H, PALETTE.keep, ghost, ghostBlocked, ruined);
+  const seed = i * 7.7 + j * 13.1;
+  if (ghost) return <GhostBlock corners={corners} height={KEEP_H} pal={v.pal} blocked={ghostBlocked} />;
+  if (stage === 'foundation') {
+    return (
+      <g>
+        <FoundationSite corners={corners} progress={progress} ruined={ruined} seed={seed} height={v.height} />
+        <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  if (stage !== 'done') {
+    return (
+      <g>
+        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} crane />
+        <ProgressLabel i={i} j={j} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  const pal = PALETTE.keep;
+  const parBase = KEEP_H - 9;
+  const ph = half * 1.08;
+  const course = Math.round(KEEP_H * 0.48);
+  const lower = computeFaceQuads(corners, 7, course);
+  const upper = computeFaceQuads(corners, course + 2, parBase);
+  const turretOff = ph * 0.93;
+  const turretCenters = [[i - turretOff, j - turretOff], [i + turretOff, j - turretOff], [i + turretOff, j + turretOff], [i - turretOff, j + turretOff]];
+  // Merlons and corner turrets share one back-to-front ordering on the roof.
+  const roofItems = [];
+  rimPoints(i, j, ph - 0.07, 3, true).forEach(([ci, cj]) => roofItems.push({ kind: 'm', ci, cj }));
+  turretCenters.forEach(([ci, cj]) => roofItems.push({ kind: 't', ci, cj }));
+  roofItems.sort((a, b) => (a.ci + a.cj) - (b.ci + b.cj));
+  const mPal = shadePal(pal, 0.05);
+  const flagBase = gridToScreen(i, j, KEEP_H);
+  const flagTop = gridToScreen(i, j, KEEP_H + 36);
+  const fx = flagTop.x, fy = flagTop.y;
+  const banner1 = `M ${fx} ${fy} C ${fx + 8} ${fy - 2} ${fx + 14} ${fy + 3} ${fx + 22} ${fy + 1} L ${fx + 17} ${fy + 6} L ${fx + 22} ${fy + 11} C ${fx + 14} ${fy + 13} ${fx + 8} ${fy + 8} ${fx} ${fy + 10} Z`;
+  const banner2 = `M ${fx} ${fy} C ${fx + 8} ${fy + 3} ${fx + 14} ${fy - 2} ${fx + 21} ${fy + 2} L ${fx + 16} ${fy + 7} L ${fx + 21} ${fy + 12} C ${fx + 14} ${fy + 8} ${fx + 8} ${fy + 13} ${fx} ${fy + 10} Z`;
+  return (
+    <g>
+      <Block corners={sq(i, j, half * 1.06)} baseElev={0} topElev={7} topFill={shade(pal.top, -0.1)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 1} shadowHeight={KEEP_H + 20} />
+      <Block corners={corners} baseElev={7} topElev={parBase} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
+      <Block corners={sq(i, j, half * 1.025)} baseElev={course} topElev={course + 2} topFill={shade(pal.top, 0.04)} faceLeft={shade(pal.left, 0.1)} faceRight={shade(pal.right, 0.08)} shadowHeight={0} shade={false} />
+      <ArchOpening face={lower.faceB} u={0.5} v0={0.42} dv={0.58} du={0.2} fill="#4a3220" />
+      <ArchOpening face={lower.faceA} u={0.3} v0={0.3} dv={0.3} du={0.1} fill="#241c14" />
+      <ArchOpening face={lower.faceA} u={0.7} v0={0.3} dv={0.3} du={0.1} fill="#241c14" />
+      <ArchOpening face={upper.faceA} u={0.5} v0={0.25} dv={0.42} du={0.13} fill="#2a2016" glow />
+      <ArchOpening face={upper.faceB} u={0.3} v0={0.25} dv={0.42} du={0.11} fill="#2a2016" glow />
+      <ArchOpening face={upper.faceB} u={0.72} v0={0.25} dv={0.42} du={0.11} fill="#2a2016" />
+      <Block corners={sq(i, j, ph)} baseElev={parBase - 1.5} topElev={parBase} topFill={shade(pal.top, -0.3)} faceLeft={shade(pal.left, -0.35)} faceRight={shade(pal.right, -0.35)} shadowHeight={0} shade={false} />
+      <Block corners={sq(i, j, ph)} baseElev={parBase} topElev={KEEP_H} topFill={shade(pal.top, -0.22)} faceLeft={shade(pal.left, 0.04)} faceRight={shade(pal.right, 0.04)} texture="stone" seed={seed + 2} shadowHeight={0} />
+      <line x1={flagBase.x} y1={flagBase.y} x2={flagTop.x} y2={flagTop.y - 2} stroke="#2b2118" strokeWidth="1.6" />
+      <circle cx={flagTop.x} cy={flagTop.y - 2.5} r="1.6" fill="#C9A24B" />
+      <path d={banner1} fill="#8f2a20" stroke="#3a120c" strokeWidth="0.8">
+        <animate attributeName="d" values={`${banner1};${banner2};${banner1}`} dur="1.8s" repeatCount="indefinite" />
+      </path>
+      <circle cx={fx + 8} cy={fy + 5} r="2.2" fill="#C9A24B" />
+      {roofItems.map((it, k) => (it.kind === 'm'
+        ? <Block key={k} corners={sq(it.ci, it.cj, 0.065)} baseElev={KEEP_H} topElev={KEEP_H + MERLON_H * 0.85} topFill={mPal.top} faceLeft={mPal.left} faceRight={mPal.right} shadowHeight={0} />
+        : (
+          <g key={k}>
+            <Block corners={sq(it.ci, it.cj, 0.12)} baseElev={KEEP_H - 16} topElev={KEEP_H + 8} topFill={mPal.top} faceLeft={mPal.left} faceRight={mPal.right} texture="stone" seed={seed + k} shadowHeight={0} />
+            <PyramidRoof corners={sq(it.ci, it.cj, 0.145)} baseElev={KEEP_H + 8} apexElev={KEEP_H + 26} color="#55606c" />
+          </g>
+        )))}
+    </g>
+  );
+});
 
 function CrackOverlay({ corners, baseElev, topElev, frac }) {
   if (!frac || frac < 0.15) return null;
@@ -1036,7 +1927,50 @@ function DitchSurfaceDecor({ corners, elev, filled, seed }) {
   return <g pointerEvents="none">{clumps}</g>;
 }
 
-function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOutSign = -1, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false }) {
+
+// A ditch is drawn as a real hole in the ground: the opening is used as a clip mask, and
+// inside it we see the far earthen banks dropping away to the trench floor — or to the moat's
+// water surface once it has been flooded.
+function DitchPit({ corners, depth, filled, ghost, ghostBlocked, seed, clipId }) {
+  const open = corners.map(([a, b]) => gridToScreen(a, b, 0.4));
+  if (ghost) {
+    const col = ghostBlocked ? 'rgba(220,80,60,0.95)' : 'rgba(240,210,130,0.95)';
+    return <polygon points={ptsStr(open)} fill={ghostBlocked ? 'rgba(184,58,42,0.4)' : 'rgba(201,162,75,0.4)'} stroke={col} strokeWidth="1.2" strokeDasharray="4,3" pointerEvents="none" />;
+  }
+  const n = corners.length;
+  const f = frontIndex(corners);
+  const edgeLen = (a, b) => Math.hypot(corners[b][0] - corners[a][0], corners[b][1] - corners[a][1]);
+  // Only the long sides get a bank and a rim — the short ends butt seamlessly into the next
+  // ditch segment so a run of them reads as one continuous moat.
+  const longEdges = [[0, 1], [1, 2], [2, 3], [3, 0]].filter(([a, b]) => edgeLen(a, b) > 0.5);
+  const backEdges = [[(f + 1) % n, (f + 2) % n], [(f + 2) % n, (f + 3) % n]].filter(([a, b]) => edgeLen(a, b) > 0.5);
+  const waterElev = -Math.min(depth, 5);
+  const floorElev = filled ? waterElev : -depth;
+  const bankFace = (a, b, k) => {
+    const A = corners[a], Bc = corners[b];
+    const pts = [gridToScreen(A[0], A[1], 0.4), gridToScreen(Bc[0], Bc[1], 0.4), gridToScreen(Bc[0], Bc[1], floorElev), gridToScreen(A[0], A[1], floorElev)];
+    const facesI = Math.abs(Bc[1] - A[1]) > Math.abs(Bc[0] - A[0]);
+    return <polygon key={k} points={ptsStr(pts)} fill={facesI ? '#5a4129' : '#3f2d1c'} stroke="rgba(20,12,6,0.4)" strokeWidth="0.6" />;
+  };
+  const floor = corners.map(([a, b]) => gridToScreen(a, b, floorElev));
+  return (
+    <g pointerEvents="none">
+      <defs>
+        <clipPath id={clipId}><polygon points={ptsStr(open)} /></clipPath>
+      </defs>
+      <g clipPath={`url(#${clipId})`}>
+        <polygon points={ptsStr(open)} fill="#2e2115" />
+        <polygon points={ptsStr(floor)} fill={filled ? '#3c6c80' : '#3a2a1a'} />
+        {backEdges.map(([a, b], k) => bankFace(a, b, k))}
+        {filled && <DitchSurfaceDecor corners={corners} elev={floorElev} filled seed={seed} />}
+      </g>
+      {longEdges.map(([a, b], k) => <line key={k} x1={open[a].x} y1={open[a].y} x2={open[b].x} y2={open[b].y} stroke="#6e5434" strokeWidth="1.8" strokeLinecap="round" />)}
+      <DitchSurfaceDecor corners={corners} elev={0.4} filled={false} seed={seed} />
+    </g>
+  );
+}
+
+const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOutSign = -1, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false }) {
   const horizontal = j1 === j2;
   const diagonal = i1 !== i2 && j1 !== j2;
   const t = 0.12;
@@ -1049,16 +1983,15 @@ function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', p
   const towerOverlap = 0.16;
   const a1 = towerAt1 ? -towerOverlap : (junction1 ? shrink : 0);
   const a2 = towerAt2 ? -towerOverlap : (junction2 ? shrink : 0);
+  const dx = i2 - i1, dy = j2 - j1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
   // General case (also covers plain horizontal/vertical spans correctly): offset each end
   // along the segment's own direction by a1/a2, then thicken perpendicular to that direction
   // by t either side — this is what makes a diagonal wall piece (running corner-to-corner
-  // across a tile) come out as a properly mitred slab instead of the axis-only math it used
-  // to have, which only ever handled i1===i2 or j1===j2.
+  // across a tile) come out as a properly mitred slab.
   let corners;
   if (diagonal) {
-    const dx = i2 - i1, dy = j2 - j1;
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len, uy = dy / len;
     const px = -uy * t, py = ux * t;
     const sI = i1 + ux * a1, sJ = j1 + uy * a1;
     const eI = i2 - ux * a2, eJ = j2 - uy * a2;
@@ -1069,14 +2002,15 @@ function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', p
       : [[i1 - t, j1 + a1], [i1 + t, j1 + a1], [i1 + t, j2 - a2], [i1 - t, j2 - a2]];
   }
   const midI = (i1 + i2) / 2, midJ = (j1 + j2) / 2;
+  const seed = i1 * 13.1 + j1 * 7.3 + i2 * 3.7 + j2 * 1.9;
 
   if (kind === 'graben') {
-    const dPal = ghost ? (ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost) : (filled ? PALETTE.ditchWater : PALETTE.ditch);
-    const v = stageVisual(stage, progress, DITCH_DEPTH, dPal, ghost, ghostBlocked, ruined);
+    const v = stageVisual(stage, progress, DITCH_DEPTH, PALETTE.ditch, ghost, ghostBlocked, ruined);
+    const depth = stage === 'done' || ghost ? DITCH_DEPTH : Math.max(2, DITCH_DEPTH * (stage === 'foundation' ? 0.15 + 0.2 * progress : stage === 'scaffold' ? 0.35 + 0.3 * progress : 0.65 + 0.35 * progress));
+    const clipId = `cbditch-${i1}-${j1}-${i2}-${j2}${ghost ? '-g' : ''}`;
     return (
       <g opacity={v.opacity}>
-        <Block corners={corners} baseElev={-v.height} topElev={0.4} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />
-        {!ghost && stage === 'done' && <DitchSurfaceDecor corners={corners} elev={0.4} filled={filled} seed={midI * 31 + midJ * 17} />}
+        <DitchPit corners={orientedRect(midI, midJ, ux, uy, len / 2 + 0.03, 0.19)} depth={depth} filled={filled && stage === 'done'} ghost={ghost} ghostBlocked={ghostBlocked} seed={midI * 31 + midJ * 17} clipId={clipId} />
         {!ghost && stage === 'foundation' && ruined && <RubbleDecor i={midI} j={midJ} frac={1} />}
         {!ghost && <ProgressLabel i={midI} j={midJ} height={2} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
       </g>
@@ -1084,67 +2018,114 @@ function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', p
   }
 
   if (kind === 'gate' && !ghost && stage === 'done') {
-    const pal = PALETTE.pillar;
-    const woodPal = { top: '#8a6a3f', left: '#6b4d2e', right: '#4c3320' };
-    const ph = 0.13;
-    const mh = 0.08;
-    const pillarCorners = (ci, cj) => [[ci - ph, cj - ph], [ci + ph, cj - ph], [ci + ph, cj + ph], [ci - ph, cj + ph]];
-    const pillarMerlon = (ci, cj) => [[ci - mh, cj - mh], [ci + mh, cj - mh], [ci + mh, cj + mh], [ci - mh, cj + mh]];
+    const pal = PALETTE.tower;
+    // The gatehouse stands a little prouder than the curtain wall either side of it.
+    const GH = GATEHOUSE_H;
+    const woodPal = { top: '#8a6a3f', left: '#7a5a34', right: '#553a22' };
+    const ph = 0.15;
     const effectiveClosed = !doorOpen || siegeActive;
 
-    const leafHeight = PILLAR_H * 0.78;
+    const leafHeight = GH * 0.6;
     const doorFrac = effectiveClosed ? 1 : 0.16;
     const leftToI = i1 + (midI - i1) * doorFrac, leftToJ = j1 + (midJ - j1) * doorFrac;
     const rightToI = i2 + (midI - i2) * doorFrac, rightToJ = j2 + (midJ - j2) * doorFrac;
-    // General direction/perpendicular form (same idea as the diagonal-aware `corners` above,
-    // rather than the horizontal-or-vertical-only math this used to have) so a diagonal gate's
-    // door leaves and bridge still come out properly aligned, not just axis-aligned ones.
-    const gdx = i2 - i1, gdy = j2 - j1;
-    const glen = Math.hypot(gdx, gdy) || 1;
-    const gux = gdx / glen, guy = gdy / glen;
-    const gpx = -guy, gpy = gux;
+    const gpx = -uy, gpy = ux;
     const leafCorners = (fi, fj, ti, tj) => [
-      [fi + gpx * t * 0.8, fj + gpy * t * 0.8],
-      [ti + gpx * t * 0.8, tj + gpy * t * 0.8],
-      [ti - gpx * t * 0.8, tj - gpy * t * 0.8],
-      [fi - gpx * t * 0.8, fj - gpy * t * 0.8],
+      [fi + gpx * t * 0.6, fj + gpy * t * 0.6],
+      [ti + gpx * t * 0.6, tj + gpy * t * 0.6],
+      [ti - gpx * t * 0.6, tj - gpy * t * 0.6],
+      [fi - gpx * t * 0.6, fj - gpy * t * 0.6],
     ];
 
-    const archLeft = gridToScreen(i1, j1, PILLAR_H);
-    const archRight = gridToScreen(i2, j2, PILLAR_H);
-    const archPeak = gridToScreen(midI, midJ, PILLAR_H + 9);
-
-    const barCount = 5;
-    const bars = [];
+    // Portcullis grid hanging in the gateway.
+    const barCount = 6;
+    let portcullis = '';
     for (let k = 0; k < barCount; k++) {
-      const bt = k / (barCount - 1);
+      const bt = 0.1 + (k / (barCount - 1)) * 0.8;
       const ci = i1 + (i2 - i1) * bt, cj = j1 + (j2 - j1) * bt;
-      bars.push({ top: gridToScreen(ci, cj, PILLAR_H * 0.85), bottom: gridToScreen(ci, cj, 0) });
+      const a = gridToScreen(ci, cj, GH * 0.78), b = gridToScreen(ci, cj, 0);
+      portcullis += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${(b.y + 1).toFixed(1)}`;
     }
+    [0.2, 0.42, 0.64].forEach((h) => {
+      const a = gridToScreen(i1 + (i2 - i1) * 0.1, j1 + (j2 - j1) * 0.1, GH * h), b = gridToScreen(i1 + (i2 - i1) * 0.9, j1 + (j2 - j1) * 0.9, GH * h);
+      portcullis += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+    });
 
     const bridgeLen = bridgeSpansGraben ? 1.82 : 0.7;
     const bridgeCorners = [
-      [i1 + gpx * t * bridgeOutSign, j1 + gpy * t * bridgeOutSign],
-      [i2 + gpx * t * bridgeOutSign, j2 + gpy * t * bridgeOutSign],
-      [i2 + gpx * (t + bridgeLen) * bridgeOutSign, j2 + gpy * (t + bridgeLen) * bridgeOutSign],
-      [i1 + gpx * (t + bridgeLen) * bridgeOutSign, j1 + gpy * (t + bridgeLen) * bridgeOutSign],
+      [i1 + ux * ph + gpx * t * bridgeOutSign, j1 + uy * ph + gpy * t * bridgeOutSign],
+      [i2 - ux * ph + gpx * t * bridgeOutSign, j2 - uy * ph + gpy * t * bridgeOutSign],
+      [i2 - ux * ph + gpx * (t + bridgeLen) * bridgeOutSign, j2 - uy * ph + gpy * (t + bridgeLen) * bridgeOutSign],
+      [i1 + ux * ph + gpx * (t + bridgeLen) * bridgeOutSign, j1 + uy * ph + gpy * (t + bridgeLen) * bridgeOutSign],
     ];
+    const chainA0 = gridToScreen(i1 + ux * ph + gpx * t * bridgeOutSign, j1 + uy * ph + gpy * t * bridgeOutSign, GH * 0.8);
+    const chainB0 = gridToScreen(i2 - ux * ph + gpx * t * bridgeOutSign, j2 - uy * ph + gpy * t * bridgeOutSign, GH * 0.8);
+    const chainA1 = gridToScreen(bridgeCorners[3][0], bridgeCorners[3][1], 2);
+    const chainB1 = gridToScreen(bridgeCorners[2][0], bridgeCorners[2][1], 2);
+
+    // Gatehouse: two stone pillars joined by an arched lintel with its own battlements.
+    const s0i = i1 + ux * ph, s0j = j1 + uy * ph, e0i = i2 - ux * ph, e0j = j2 - uy * ph;
+    let fs = (gpx + gpy) >= 0 ? 1 : -1;
+    if (Math.abs(gpx + gpy) < 1e-6) fs = 1;
+    const lintelTop = [[s0i + gpx * t, s0j + gpy * t], [e0i + gpx * t, e0j + gpy * t], [e0i - gpx * t, e0j - gpy * t], [s0i - gpx * t, s0j - gpy * t]].map(([a, b]) => gridToScreen(a, b, GH));
+    const fsI = s0i + gpx * t * fs, fsJ = s0j + gpy * t * fs, feI = e0i + gpx * t * fs, feJ = e0j + gpy * t * fs;
+    const spring = GH * 0.42, crown = GH - 6;
+    const arc = [];
+    for (let s = 0; s <= 10; s++) {
+      const u = s / 10;
+      const e = spring + (crown - spring) * Math.sqrt(Math.max(0, 1 - (2 * u - 1) * (2 * u - 1)));
+      arc.push(gridToScreen(fsI + (feI - fsI) * u, fsJ + (feJ - fsJ) * u, e));
+    }
+    const frontTopA = gridToScreen(fsI, fsJ, GH), frontTopB = gridToScreen(feI, feJ, GH);
+    const lintelFace = [frontTopA, frontTopB, ...arc.slice().reverse()];
+    const faceLit = (gpx * fs) > (gpy * fs);
+    const lintelFill = faceLit ? pal.left : pal.right;
+    const archPath = arc.map((p, k) => `${k ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
+    const pillar1 = <Block key="p1" corners={orientedRect(i1, j1, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={GH + MERLON_H} />;
+    const pillar2 = <Block key="p2" corners={orientedRect(i2, j2, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed + 9} shadowHeight={GH + MERLON_H} />;
+    const p1First = (i1 + j1) <= (i2 + j2);
+    const crenels = [];
+    [[i1, j1], [i2, j2]].forEach(([ci, cj]) => {
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b]) => crenels.push([ci + (ux * a - uy * b) * (ph - 0.05), cj + (uy * a + ux * b) * (ph - 0.05)]));
+    });
+    [0.3, 0.5, 0.7].forEach((tt) => {
+      const ci = i1 + (i2 - i1) * tt, cj = j1 + (j2 - j1) * tt;
+      crenels.push([ci + gpx * (t - 0.04), cj + gpy * (t - 0.04)]);
+      crenels.push([ci - gpx * (t - 0.04), cj - gpy * (t - 0.04)]);
+    });
 
     return (
       <g>
-        {!effectiveClosed && <Block corners={bridgeCorners} baseElev={0} topElev={2} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} />}
-        <Block corners={pillarCorners(i1, j1)} baseElev={0} topElev={PILLAR_H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} />
-        <Block corners={pillarCorners(i2, j2)} baseElev={0} topElev={PILLAR_H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} />
-        <polygon points={`${archLeft.x.toFixed(1)},${archLeft.y.toFixed(1)} ${archPeak.x.toFixed(1)},${archPeak.y.toFixed(1)} ${archRight.x.toFixed(1)},${archRight.y.toFixed(1)}`} fill={pal.top} stroke="rgba(30,22,14,0.4)" strokeWidth="1.5" />
-        <Block corners={pillarMerlon(i1, j1)} baseElev={PILLAR_H} topElev={PILLAR_H + MERLON_H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} />
-        <Block corners={pillarMerlon(i2, j2)} baseElev={PILLAR_H} topElev={PILLAR_H + MERLON_H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} />
-        <Block corners={leafCorners(i1, j1, leftToI, leftToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} />
-        <Block corners={leafCorners(i2, j2, rightToI, rightToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} />
-        <g style={{ transform: effectiveClosed ? 'translateY(0px)' : `translateY(-${(PILLAR_H * 0.65).toFixed(0)}px)`, transition: 'transform 1s ease-in-out' }} pointerEvents="none">
-          {bars.map((b, idx) => <line key={idx} x1={b.top.x} y1={b.top.y} x2={b.bottom.x} y2={b.bottom.y} stroke="#332619" strokeWidth="2" strokeLinecap="round" />)}
+        {!effectiveClosed && <Block corners={bridgeCorners} baseElev={0} topElev={2} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed} shadowHeight={0} />}
+        {!effectiveClosed && (() => {
+          const bq = bridgeCorners.map(([a, b]) => gridToScreen(a, b, 2));
+          let d = '';
+          for (let k = 1; k < 7; k++) {
+            const a = lerpPt(bq[0], bq[3], k / 7), b = lerpPt(bq[1], bq[2], k / 7);
+            d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+          }
+          return <path d={d} stroke="rgba(40,24,10,0.45)" strokeWidth="0.7" pointerEvents="none" />;
+        })()}
+        {p1First ? pillar1 : pillar2}
+        <Block corners={leafCorners(i1 + ux * ph, j1 + uy * ph, leftToI, leftToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 3} shadowHeight={0} />
+        <Block corners={leafCorners(i2 - ux * ph, j2 - uy * ph, rightToI, rightToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 4} shadowHeight={0} />
+        <g style={{ transform: effectiveClosed ? 'translateY(0px)' : `translateY(-${(GH * 0.55).toFixed(0)}px)`, transition: 'transform 1s ease-in-out' }} pointerEvents="none">
+          <path d={portcullis} stroke="#2b241c" strokeWidth="1.8" strokeLinecap="round" fill="none" />
         </g>
-        <CrackOverlay corners={pillarCorners(i1, j1)} baseElev={0} topElev={PILLAR_H} frac={damageFrac} />
-        <CrackOverlay corners={pillarCorners(i2, j2)} baseElev={0} topElev={PILLAR_H} frac={damageFrac} />
+        <polygon points={ptsStr(lintelTop)} fill={shade(pal.top, -0.18)} stroke="rgba(30,22,14,0.4)" strokeWidth="1" pointerEvents="none" />
+        <polygon points={ptsStr(lintelFace)} fill={lintelFill} stroke="rgba(30,22,14,0.45)" strokeWidth="1" pointerEvents="none" />
+        <path d={archPath} fill="none" stroke={shade(pal.top, 0.2)} strokeWidth="2.6" strokeDasharray="3,1.2" pointerEvents="none" />
+        <path d={archPath} fill="none" stroke="rgba(30,22,14,0.55)" strokeWidth="0.7" pointerEvents="none" />
+        {p1First ? pillar2 : pillar1}
+        <Merlons centers={crenels} ux={ux} uy={uy} along={0.045} across={0.045} base={GH} height={MERLON_H * 0.8} pal={shadePal(pal, 0.04)} seed={seed} />
+        {!effectiveClosed && (
+          <g pointerEvents="none">
+            <line x1={chainA0.x} y1={chainA0.y} x2={chainA1.x} y2={chainA1.y} stroke="#3a342c" strokeWidth="1" strokeDasharray="1.6,0.8" />
+            <line x1={chainB0.x} y1={chainB0.y} x2={chainB1.x} y2={chainB1.y} stroke="#3a342c" strokeWidth="1" strokeDasharray="1.6,0.8" />
+          </g>
+        )}
+        <CrackOverlay corners={orientedRect(i1, j1, ux, uy, ph, ph)} baseElev={0} topElev={GH} frac={damageFrac} />
+        <CrackOverlay corners={orientedRect(i2, j2, ux, uy, ph, ph)} baseElev={0} topElev={GH} frac={damageFrac} />
         <RubbleDecor i={i1} j={j1} frac={damageFrac} />
         <RubbleDecor i={i2} j={j2} frac={damageFrac} />
       </g>
@@ -1153,32 +2134,55 @@ function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', p
 
   const finalH = kind === 'gate' ? GATE_H : WALL_H;
   const v = stageVisual(stage, progress, finalH, PALETTE.wall, ghost, ghostBlocked, ruined);
-  const useScaffold = !ghost && stage === 'scaffold';
+  if (ghost) return <GhostBlock corners={corners} height={finalH} pal={v.pal} blocked={ghostBlocked} />;
+  if (stage === 'foundation') {
+    return (
+      <g>
+        <FoundationSite corners={corners} progress={progress} ruined={ruined} seed={seed} height={v.height} />
+        <ProgressLabel i={midI} j={midJ} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  if (stage !== 'done') {
+    return (
+      <g>
+        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} />
+        <ProgressLabel i={midI} j={midJ} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
   // Battlements are the first thing lost to bombardment — once a segment is significantly
   // damaged its crenellations disappear and the wall body visibly crumbles down.
-  const crumbledHeight = (!ghost && stage === 'done') ? v.height * (1 - Math.min(0.35, damageFrac * 0.35)) : v.height;
-  const showCrenellation = !ghost && stage === 'done' && kind === 'wall' && damageFrac < 0.4 && !diagonal;
-  const showRuins = !ghost && stage === 'foundation' && ruined;
-  const merlonPositions = [0.24, 0.5, 0.76];
+  const crumbledHeight = v.height * (1 - Math.min(0.35, damageFrac * 0.35));
+  const showCrenellation = kind === 'wall' && damageFrac < 0.4;
+  // Crenellations line both edges of the wall-walk, now for diagonal runs too.
+  const crenels = [];
+  if (showCrenellation) {
+    const sI = i1 + ux * a1, sJ = j1 + uy * a1;
+    const eI = i2 - ux * a2, eJ = j2 - uy * a2;
+    const runLen = Math.hypot(eI - sI, eJ - sJ);
+    const count = Math.max(2, Math.round(runLen / 0.22));
+    const px = -uy, py = ux;
+    for (let k = 0; k < count; k++) {
+      const tt = (k + 0.5) / count;
+      const along = tt * runLen;
+      if (towerAt1 && along < towerOverlap + 0.38) continue;
+      if (towerAt2 && runLen - along < towerOverlap + 0.38) continue;
+      const ci = sI + (eI - sI) * tt, cj = sJ + (eJ - sJ) * tt;
+      crenels.push([ci + px * (t - 0.035), cj + py * (t - 0.035)]);
+      crenels.push([ci - px * (t - 0.035), cj - py * (t - 0.035)]);
+    }
+  }
+  const pal = PALETTE.wall;
   return (
-    <g opacity={v.opacity}>
-      <Block corners={corners} baseElev={0} topElev={crumbledHeight} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />
-      {useScaffold && <ScaffoldRig corners={corners} height={v.height} />}
-      {showCrenellation && merlonPositions.filter((mt) => !(mt < 0.35 && junction1) && !(mt > 0.65 && junction2)).map((t, idx) => {
-        const ci = i1 + (i2 - i1) * t;
-        const cj = j1 + (j2 - j1) * t;
-        const mc = horizontal
-          ? [[ci - 0.07, j1 - 0.12], [ci + 0.07, j1 - 0.12], [ci + 0.07, j1 + 0.12], [ci - 0.07, j1 + 0.12]]
-          : [[i1 - 0.12, cj - 0.07], [i1 + 0.12, cj - 0.07], [i1 + 0.12, cj + 0.07], [i1 - 0.12, cj + 0.07]];
-        return <Block key={idx} corners={mc} baseElev={finalH} topElev={finalH + MERLON_H} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />;
-      })}
-      {!ghost && stage === 'done' && <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />}
-      {!ghost && stage === 'done' && <RubbleDecor i={midI} j={midJ} frac={damageFrac} />}
-      {showRuins && <RubbleDecor i={midI} j={midJ} frac={1} />}
-      {!ghost && <ProgressLabel i={midI} j={midJ} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
+    <g>
+      <Block corners={corners} baseElev={0} topElev={crumbledHeight} topFill={shade(pal.top, -0.15)} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={crumbledHeight + (showCrenellation ? MERLON_H * 0.6 : 0)} />
+      {showCrenellation && <Merlons centers={crenels} ux={ux} uy={uy} along={0.05} across={0.035} base={crumbledHeight} height={MERLON_H * 0.8} pal={pal} seed={seed} />}
+      <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />
+      <RubbleDecor i={midI} j={midJ} frac={damageFrac} />
     </g>
   );
-}
+});
 
 function computeFaceQuads(corners, baseElev, topElev) {
   const basePts = corners.map(([ci, cj]) => gridToScreen(ci, cj, baseElev));
@@ -1225,8 +2229,8 @@ function ForgeDecor({ i, j, topHeight }) {
   );
 }
 
-function ChimneyDecor({ i, j, smokeColor }) {
-  const base = gridToScreen(i + 0.16, j - 0.08, AMENITY_H + 4);
+function ChimneyDecor({ i, j, smokeColor, elev = AMENITY_H + 4 }) {
+  const base = gridToScreen(i + 0.16, j - 0.08, elev);
   // Three puffs drifting up and fading out on a loop, gently staggered so they don't all
   // pulse in lockstep — reads as actual rising smoke rather than a fixed decal.
   return (
@@ -1314,18 +2318,6 @@ function WellDecor({ i, j, wellTop }) {
   );
 }
 
-function KemenateWindowDecor({ i, j }) {
-  const p = gridToScreen(i, j, AMENITY_H * 0.5);
-  return (
-    <g pointerEvents="none">
-      <rect x={p.x - 5} y={p.y - 6} width="10" height="8" fill="#3a3226" stroke="#1c160f" strokeWidth="0.8" />
-      <line x1={p.x} y1={p.y - 6} x2={p.x} y2={p.y + 2} stroke="#1c160f" strokeWidth="0.8" />
-      <line x1={p.x - 5} y1={p.y - 2} x2={p.x + 5} y2={p.y - 2} stroke="#1c160f" strokeWidth="0.6" />
-      <rect x={p.x - 6} y={p.y + 2} width="12" height="2.6" fill="#3f5a30" />
-    </g>
-  );
-}
-
 function HorseYardDecor({ i, j }) {
   const b = gridToScreen(i, j + 0.62, 0);
   const posts = [-20, -7, 7, 20];
@@ -1349,49 +2341,83 @@ function HorseYardDecor({ i, j }) {
   );
 }
 
-function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
+
+// Per-building look: wall material, roof covering and ridge direction.
+const AMENITY_STYLE = {
+  kemenate: { texture: 'stone', roof: '#55606c', roofH: 15, axis: 'i', crane: true },
+  stallungen: { texture: 'wood', roof: '#b39550', roofH: 12, axis: 'j' },
+  schmied: { texture: 'stone', roof: null },
+  baeckerei: { texture: null, roof: '#9c4a32', roofH: 12, axis: 'i' },
+  lagerhaus: { texture: 'wood', roof: '#6e5136', roofH: 12, axis: 'j' },
+  brunnen: { texture: 'stone', roof: null },
+  kapelle: { texture: 'stone', roof: '#56606b', roofH: 16, axis: 'j' },
+  brauhaus: { texture: 'wood', roof: '#8f3f2a', roofH: 12, axis: 'i' },
+};
+
+const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
   const half = kind === 'brunnen' ? 0.22 : kind === 'kemenate' ? 0.48 : 0.36;
   const finalHeight = kind === 'brunnen' ? 10 : kind === 'schmied' ? AMENITY_H * 0.55 : kind === 'kemenate' ? AMENITY_H * 1.5 : AMENITY_H;
-  const corners = [[i - half, j - half], [i + half, j - half], [i + half, j + half], [i - half, j + half]];
+  const corners = sq(i, j, half);
   const info = AMENITY_TYPES[kind];
+  const style = AMENITY_STYLE[kind] || { texture: 'stone', roof: null };
+  const seed = i * 11.3 + j * 3.7;
   const finalPal = ghost ? (ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost) : info;
   const v = stageVisual(stage, progress, finalHeight, finalPal, ghost, ghostBlocked, ruined);
-  const useScaffold = !ghost && stage === 'scaffold';
-  const showRuins = !ghost && stage === 'foundation' && ruined;
-  let roof = null;
-  if (!ghost && stage === 'done' && kind !== 'brunnen' && kind !== 'schmied') {
-    const topPts = corners.map(([ci, cj]) => gridToScreen(ci, cj, finalHeight));
-    let frontIdx = 0;
-    for (let k = 1; k < topPts.length; k++) if (topPts[k].y > topPts[frontIdx].y) frontIdx = k;
-    const n = topPts.length;
-    const prevIdx = (frontIdx - 1 + n) % n, nextIdx = (frontIdx + 1) % n;
-    const apex = gridToScreen(i, j, finalHeight + 12);
-    roof = (
-      <g pointerEvents="none">
-        <polygon points={`${topPts[prevIdx].x},${topPts[prevIdx].y} ${topPts[frontIdx].x},${topPts[frontIdx].y} ${apex.x},${apex.y}`} fill={v.pal.left} stroke="rgba(30,22,14,0.35)" strokeWidth="1" />
-        <polygon points={`${topPts[frontIdx].x},${topPts[frontIdx].y} ${topPts[nextIdx].x},${topPts[nextIdx].y} ${apex.x},${apex.y}`} fill={v.pal.top} stroke="rgba(30,22,14,0.35)" strokeWidth="1" />
+  if (ghost) return <GhostBlock corners={corners} height={finalHeight} pal={v.pal} blocked={ghostBlocked} />;
+  if (stage === 'foundation') {
+    return (
+      <g>
+        <FoundationSite corners={corners} progress={progress} ruined={ruined} seed={seed} height={v.height} />
+        <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
       </g>
     );
   }
-  const labelP = gridToScreen(i, j, finalHeight + (kind === 'brunnen' || kind === 'schmied' ? 20 : 18));
+  if (stage !== 'done') {
+    return (
+      <g>
+        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} texture={style.texture === 'wood' ? 'wood' : 'stone'} crane={!!style.crane} />
+        <ProgressLabel i={i} j={j} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
+  const roofH = style.roof ? style.roofH : 0;
+  const quads = computeFaceQuads(corners, 0, finalHeight);
+  const labelP = gridToScreen(i, j, finalHeight + roofH + (kind === 'brunnen' || kind === 'schmied' ? 20 : kind === 'kapelle' ? 26 : 10));
+  const labelW = Math.max(60, info.label.length * 6.2 + 16);
   return (
-    <g opacity={v.opacity}>
-      <Block corners={corners} baseElev={0} topElev={v.height} topFill={v.pal.top} faceLeft={v.pal.left} faceRight={v.pal.right} />
-      {useScaffold && <ScaffoldRig corners={corners} height={v.height} />}
-      {roof}
-      {showRuins && <RubbleDecor i={i} j={j} frac={1} />}
-      {!ghost && stage === 'done' && kind === 'stallungen' && <HorseYardDecor i={i} j={j} />}
-      {!ghost && stage === 'done' && kind === 'schmied' && <ForgeDecor i={i} j={j} topHeight={v.height} />}
-      {!ghost && stage === 'done' && kind === 'schmied' && <ChimneyDecor i={i} j={j} smokeColor="#5a5044" />}
-      {!ghost && stage === 'done' && kind === 'baeckerei' && <TimberFrameDecor corners={corners} baseElev={0} topElev={v.height} />}
-      {!ghost && stage === 'done' && kind === 'baeckerei' && <ChimneyDecor i={i} j={j} smokeColor="#d9c9a0" />}
-      {!ghost && stage === 'done' && kind === 'lagerhaus' && <CrateStackDecor i={i} j={j} />}
-      {!ghost && stage === 'done' && kind === 'brunnen' && <WellDecor i={i} j={j} wellTop={v.height} />}
-      {!ghost && stage === 'done' && kind === 'kemenate' && <KemenateWindowDecor i={i} j={j} />}
-      {!ghost && stage === 'done' && kind === 'kemenate' && <ChimneyDecor i={i} j={j} smokeColor="#8a8074" />}
-      {!ghost && stage === 'done' && kind === 'kemenate' && (() => {
-        const poleBase = gridToScreen(i, j, finalHeight + 12);
-        const poleTop = gridToScreen(i, j, finalHeight + 30);
+    <g>
+      <Block corners={corners} baseElev={0} topElev={finalHeight} topFill={kind === 'brunnen' ? '#3d6f86' : info.top} faceLeft={info.left} faceRight={info.right} texture={style.texture} seed={seed} shadowHeight={finalHeight + roofH * 0.7} />
+      {kind === 'brunnen' && <ellipse cx={gridToScreen(i, j, finalHeight).x} cy={gridToScreen(i, j, finalHeight).y} rx="6" ry="3" fill="rgba(200,230,240,0.35)" className="cb-glint" pointerEvents="none" />}
+      {kind === 'baeckerei' && <TimberFrameDecor corners={corners} baseElev={0} topElev={finalHeight} />}
+      {(kind === 'kemenate' || kind === 'kapelle') && (
+        <>
+          <ArchOpening face={quads.faceA} u={0.3} v0={0.2} dv={0.4} du={0.1} fill="#2a2016" glow={kind === 'kemenate'} />
+          <ArchOpening face={quads.faceA} u={0.7} v0={0.2} dv={0.4} du={0.1} fill="#2a2016" glow={kind === 'kapelle'} />
+          <ArchOpening face={quads.faceB} u={0.5} v0={kind === 'kapelle' ? 0.35 : 0.45} dv={kind === 'kapelle' ? 0.65 : 0.55} du={0.18} fill="#4a3220" />
+        </>
+      )}
+      {kind === 'baeckerei' && <ArchOpening face={quads.faceB} u={0.5} v0={0.4} dv={0.6} du={0.2} fill="#4a3220" />}
+      {(kind === 'brauhaus' || kind === 'lagerhaus') && (
+        <ArchOpening face={quads.faceB} u={0.5} v0={0.3} dv={0.7} du={0.34} fill={kind === 'lagerhaus' ? '#3a2a1a' : '#4a3220'} />
+      )}
+      {kind === 'stallungen' && (
+        <>
+          <ArchOpening face={quads.faceA} u={0.3} v0={0.35} dv={0.65} du={0.24} fill="#2a1f14" />
+          <ArchOpening face={quads.faceA} u={0.7} v0={0.35} dv={0.65} du={0.24} fill="#2a1f14" />
+        </>
+      )}
+      {style.roof && <GableRoof i={i} j={j} half={half} baseElev={finalHeight} roofH={roofH} color={style.roof} wallPal={info} axis={style.axis} overhang={0.07} />}
+      {kind === 'stallungen' && <HorseYardDecor i={i} j={j} />}
+      {kind === 'schmied' && <ForgeDecor i={i} j={j} topHeight={finalHeight} />}
+      {kind === 'schmied' && <ChimneyDecor i={i} j={j} smokeColor="#5a5044" elev={finalHeight + 4} />}
+      {kind === 'baeckerei' && <ChimneyDecor i={i} j={j} smokeColor="#d9c9a0" elev={finalHeight + roofH * 0.55} />}
+      {kind === 'brauhaus' && <ChimneyDecor i={i} j={j} smokeColor="#bfb4a0" elev={finalHeight + roofH * 0.55} />}
+      {kind === 'lagerhaus' && <CrateStackDecor i={i} j={j} />}
+      {kind === 'brunnen' && <WellDecor i={i} j={j} wellTop={finalHeight} />}
+      {kind === 'kemenate' && <ChimneyDecor i={i} j={j} smokeColor="#8a8074" elev={finalHeight + roofH * 0.6} />}
+      {kind === 'kemenate' && (() => {
+        const poleBase = gridToScreen(i - 0.3, j, finalHeight + roofH * 0.95);
+        const poleTop = gridToScreen(i - 0.3, j, finalHeight + roofH + 18);
         return (
           <g pointerEvents="none">
             <line x1={poleBase.x} y1={poleBase.y} x2={poleTop.x} y2={poleTop.y} stroke="#2b2118" strokeWidth="1.3" />
@@ -1399,28 +2425,31 @@ function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress
           </g>
         );
       })()}
-      {!ghost && stage === 'done' && kind === 'kapelle' && (() => {
-        // A small cross on the ridge of the roof, so the chapel actually reads as a chapel
-        // from a distance rather than just another blocky building.
-        const base = gridToScreen(i, j, finalHeight + 12);
-        const top = gridToScreen(i, j, finalHeight + 24);
+      {kind === 'kapelle' && (() => {
+        // A little bell turret astride the ridge, topped with a cross, plus a round rose
+        // window in the gable — so the chapel reads as a chapel from across the map.
+        const ti = i, tj = j + half * 0.45;
+        const base = finalHeight + roofH - 4;
+        const rose = gridToScreen(i, j + half, finalHeight + roofH * 0.38);
+        const crossBase = gridToScreen(ti, tj, base + 22);
+        const crossTop = gridToScreen(ti, tj, base + 31);
         return (
           <g pointerEvents="none">
-            <line x1={base.x} y1={base.y} x2={top.x} y2={top.y} stroke="#2b2118" strokeWidth="1.4" strokeLinecap="round" />
-            <line x1={top.x - 4.5} y1={top.y + 4} x2={top.x + 4.5} y2={top.y + 4} stroke="#2b2118" strokeWidth="1.4" strokeLinecap="round" />
+            <circle cx={rose.x} cy={rose.y} r="2.8" fill="url(#cbWindowGlow)" stroke="#2a2016" strokeWidth="0.8" />
+            <Block corners={sq(ti, tj, 0.07)} baseElev={base} topElev={base + 10} topFill={info.top} faceLeft={info.left} faceRight={info.right} shadowHeight={0} />
+            <PyramidRoof corners={sq(ti, tj, 0.09)} baseElev={base + 10} apexElev={base + 21} color={style.roof} />
+            <line x1={crossBase.x} y1={crossBase.y} x2={crossTop.x} y2={crossTop.y} stroke="#C9A24B" strokeWidth="1.4" strokeLinecap="round" />
+            <line x1={crossTop.x - 3.5} y1={crossTop.y + 3} x2={crossTop.x + 3.5} y2={crossTop.y + 3} stroke="#C9A24B" strokeWidth="1.4" strokeLinecap="round" />
           </g>
         );
       })()}
-      {!ghost && stage === 'done' && (
-        <g pointerEvents="none">
-          <rect x={labelP.x - 34} y={labelP.y - 10} width="68" height="14" rx="2" fill="rgba(20,16,10,0.72)" />
-          <text x={labelP.x} y={labelP.y + 1} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{info.label}</text>
-        </g>
-      )}
-      {!ghost && <ProgressLabel i={i} j={j} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
+      <g pointerEvents="none">
+        <rect x={labelP.x - labelW / 2} y={labelP.y - 10} width={labelW} height="14" rx="7" fill="rgba(20,16,10,0.75)" stroke="rgba(201,162,75,0.5)" strokeWidth="0.7" />
+        <text x={labelP.x} y={labelP.y + 1} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{info.label}</text>
+      </g>
     </g>
   );
-}
+});
 
 const PERSON_COLORS = {
   laborer: { body: '#6b5a45', accent: '#4a3d2e', skin: '#d9b98a' },
@@ -4982,10 +6011,17 @@ export default function CastleBuilder() {
     return map;
   }, [battleObstacles, battlePhase]);
 
+  // Flat ground never overlaps anything standing on it, so it lives in its own layer drawn
+  // once underneath everything else — that lets the cast shadows of buildings and trees lie
+  // on top of the terrain instead of being painted over by the next row of tiles.
+  const groundLayer = useMemo(() => {
+    const list = [];
+    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push(<TileFace key={`t-${i}-${j}`} i={i} j={j} />);
+    return list;
+  }, []);
+
   const drawables = useMemo(() => {
     const list = [];
-    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push({ depth: i + j, node: <TileFace key={`t-${i}-${j}`} i={i} j={j} /> });
-
     props.forEach((p) => list.push(p));
 
     const lumberjackWorking = workerUnits.some((w) => w.type === 'lumberjack' && w.atTarget);
@@ -5337,6 +6373,11 @@ export default function CastleBuilder() {
         .cb-game-paused .cb-leg-walk, .cb-game-paused .cb-person-walk, .cb-game-paused .cb-person-work .cb-arm, .cb-game-paused .cb-person-idle, .cb-game-paused .cb-tree-fell, .cb-game-paused .cb-fire-flicker, .cb-game-paused .cb-smoke-rise, .cb-game-paused .cb-ram-swing, .cb-game-paused .cb-catapult-arm { animation-play-state: paused; }
         .cb-wall-anchor-ring { animation: cb-wall-anchor-pulse 1.1s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
         @keyframes cb-wall-anchor-pulse { 0%, 100% { r: 15; opacity: 1; } 50% { r: 18; opacity: 0.6; } }
+        .cb-glint { animation: cb-glint 3.4s ease-in-out infinite; }
+        @keyframes cb-glint { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
+        .cb-window-glow { animation: cb-window-flicker 2.8s ease-in-out infinite; }
+        @keyframes cb-window-flicker { 0%, 100% { opacity: 0.85; } 40% { opacity: 1; } 70% { opacity: 0.7; } }
+        .cb-game-paused .cb-glint, .cb-game-paused .cb-window-glow { animation-play-state: paused; }
         .cb-wall-preview-line { animation: cb-wall-preview-shimmer 0.7s linear infinite; }
         @keyframes cb-wall-preview-shimmer { from { stroke-dashoffset: 26; } to { stroke-dashoffset: 0; } }
       `}</style>
@@ -6449,11 +7490,15 @@ export default function CastleBuilder() {
         <div style={{ flex: 1, position: 'relative', minWidth: 0, borderRadius: 4, border: '3px solid #5C554A', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
           <div ref={mapViewportRef} onMouseDown={handleMapMouseDown}
             onContextMenu={(e) => e.preventDefault()}
-            style={{ position: 'absolute', inset: 0, background: '#3f4d2c', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
+            style={{ position: 'absolute', inset: 0, background: '#1b1f15', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
             <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
               <svg width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
-                <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="#3f4d2c" />
+                <SceneDefs />
+                <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
+                <MapBase />
+                <g>{groundLayer}</g>
                 <g>{drawables.map((d) => d.node)}</g>
+                <CloudShadows />
                 <g>
                   {edges.map((e) => {
                     // Previously the click target sat only at ground level, but a finished
@@ -6662,6 +7707,7 @@ export default function CastleBuilder() {
             </div>
           </div>
 
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5, background: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(8,6,2,0.42) 100%)' }} />
           <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', gap: 6, alignItems: 'center', background: 'rgba(20,16,10,0.7)', borderRadius: 4, padding: '4px 6px', zIndex: 10 }}>
             <button onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.15).toFixed(2)))}
               style={{ width: 26, height: 26, borderRadius: 3, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>−</button>
