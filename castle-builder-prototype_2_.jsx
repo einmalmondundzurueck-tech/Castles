@@ -54,24 +54,6 @@ function buildTerrain() {
   return grid;
 }
 const TERRAIN = buildTerrain();
-// The river is impassable to workers, exactly like a built wall — treating every water tile
-// as fully "walled" on all four sides (same trick used for a diagonal wall's own tile) means
-// the existing pathfinding graph, which already knows how to route around blocked tiles,
-// naturally finds a dry way around instead of ever letting anyone wade straight across.
-// Precomputed once since the river's shape is fixed for the whole game.
-const WATER_BLOCKED_EDGES = (() => {
-  const list = [];
-  for (let j = 0; j < GRID_ROWS; j++) {
-    for (let i = 0; i < GRID_COLS; i++) {
-      if (TERRAIN[j][i] !== 'water') continue;
-      list.push({ i1: i, j1: j, i2: i + 1, j2: j });
-      list.push({ i1: i, j1: j + 1, i2: i + 1, j2: j + 1 });
-      list.push({ i1: i, j1: j, i2: i, j2: j + 1 });
-      list.push({ i1: i + 1, j1: j, i2: i + 1, j2: j + 1 });
-    }
-  }
-  return list;
-})();
 function generateForestTrees() {
   const trees = [];
   let id = 0;
@@ -1747,7 +1729,7 @@ function rimPoints(i, j, r, perSide, skipCorners = false) {
   return pts;
 }
 
-const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, damageFrac = 0, ruined = false }) {
+const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, damageFrac = 0, ruined = false, doorA = false, doorB = false }) {
   const half = 0.32;
   const corners = sq(i, j, half);
   const v = stageVisual(stage, progress, TOWER_H, PALETTE.tower, ghost, ghostBlocked, ruined);
@@ -1779,9 +1761,20 @@ const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, sta
     <g>
       <Block corners={sq(i, j, half * 1.1)} baseElev={0} topElev={5} topFill={shade(pal.top, -0.1)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 1} shadowHeight={topH + MERLON_H} />
       <Block corners={corners} baseElev={5} topElev={parBase} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
-      <ArrowSlit face={bodyQuads.faceA} u={0.5} v0={0.12} dv={0.22} />
-      <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.12} dv={0.22} />
-      <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.56} dv={0.2} />
+      {(() => {
+        // Wall-walk doorways sit exactly at the height of the wall top, so the walk visibly
+        // continues into the tower; faces without a wall get arrow slits instead.
+        const span = parBase - 5;
+        const v0 = Math.max(0.02, (parBase - (WALL_H + 8.5)) / span), dv = Math.min(0.98 - v0, 8.5 / span);
+        const vSlit = (parBase - (WALL_H * 0.45 + 6)) / span;
+        return (
+          <>
+            {doorA && damageFrac < 0.45 ? <ArchOpening face={bodyQuads.faceA} u={0.5} v0={v0} dv={dv} du={0.3} fill="#2a2016" /> : <ArrowSlit face={bodyQuads.faceA} u={0.5} v0={0.12} dv={0.22} />}
+            {doorB && damageFrac < 0.45 ? <ArchOpening face={bodyQuads.faceB} u={0.5} v0={v0} dv={dv} du={0.3} fill="#2a2016" /> : <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.12} dv={0.22} />}
+            {!doorB && <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={vSlit} dv={0.2} />}
+          </>
+        );
+      })()}
       <Block corners={sq(i, j, ph)} baseElev={parBase - 1.5} topElev={parBase} topFill={shade(pal.top, -0.3)} faceLeft={shade(pal.left, -0.35)} faceRight={shade(pal.right, -0.35)} shadowHeight={0} shade={false} />
       <Block corners={sq(i, j, ph)} baseElev={parBase} topElev={topH} topFill={shade(pal.top, -0.22)} faceLeft={shade(pal.left, 0.04)} faceRight={shade(pal.right, 0.04)} texture="stone" seed={seed + 2} shadowHeight={0} />
       {showMerlons && <Merlons centers={rimPoints(i, j, ph - 0.065, 1)} along={0.065} across={0.065} base={topH} height={MERLON_H * 0.85} pal={shadePal(pal, 0.04)} seed={seed} />}
@@ -1974,15 +1967,16 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
   const horizontal = j1 === j2;
   const diagonal = i1 !== i2 && j1 !== j2;
   const t = 0.12;
-  const shrink = 0.02;
   // Where a wall meets another wall/gate at a mid-span junction, pull the corner in a touch
   // so mitred corners don't poke out past each other. Where it meets a *tower*, do the
   // opposite — drive it a little further in past the vertex, into the tower's own footprint
   // — so the wall's face is solidly buried under the tower's base with no possible sliver of
   // a gap, instead of just touching it edge-to-edge (which is what read as "floating").
   const towerOverlap = 0.16;
-  const a1 = towerAt1 ? -towerOverlap : (junction1 ? shrink : 0);
-  const a2 = towerAt2 ? -towerOverlap : (junction2 ? shrink : 0);
+  // At a corner post (see WallJunctionPost) the wall simply runs to the vertex; the post
+  // covers the joint.
+  const a1 = towerAt1 ? -towerOverlap : 0;
+  const a2 = towerAt2 ? -towerOverlap : 0;
   const dx = i2 - i1, dy = j2 - j1;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;
@@ -2168,15 +2162,21 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       const along = tt * runLen;
       if (towerAt1 && along < towerOverlap + 0.38) continue;
       if (towerAt2 && runLen - along < towerOverlap + 0.38) continue;
+      if (junction1 && along < 0.17) continue;
+      if (junction2 && runLen - along < 0.17) continue;
       const ci = sI + (eI - sI) * tt, cj = sJ + (eJ - sJ) * tt;
       crenels.push([ci + px * (t - 0.035), cj + py * (t - 0.035)]);
       crenels.push([ci - px * (t - 0.035), cj - py * (t - 0.035)]);
     }
   }
   const pal = PALETTE.wall;
+  // A low battered plinth along the foot of the wall, matching the towers' plinth so the two
+  // meet at one continuous base line.
+  const plinth = orientedRect(midI + (ux * (a1 - a2)) / 2, midJ + (uy * (a1 - a2)) / 2, ux, uy, (len - a1 - a2) / 2, t * 1.22);
   return (
     <g>
-      <Block corners={corners} baseElev={0} topElev={crumbledHeight} topFill={shade(pal.top, -0.15)} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={crumbledHeight + (showCrenellation ? MERLON_H * 0.6 : 0)} />
+      <Block corners={plinth} baseElev={0} topElev={4} topFill={shade(pal.top, -0.12)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 5} shadowHeight={crumbledHeight + (showCrenellation ? MERLON_H * 0.6 : 0)} />
+      <Block corners={corners} baseElev={4} topElev={crumbledHeight} topFill={shade(pal.top, -0.15)} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
       {showCrenellation && <Merlons centers={crenels} ux={ux} uy={uy} along={0.05} across={0.035} base={crumbledHeight} height={MERLON_H * 0.8} pal={pal} seed={seed} />}
       <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />
       <RubbleDecor i={midI} j={midJ} frac={damageFrac} />
@@ -2342,6 +2342,21 @@ function HorseYardDecor({ i, j }) {
 }
 
 
+// Square stone post on a wall corner / T-junction without a tower: same thickness, plinth,
+// height and battlements as the walls it joins.
+const WallJunctionPost = React.memo(function WallJunctionPost({ i, j }) {
+  const t = 0.12;
+  const pal = PALETTE.wall;
+  const seed = i * 5.3 + j * 9.1;
+  return (
+    <g>
+      <Block corners={sq(i, j, t * 1.22)} baseElev={0} topElev={4} topFill={shade(pal.top, -0.12)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed} shadowHeight={WALL_H + MERLON_H * 0.6} />
+      <Block corners={sq(i, j, t)} baseElev={4} topElev={WALL_H} topFill={shade(pal.top, -0.15)} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed + 1} />
+      <Merlons centers={rimPoints(i, j, t - 0.04, 0)} along={0.04} across={0.04} base={WALL_H} height={MERLON_H * 0.8} pal={pal} seed={seed} />
+    </g>
+  );
+});
+
 // Per-building look: wall material, roof covering and ridge direction.
 const AMENITY_STYLE = {
   kemenate: { texture: 'stone', roof: '#55606c', roofH: 15, axis: 'i', crane: true },
@@ -2476,124 +2491,367 @@ const PERSON_COLORS = {
   saxonCatapult: { body: '#5c2a20', accent: '#3a1a12', skin: '#c9a877' },
 };
 
-const TOOL_SHAPES = {
-  laborer: <g transform="translate(6.5,-8) rotate(35)"><line x1="0" y1="0" x2="0" y2="9" stroke="#5c4a35" strokeWidth="1.5" strokeLinecap="round" /><rect x="-2.6" y="8" width="5.2" height="3.4" rx="0.6" fill="#9a9088" stroke="#3a352f" strokeWidth="0.5" /></g>,
-  arbeiter: <g transform="translate(6.5,-8) rotate(35)"><line x1="0" y1="0" x2="0" y2="9" stroke="#5c4a35" strokeWidth="1.5" strokeLinecap="round" /><rect x="-2.6" y="8" width="5.2" height="3.4" rx="0.6" fill="#9a9088" stroke="#3a352f" strokeWidth="0.5" /></g>,
-  carpenter: <g transform="translate(6.5,-8) rotate(-15)"><rect x="0" y="-2" width="10" height="3.2" rx="0.5" fill="#b7ab95" stroke="#3a352f" strokeWidth="0.5" /><line x1="-3" y1="-0.4" x2="0" y2="-0.4" stroke="#5c4a35" strokeWidth="1.6" strokeLinecap="round" /></g>,
-  mason: <g transform="translate(6.5,-8) rotate(25)"><line x1="0" y1="0" x2="-3.2" y2="3.4" stroke="#5c4a35" strokeWidth="1.5" strokeLinecap="round" /><path d="M0,-0.4 L5,-2.6 L6.2,0.6 L1.2,2.8 Z" fill="#b7ab95" stroke="#3a352f" strokeWidth="0.5" /></g>,
-  quarrier: <g transform="translate(6.5,-8) rotate(40)"><line x1="0" y1="-3" x2="0" y2="9" stroke="#5c4a35" strokeWidth="1.6" strokeLinecap="round" /><path d="M-6,-3.6 L6,-3.6 L0,-7.2 Z" fill="#8a8074" stroke="#3a352f" strokeWidth="0.5" /></g>,
-  lumberjack: <g transform="translate(6.5,-8) rotate(30)"><line x1="0" y1="-2" x2="0" y2="9" stroke="#5c4a35" strokeWidth="1.6" strokeLinecap="round" /><path d="M-1,-4 L6,-6.4 L7.2,-1.6 L0.4,0.6 Z" fill="#96908a" stroke="#3a352f" strokeWidth="0.5" /></g>,
-};
+// ------------------------------------------------------------------------------ figures --
+// Little people, drawn at roughly 26px tall: feet at y=0, hips at y=-8, shoulders at y=-17.
+// Each type gets its own silhouette — headgear, clothing and what it carries — so a builder,
+// a guard or a raider can be told apart at a glance. Light comes from the right like the rest
+// of the scene, so the right half of every body is a touch brighter.
 
-function PersonFigure({ type, mode }) {
-  const c = PERSON_COLORS[type] || PERSON_COLORS.laborer;
+// Headgear per type, drawn over the head (head centre at 0,-20.6, radius 3.3).
+function Headgear({ type, c }) {
+  switch (type) {
+    case 'laborer':
+    case 'arbeiter':
+      // Wide straw hat.
+      return (
+        <g>
+          <ellipse cx="0" cy="-22.6" rx="5.6" ry="1.5" fill="#d8bf74" stroke="#8a7238" strokeWidth="0.5" />
+          <path d="M -2.8 -22.8 Q 0 -27 2.8 -22.8 Z" fill="#e2cb84" stroke="#8a7238" strokeWidth="0.5" />
+        </g>
+      );
+    case 'carpenter':
+      return <path d="M -3.4 -21.6 Q -3 -25.4 0.5 -25.2 Q 4.6 -24.6 3.4 -21.6 Z" fill="#a8452f" stroke="#5c2418" strokeWidth="0.5" />;
+    case 'mason':
+      return <path d="M -3.5 -21.4 Q 0 -25.6 3.5 -21.4 L 3.5 -20.6 L -3.5 -20.6 Z" fill="#d9d2c0" stroke="#7d7566" strokeWidth="0.5" />;
+    case 'quarrier':
+      return <path d="M -3.9 -19 Q -4.4 -25.4 0 -25 Q 4.4 -25.4 3.9 -19 L 2.6 -19.4 Q 2.8 -23 0 -23.2 Q -2.8 -23 -2.6 -19.4 Z" fill="#6e5a3c" stroke="#3c2f1c" strokeWidth="0.5" />;
+    case 'lumberjack':
+      return <path d="M -3.9 -19 Q -4.2 -25.6 0.5 -25.2 Q 5 -25 5.6 -21 L 6.8 -18.6 L 3.6 -19.6 Q 3 -23 0 -23.2 Q -2.8 -23 -2.6 -19.4 Z" fill="#4c6a2e" stroke="#26391a" strokeWidth="0.5" />;
+    case 'soldier':
+      // Steel kettle helmet with a nasal guard.
+      return (
+        <g>
+          <path d="M -3.7 -21 Q -3.7 -25.4 0 -25.4 Q 3.7 -25.4 3.7 -21 Z" fill="#9aa3ad" stroke="#4a525c" strokeWidth="0.6" />
+          <path d="M 0.6 -25 Q 2.6 -24.4 3.2 -21.6" stroke="#d4dbe2" strokeWidth="0.7" fill="none" />
+          <line x1="0" y1="-21" x2="0" y2="-18.6" stroke="#6b737c" strokeWidth="0.9" />
+        </g>
+      );
+    case 'archer':
+      return <path d="M -3.9 -19 Q -4.4 -24.8 0 -25 L 1.8 -28 L 3 -24.4 Q 4.4 -23 3.9 -19 L 2.6 -19.4 Q 2.8 -23 0 -23.2 Q -2.8 -23 -2.6 -19.4 Z" fill={c.accent} stroke="#1c2614" strokeWidth="0.5" />;
+    case 'robinArcher':
+      return (
+        <g>
+          <path d="M -3.6 -21 Q 0 -26 3.6 -21 Q 3.6 -19.6 0 -19.4 Q -3.6 -19.6 -3.6 -21 Z" fill={c.accent} stroke="#0f1a0f" strokeWidth="0.5" />
+          <path d="M 2.4 -23.4 Q 6.5 -27.5 8 -26.6 Q 5.6 -25 3.2 -22.2 Z" fill="#c23a2a" />
+        </g>
+      );
+    case 'saxon':
+    case 'saxonLadder':
+      // Shaggy hair and a fur cap.
+      return (
+        <g>
+          <path d="M -3.6 -18.2 Q -4.6 -21 -3.4 -22.6 L 3.4 -22.6 Q 4.6 -21 3.6 -18.2 Z" fill="#7a5530" />
+          <path d="M -3.8 -21.6 Q -4 -25.6 0 -25.8 Q 4 -25.6 3.8 -21.6 Q 0 -22.8 -3.8 -21.6 Z" fill="#8a6a46" stroke="#4a3520" strokeWidth="0.5" />
+        </g>
+      );
+    case 'saxonArcher':
+      return <path d="M -3.6 -21 Q -3.4 -25.2 0 -25.2 Q 3.4 -25.2 3.6 -21 Z" fill="#6b4a2c" stroke="#3a2614" strokeWidth="0.5" />;
+    default:
+      return null;
+  }
+}
+
+// What the working arm holds — drawn inside the swinging arm group (shoulder at 3.8,-16).
+function HeldTool({ type, c }) {
+  const handle = '#6b4d2e', steel = '#aab0b6', steelEdge = '#3a3f45';
+  switch (type) {
+    case 'laborer':
+    case 'arbeiter':
+      // Shovel.
+      return (
+        <g>
+          <line x1="6.2" y1="-17" x2="7.4" y2="-2" stroke={handle} strokeWidth="1.3" strokeLinecap="round" />
+          <path d="M 5.6 -3 L 9.4 -3.4 L 9 1 Q 7.6 2.4 6 1.2 Z" fill={steel} stroke={steelEdge} strokeWidth="0.5" />
+        </g>
+      );
+    case 'carpenter':
+      // Hammer, raised.
+      return (
+        <g>
+          <line x1="6.4" y1="-10" x2="9.6" y2="-16.4" stroke={handle} strokeWidth="1.3" strokeLinecap="round" />
+          <rect x="7.6" y="-19" width="5" height="2.6" rx="0.5" fill="#5a5f66" stroke={steelEdge} strokeWidth="0.5" transform="rotate(-25 10 -17.6)" />
+        </g>
+      );
+    case 'mason':
+      // Trowel.
+      return (
+        <g>
+          <line x1="6.4" y1="-10" x2="8.6" y2="-12.6" stroke={handle} strokeWidth="1.3" strokeLinecap="round" />
+          <path d="M 8 -12.6 L 13 -15 L 12.6 -11.2 Z" fill={steel} stroke={steelEdge} strokeWidth="0.5" />
+        </g>
+      );
+    case 'quarrier':
+      // Pickaxe.
+      return (
+        <g>
+          <line x1="6.2" y1="-9.6" x2="9.6" y2="-21" stroke={handle} strokeWidth="1.4" strokeLinecap="round" />
+          <path d="M 4.6 -19.4 Q 9.4 -23.4 14.6 -20.8 Q 9.6 -21.6 4.6 -19.4 Z" fill="#8b9096" stroke={steelEdge} strokeWidth="0.6" />
+        </g>
+      );
+    case 'lumberjack':
+      // Felling axe.
+      return (
+        <g>
+          <line x1="6.2" y1="-9.6" x2="9.8" y2="-21.4" stroke={handle} strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M 9 -22.4 L 13.6 -23.8 Q 14.6 -20.6 12.6 -18.6 L 9.6 -19.8 Z" fill={steel} stroke={steelEdge} strokeWidth="0.6" />
+        </g>
+      );
+    case 'soldier':
+      // Spear with a little pennant.
+      return (
+        <g>
+          <line x1="6.6" y1="-1" x2="6.6" y2="-30" stroke={handle} strokeWidth="1.2" strokeLinecap="round" />
+          <path d="M 5.4 -30 L 6.6 -34 L 7.8 -30 Z" fill={steel} stroke={steelEdge} strokeWidth="0.4" />
+          <path d="M 6.8 -29 L 11 -27.8 L 6.8 -26.4 Z" fill={c.accent === '#2a3340' ? '#C9A24B' : c.accent} />
+        </g>
+      );
+    case 'archer':
+    case 'saxonArcher':
+    case 'robinArcher':
+      // Longbow held upright, string drawn taut.
+      return (
+        <g>
+          <path d="M 6 -26 Q 11.6 -16 6 -5" stroke="#7a5228" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+          <line x1="6" y1="-26" x2="6" y2="-5" stroke="#e8e0cc" strokeWidth="0.45" />
+        </g>
+      );
+    case 'saxon':
+      // Bearded axe.
+      return (
+        <g>
+          <line x1="6.4" y1="-6" x2="8.6" y2="-21" stroke="#4a3018" strokeWidth="1.4" strokeLinecap="round" />
+          <path d="M 7.8 -21.4 Q 12.6 -22 13 -17.6 Q 10.6 -18.4 8.6 -17.4 Z" fill="#8b9096" stroke={steelEdge} strokeWidth="0.5" />
+        </g>
+      );
+    default:
+      return null;
+  }
+}
+
+// A soldier on foot (any type except the mounted knights and siege engines).
+function FootFigure({ type, c, mode }) {
   const legClass = mode === 'walk' ? 'cb-leg-walk' : '';
-  const bodyClass = mode === 'work' ? 'cb-person-work' : mode === 'walk' ? 'cb-person-walk' : 'cb-person-idle';
-
-  if (type === 'champion' || type === 'enemyKnight') {
-    // A mounted knight — the "berühmter Ritter" (and any hostile knight sent against him)
-    // gets his own distinct silhouette rather than the standard two-legged rig, since he
-    // fights from horseback. Only the palette (c, above) tells the two apart.
-    return (
-      <g className={bodyClass}>
-        <path d="M -9 -2 Q -13.5 1.5 -11 8" stroke="#2e2317" strokeWidth="2" strokeLinecap="round" fill="none" />
-        <g className={`cb-leg-l ${legClass}`} opacity="0.55"><line x1="-5.5" y1="1" x2="-5.5" y2="7" stroke="#2e2317" strokeWidth="1.8" strokeLinecap="round" /></g>
-        <g className={`cb-leg-r ${legClass}`} opacity="0.55"><line x1="5.5" y1="1" x2="5.5" y2="7" stroke="#2e2317" strokeWidth="1.8" strokeLinecap="round" /></g>
-        <ellipse cx="0" cy="2" rx="10" ry="4.2" fill="#6b5540" stroke="#4a3a28" strokeWidth="0.6" />
-        <g className={`cb-leg-l ${legClass}`}><line x1="-4.5" y1="1" x2="-4.5" y2="7.5" stroke="#3a2e20" strokeWidth="2.2" strokeLinecap="round" /></g>
-        <g className={`cb-leg-r ${legClass}`}><line x1="4.5" y1="1" x2="4.5" y2="7.5" stroke="#3a2e20" strokeWidth="2.2" strokeLinecap="round" /></g>
-        <path d="M 6 -1 Q 10 -8 8 -13 Q 12 -13.5 13.2 -10 Q 14.5 -8 13.5 -5 L 10 -2 Z" fill="#6b5540" stroke="#4a3a28" strokeWidth="0.6" />
-        <path d="M 7 -3 Q 9.3 -7 8.2 -11.5" stroke="#2e2317" strokeWidth="1.6" fill="none" strokeLinecap="round" />
-        <path d="M 9.5 -12.5 L 8.3 -15.8 L 11.2 -13.3 Z" fill="#5c4a35" />
-        <rect x="-3.5" y="-16" width="7" height="8" rx="1.8" fill={c.body} />
-        <circle cx="0" cy="-18.5" r="3" fill={c.skin} />
-        <path d="M -3.5 -21 Q 0 -23.5 3.5 -21 L 3.5 -17 L -3.5 -17 Z" fill="#8a8074" />
-        <line x1="4" y1="-19" x2="12" y2="-27" stroke="#5c4a35" strokeWidth="1.4" strokeLinecap="round" />
-        <path d="M 12 -27 L 10.5 -22 L 13.5 -22 Z" fill={c.accent} />
-        <rect x="-5" y="-13" width="10" height="6" rx="1" fill={c.accent} opacity="0.85" />
-      </g>
-    );
-  }
-
-  if (type === 'saxonRam') {
-    // A real wheeled battering ram, not just a soldier holding a stick: a peaked timber
-    // canopy on wheels with the log slung underneath on ropes, swinging forward as it works.
-    return (
-      <g className={bodyClass}>
-        <circle cx="-7" cy="6" r="3.2" fill="#3a2e20" stroke="#1c150e" strokeWidth="0.8" />
-        <circle cx="7" cy="6" r="3.2" fill="#3a2e20" stroke="#1c150e" strokeWidth="0.8" />
-        <rect x="-9" y="-3" width="18" height="7" rx="1" fill="#6b4d2e" stroke="#3a2a18" strokeWidth="0.8" />
-        <path d="M -10 -3 L 0 -13 L 10 -3 Z" fill="#7a5a36" stroke="#3a2a18" strokeWidth="0.8" />
-        <g className="cb-ram-swing" style={{ transformOrigin: '0px -1px' }}>
-          <line x1="-2" y1="-2" x2="-10" y2="10" stroke="#3a2a18" strokeWidth="1" />
-          <line x1="2" y1="-2" x2="10" y2="10" stroke="#3a2a18" strokeWidth="1" />
-          <rect x="-11" y="7" width="22" height="4.5" rx="2.2" fill="#4a3620" stroke="#241a10" strokeWidth="0.8" />
-          <circle cx="10.5" cy="9.2" r="2.2" fill="#5c4530" stroke="#241a10" strokeWidth="0.8" />
-        </g>
-      </g>
-    );
-  }
-
-  if (type === 'saxonCatapult') {
-    // A proper siege engine: a heavy wooden frame on wheels with a throwing arm and sling
-    // basket, not a person holding a bow-shaped stick.
-    return (
-      <g className={bodyClass}>
-        <circle cx="-8" cy="7" r="3.4" fill="#3a2e20" stroke="#1c150e" strokeWidth="0.8" />
-        <circle cx="8" cy="7" r="3.4" fill="#3a2e20" stroke="#1c150e" strokeWidth="0.8" />
-        <rect x="-10" y="2" width="20" height="4.5" rx="1" fill="#5c4530" stroke="#2e2216" strokeWidth="0.8" />
-        <path d="M -9 3 L -6 -13" stroke="#4a3620" strokeWidth="2.6" strokeLinecap="round" />
-        <path d="M 9 3 L 6 -13" stroke="#4a3620" strokeWidth="2.6" strokeLinecap="round" />
-        <line x1="-6" y1="-13" x2="6" y2="-13" stroke="#3a2a18" strokeWidth="1.6" />
-        <g className="cb-catapult-arm" style={{ transformOrigin: '0px 3px' }}>
-          <line x1="0" y1="3" x2="10" y2="-16" stroke="#2e2216" strokeWidth="2.4" strokeLinecap="round" />
-          <path d="M 8 -19 Q 13 -18 12 -13 Q 9 -14 8 -19 Z" fill="#6b4d2e" stroke="#2e2216" strokeWidth="0.6" />
-          <circle cx="9.5" cy="-16" r="2.2" fill="#8a8074" />
-        </g>
-        <line x1="-3" y1="3" x2="3" y2="3" stroke="#241a10" strokeWidth="2" />
-      </g>
-    );
-  }
-
+  const isSoldier = type === 'soldier';
+  const isSaxon = type === 'saxon' || type === 'saxonLadder' || type === 'saxonArcher';
+  const isArcher = type === 'archer' || type === 'saxonArcher' || type === 'robinArcher';
+  const trousers = isSoldier ? '#5c636b' : shade(c.accent, -0.1);
+  const leg = (cls) => (
+    <g className={`${cls} ${legClass}`}>
+      <line x1="0" y1="0" x2="0" y2="6.4" stroke={trousers} strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M -1.4 6 L 1.6 6 L 2.6 7.9 L -1.4 7.9 Z" fill="#2b1e12" />
+    </g>
+  );
+  // Tunic: shoulders at y=-17, flaring to a hem at y=-7.
+  const tunic = 'M -4.2 -17.2 Q 0 -18.4 4.2 -17.2 L 5.2 -7 Q 0 -6 -5.2 -7 Z';
+  const litHalf = 'M 0 -17.8 Q 2.6 -17.8 4.2 -17.2 L 5.2 -7 Q 2.6 -6.4 0 -6.4 Z';
   return (
-    <g className={bodyClass}>
-      <g className={`cb-leg-l ${legClass}`}><line x1="0" y1="0" x2="0" y2="8" stroke={c.accent} strokeWidth="2.3" strokeLinecap="round" /></g>
-      <g className={`cb-leg-r ${legClass}`}><line x1="0" y1="0" x2="0" y2="8" stroke={c.accent} strokeWidth="2.3" strokeLinecap="round" /></g>
-      <rect x="-4" y="-17" width="8" height="9" rx="2" fill={c.body} />
-      <circle cx="0" cy="-20" r="3.3" fill={c.skin} />
-      {type === 'robinArcher' && <path d="M -3.3 -21 Q 0 -25.5 3.3 -21 Q 3.3 -19 0 -18.5 Q -3.3 -19 -3.3 -21 Z" fill={c.accent} stroke="#0f1a0f" strokeWidth="0.5" />}
+    <g>
+      {leg('cb-leg-l')}
+      {leg('cb-leg-r')}
+      {/* quiver on the back */}
+      {isArcher && <g><rect x="-6.4" y="-19.6" width="2.6" height="8" rx="1" fill="#6b4626" stroke="#3a2614" strokeWidth="0.4" transform="rotate(-18 -5 -15)" /><path d="M -7.2 -21 l 0.8 -2 M -5.8 -21.4 l 0.6 -2.2 M -4.6 -21 l 0.8 -2" stroke="#e8e0cc" strokeWidth="0.7" /></g>}
+      {/* back arm */}
+      <line x1="-3.9" y1="-16" x2="-5.8" y2="-9.8" stroke={shade(c.body, -0.15)} strokeWidth="2.2" strokeLinecap="round" />
+      <circle cx="-5.9" cy="-9.4" r="1.15" fill={c.skin} />
+      <path d={tunic} fill={isSoldier ? '#8d959e' : c.body} stroke="rgba(25,18,10,0.55)" strokeWidth="0.55" />
+      <path d={litHalf} fill="rgba(255,250,235,0.14)" />
+      {isSoldier && (
+        <>
+          {/* coloured surcoat over the mail */}
+          <path d="M -3.3 -16.6 L 3.3 -16.6 L 4 -7.4 Q 0 -6.6 -4 -7.4 Z" fill={c.body} stroke="rgba(20,14,8,0.5)" strokeWidth="0.45" />
+          <path d="M -0.8 -15 h 1.6 v 2.2 h 2.2 v 1.6 h -2.2 v 3.4 h -1.6 v -3.4 h -2.2 v -1.6 h 2.2 Z" fill="#C9A24B" />
+        </>
+      )}
+      {type === 'mason' && <path d="M -3.6 -12.4 L 3.6 -12.4 L 4.2 -7.2 Q 0 -6.6 -4.2 -7.2 Z" fill="#8a6a46" stroke="#4a3520" strokeWidth="0.4" />}
+      {type === 'carpenter' && <path d="M -3.6 -12.4 L 3.6 -12.4 L 4.2 -7.2 Q 0 -6.6 -4.2 -7.2 Z" fill="#c9b48a" stroke="#6b5a3a" strokeWidth="0.4" />}
+      {type === 'lumberjack' && <path d="M -4 -14 L 4.4 -14 M -4.4 -11 L 4.8 -11 M -2 -17.4 L -2.4 -7 M 1.6 -17.6 L 2 -6.8" stroke="rgba(30,10,8,0.35)" strokeWidth="0.8" />}
+      {isSaxon && <path d="M -4.4 -17 Q 0 -15 4.4 -17 L 4.2 -15.4 Q 0 -13.6 -4.2 -15.4 Z" fill="#a08a66" stroke="#5c4a30" strokeWidth="0.4" />}
+      {/* belt */}
+      <path d="M -4.8 -10.2 Q 0 -9.4 4.8 -10.2" stroke="#3a2614" strokeWidth="1.1" fill="none" />
+      <rect x="-0.8" y="-10.6" width="1.6" height="1.3" fill="#C9A24B" />
+      {/* head */}
+      <rect x="-1" y="-18.6" width="2" height="1.8" fill={shade(c.skin, -0.12)} />
+      <circle cx="0" cy="-20.6" r="3.3" fill={c.skin} stroke="rgba(60,35,20,0.45)" strokeWidth="0.4" />
+      {isSaxon && <path d="M -2.6 -19.2 Q 0 -14.6 2.6 -19.2 Q 0 -18.4 -2.6 -19.2 Z" fill="#8a5a2c" />}
+      <circle cx="-1.1" cy="-20.8" r="0.4" fill="#2b1e12" />
+      <circle cx="1.2" cy="-20.8" r="0.4" fill="#2b1e12" />
+      <Headgear type={type} c={c} />
+      {/* shields on the off-hand side */}
+      {isSoldier && (
+        <g>
+          <path d="M -9.4 -16 L -3.6 -16 L -3.8 -10.6 Q -6.5 -6.8 -6.5 -6.8 Q -9.4 -10.6 -9.4 -10.6 Z" fill={c.body} stroke="#1c232c" strokeWidth="0.7" />
+          <path d="M -6.5 -15.4 L -6.5 -8" stroke="#C9A24B" strokeWidth="1.1" />
+          <path d="M -9 -13 L -4 -13" stroke="#C9A24B" strokeWidth="1.1" />
+        </g>
+      )}
+      {type === 'saxon' && (
+        <g>
+          <circle cx="-6.2" cy="-12.2" r="4.4" fill="#7a3a24" stroke="#2c140c" strokeWidth="0.7" />
+          <path d="M -6.2 -16.6 L -6.2 -7.8 M -10.6 -12.2 L -1.8 -12.2" stroke="#c9a877" strokeWidth="0.8" />
+          <circle cx="-6.2" cy="-12.2" r="1.2" fill="#9aa3ad" stroke="#3a3f45" strokeWidth="0.4" />
+        </g>
+      )}
       <g className="cb-arm">
-        {type === 'archer' && <path d="M 4 -14 Q 9.5 -12 4 -6" stroke={c.accent} strokeWidth="1.3" fill="none" />}
-        {type === 'soldier' && <rect x="-7.5" y="-15" width="3" height="7" fill="#93a0b0" rx="0.6" />}
-        {type === 'saxon' && <line x1="4" y1="-16" x2="8" y2="7" stroke="#241209" strokeWidth="1.6" strokeLinecap="round" />}
-        {ATTACKER_ARCHER_TYPES.has(type) && <path d="M 4 -14 Q 9.5 -12 4 -6" stroke={c.accent} strokeWidth="1.3" fill="none" />}
-        {type === 'saxonLadder' && (
-          <g transform="translate(6,-4) rotate(-62)">
-            <line x1="0" y1="-11" x2="0" y2="11" stroke="#6b4d2e" strokeWidth="1.6" strokeLinecap="round" />
-            <line x1="3.2" y1="-11" x2="3.2" y2="11" stroke="#6b4d2e" strokeWidth="1.6" strokeLinecap="round" />
-            <line x1="0" y1="-6" x2="3.2" y2="-6" stroke="#4c3320" strokeWidth="1.1" />
-            <line x1="0" y1="0" x2="3.2" y2="0" stroke="#4c3320" strokeWidth="1.1" />
-            <line x1="0" y1="6" x2="3.2" y2="6" stroke="#4c3320" strokeWidth="1.1" />
-          </g>
-        )}
-        {type === 'saxonRam' && <line x1="4" y1="-16" x2="9" y2="8" stroke="#241209" strokeWidth="2.4" strokeLinecap="round" />}
-        {type === 'saxonCatapult' && <line x1="4" y1="-16" x2="8" y2="7" stroke="#241209" strokeWidth="1.6" strokeLinecap="round" />}
-        {TOOL_SHAPES[type] && (
-          <>
-            <line x1="3.5" y1="-14" x2="6.5" y2="-8" stroke={c.body} strokeWidth="2.2" strokeLinecap="round" />
-            {TOOL_SHAPES[type]}
-          </>
-        )}
+        <line x1="3.8" y1="-16" x2="6.2" y2="-10.4" stroke={isSoldier ? '#8d959e' : c.body} strokeWidth="2.2" strokeLinecap="round" />
+        <circle cx="6.3" cy="-9.9" r="1.15" fill={c.skin} />
+        <HeldTool type={type} c={c} />
+      </g>
+      {type === 'saxonLadder' && (
+        // A siege ladder carried over the shoulders.
+        <g transform="translate(0,-19) rotate(-14)">
+          <line x1="-15" y1="-1.6" x2="14" y2="-1.6" stroke="#7a5530" strokeWidth="1.3" strokeLinecap="round" />
+          <line x1="-15" y1="1.6" x2="14" y2="1.6" stroke="#6b4a28" strokeWidth="1.3" strokeLinecap="round" />
+          {[-12, -7.5, -3, 1.5, 6, 10.5].map((x) => <line key={x} x1={x} y1="-1.6" x2={x} y2="1.6" stroke="#5a3d20" strokeWidth="0.9" />)}
+        </g>
+      )}
+    </g>
+  );
+}
+
+// Knights on horseback — the player's champions in crimson and gold, hostile knights in steel
+// and blood-red. A caparisoned horse, a great helm, a heater shield and a lance with pennant.
+function MountedFigure({ c, mode }) {
+  const walk = mode === 'walk' ? 'cb-hoof-walk' : '';
+  const horse = '#6b4a30', horseDark = '#4a3220';
+  // Positioned by the outer group; the inner one only swings (its own CSS rotation must not
+  // clash with the SVG translate, which a CSS transform would otherwise replace).
+  const hoof = (x, cls, op = 1) => (
+    <g transform={`translate(${x},0)`} opacity={op}>
+      <g className={`${cls} ${walk}`}>
+        <line x1="0" y1="0" x2="0" y2="6.6" stroke={horseDark} strokeWidth="2" strokeLinecap="round" />
+        <rect x="-1.2" y="6" width="2.4" height="1.6" fill="#2a1d12" />
+      </g>
+    </g>
+  );
+  return (
+    <g>
+      {/* far legs */}
+      <g transform="translate(-4,1)">{hoof(-1.2, 'cb-hoof-b', 0.7)}{hoof(9.6, 'cb-hoof-a', 0.7)}</g>
+      {/* tail */}
+      <path d="M -10.4 -3 Q -15 0 -12.6 7" stroke="#2e2014" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+      {/* body */}
+      <ellipse cx="0" cy="-1" rx="11" ry="4.8" fill={horse} stroke="#2e2014" strokeWidth="0.6" />
+      {/* near legs */}
+      <g transform="translate(-6,1.6)">{hoof(0, 'cb-hoof-a')}{hoof(11, 'cb-hoof-b')}</g>
+      {/* neck and head */}
+      <path d="M 6.6 -3.6 Q 10 -10.6 9.4 -14.4 Q 13.4 -15.2 15 -11.8 Q 16.4 -9.4 15.4 -7.4 L 12.4 -6.8 Q 11.4 -3.4 9.6 -1 Z" fill={horse} stroke="#2e2014" strokeWidth="0.6" />
+      <path d="M 9 -14 Q 6.6 -12 7 -6" stroke="#2e2014" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <path d="M 10.6 -14.8 L 10 -17.4 L 12.2 -15.2 Z" fill={horseDark} />
+      <circle cx="13" cy="-11.6" r="0.5" fill="#1a120a" />
+      {/* caparison: cloth draped over the horse in the rider's colours */}
+      <path d="M -10.6 -3.4 Q 0 -6.6 9 -4.6 L 9.8 2.6 Q 6 4.4 5.4 2.4 Q 2 4.6 0 2.4 Q -2.6 4.6 -4.4 2.4 Q -7.6 4.4 -10.2 2.6 Z" fill={c.body} stroke="rgba(15,10,6,0.55)" strokeWidth="0.6" />
+      <path d="M -10.2 2.2 Q -7.6 4 -4.4 2 Q -2.6 4.2 0 2 Q 2 4.2 5.4 2 Q 6 4 9.6 2.2" stroke={c.accent} strokeWidth="0.9" fill="none" />
+      {/* rider */}
+      <path d="M -3.6 -17 Q 0 -18.2 3.6 -17 L 4.2 -6.6 L -4.2 -6.6 Z" fill="#8d959e" stroke="#2c3238" strokeWidth="0.5" />
+      <path d="M -2.8 -16.4 L 2.8 -16.4 L 3.4 -7 L -3.4 -7 Z" fill={c.body} stroke="rgba(15,10,6,0.5)" strokeWidth="0.4" />
+      <path d="M -0.6 -15 h 1.2 v 2 h 2 v 1.2 h -2 v 3 h -1.2 v -3 h -2 v -1.2 h 2 Z" fill={c.accent} />
+      <line x1="2.6" y1="-7.4" x2="5" y2="-1.2" stroke="#5c636b" strokeWidth="2" strokeLinecap="round" />
+      {/* great helm with plume */}
+      <rect x="-3.2" y="-24.6" width="6.4" height="6.6" rx="1.4" fill="#a7afb8" stroke="#3a3f45" strokeWidth="0.6" />
+      <line x1="-2.6" y1="-21.6" x2="2.6" y2="-21.6" stroke="#1d2126" strokeWidth="0.9" />
+      <path d="M 0 -24.6 Q -1.6 -29 -5.4 -28.4 Q -2.6 -27.4 -1 -24.4 Z" fill={c.accent} />
+      {/* shield */}
+      <path d="M -8.6 -16 L -2.8 -16 L -3 -11 Q -5.7 -6.8 -5.7 -6.8 Q -8.6 -11 -8.6 -11 Z" fill={c.accent} stroke="#1c140c" strokeWidth="0.6" />
+      <path d="M -8.4 -13 L -3 -13" stroke={c.body} strokeWidth="1.6" />
+      {/* couched lance */}
+      <g className="cb-arm">
+        <line x1="2" y1="-12" x2="18" y2="-27" stroke="#6b4d2e" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M 17.2 -26.6 L 20 -29.6 L 18.6 -25.8 Z" fill="#aab0b6" />
+        <path d="M 15.6 -25 L 20.6 -24 L 16.6 -22.4 Z" fill={c.accent} />
       </g>
     </g>
   );
 }
 
+// Battering ram under a hide-covered shed on wheels; the iron-capped log swings on its ropes.
+function RamFigure() {
+  return (
+    <g>
+      <ellipse cx="0" cy="5" rx="17" ry="3.6" fill="rgba(0,0,0,0.18)" />
+      <g className="cb-ram-swing" style={{ transformOrigin: '0px -4px' }}>
+        <line x1="-6" y1="-9" x2="-7" y2="0" stroke="#3a2a18" strokeWidth="0.7" />
+        <line x1="6" y1="-9" x2="7" y2="0" stroke="#3a2a18" strokeWidth="0.7" />
+        <rect x="-13" y="-1.4" width="27" height="4.4" rx="2.2" fill="#6b4a2c" stroke="#2e1e10" strokeWidth="0.6" />
+        <path d="M 13 -1.6 Q 18.6 0.6 13 3.2 Z" fill="#7b8188" stroke="#2c3036" strokeWidth="0.6" />
+        <path d="M -9 -1.4 L -9 3 M -3 -1.4 L -3 3 M 3 -1.4 L 3 3" stroke="#3a2614" strokeWidth="0.6" />
+      </g>
+      {/* frame and wheels */}
+      <path d="M -13 2 L -11 -11 M 11 -11 L 13 2" stroke="#4a3018" strokeWidth="1.8" strokeLinecap="round" />
+      {[[-9.6, 4.6], [9.6, 4.6]].map(([x, y], k) => (
+        <g key={k}>
+          <circle cx={x} cy={y} r="3.6" fill="#4a3220" stroke="#1c120a" strokeWidth="0.8" />
+          <path d={`M ${x - 3.4} ${y} H ${x + 3.4} M ${x} ${y - 3.4} V ${y + 3.4}`} stroke="#2a1c10" strokeWidth="0.7" />
+          <circle cx={x} cy={y} r="0.9" fill="#8a8f94" />
+        </g>
+      ))}
+      {/* roof covered with hides */}
+      <path d="M -15 -7 L 0 -17 L 15 -7 L 13 -5 L -13 -5 Z" fill="#8a6a46" stroke="#3a2614" strokeWidth="0.8" strokeLinejoin="round" />
+      <path d="M 0 -17 L 15 -7 L 13 -5 L 0 -14 Z" fill="#6e5234" />
+      <path d="M -9 -10.6 L -4 -14 M -5 -8 L 1 -12.4 M 2 -7.6 L 7 -11 M -12 -6.4 L -8.6 -8.6" stroke="#4a3520" strokeWidth="0.5" strokeDasharray="1,0.8" />
+      <line x1="-15" y1="-7" x2="15" y2="-7" stroke="#3a2614" strokeWidth="0.7" />
+    </g>
+  );
+}
+
+// Trebuchet: A-frame tower on a wheeled base, a long throwing arm with a counterweight box at
+// the short end and a sling at the long end. The arm swings on the cb-catapult-arm cycle.
+function CatapultFigure() {
+  return (
+    <g>
+      <ellipse cx="0" cy="5" rx="18" ry="3.8" fill="rgba(0,0,0,0.18)" />
+      <rect x="-15" y="0" width="30" height="4" rx="1" fill="#5c4028" stroke="#2a1c10" strokeWidth="0.7" />
+      {[[-11, 5], [11, 5]].map(([x, y], k) => (
+        <g key={k}>
+          <circle cx={x} cy={y} r="3.2" fill="#3e2a18" stroke="#1c120a" strokeWidth="0.7" />
+          <circle cx={x} cy={y} r="0.8" fill="#8a8f94" />
+        </g>
+      ))}
+      {/* A-frame */}
+      <path d="M -10 1 L -1 -20 L 8 1" stroke="#5a3d22" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      <path d="M -6 -8 L 4 -8" stroke="#4a3018" strokeWidth="1.5" />
+      <path d="M -10 1 L 3 -20" stroke="#4a3018" strokeWidth="1.3" opacity="0.7" />
+      {/* throwing arm pivoting at the frame's apex */}
+      <g className="cb-catapult-arm" style={{ transformOrigin: '-1px -20px' }}>
+        <line x1="-9" y1="-14" x2="16" y2="-31" stroke="#3a2614" strokeWidth="2" strokeLinecap="round" />
+        <rect x="-13.6" y="-15" width="7.6" height="6.6" rx="0.8" fill="#6b5a44" stroke="#2a1c10" strokeWidth="0.7" transform="rotate(-34 -9.8 -11.7)" />
+        <path d="M 16 -31 Q 19 -24 15 -20" stroke="#c9b48a" strokeWidth="0.6" fill="none" />
+        <circle cx="15" cy="-19.6" r="2.2" fill="#8a8074" stroke="#4a443a" strokeWidth="0.5" />
+      </g>
+      <circle cx="-1" cy="-20" r="1.2" fill="#8a8f94" stroke="#2a2e32" strokeWidth="0.5" />
+    </g>
+  );
+}
+
+function PersonFigure({ type, mode }) {
+  const c = PERSON_COLORS[type] || PERSON_COLORS.laborer;
+  const bodyClass = mode === 'work' ? 'cb-person-work' : mode === 'walk' ? 'cb-person-walk' : 'cb-person-idle';
+  if (type === 'saxonRam') return <g className={bodyClass}><RamFigure /></g>;
+  if (type === 'saxonCatapult') return <g className={bodyClass}><CatapultFigure /></g>;
+  if (type === 'champion' || type === 'enemyKnight') return <g className={bodyClass}><MountedFigure c={c} mode={mode} /></g>;
+  return <g className={bodyClass}><FootFigure type={type} c={c} mode={mode} /></g>;
+}
+
+// The load a hauler carries on the shoulder: a cut stone block or a bundle of logs.
 function CarryIndicator({ resource }) {
   if (!resource) return null;
   return resource === 'stone'
-    ? <circle cx="0" cy="-27" r="3" fill="#8a8074" stroke="#4a453b" strokeWidth="0.6" />
-    : <rect x="-4" y="-29" width="8" height="3" rx="1" fill="#8a6a42" stroke="#4a453b" strokeWidth="0.6" />;
+    ? (
+      <g transform="translate(0,-3)">
+        <polygon points="-4,-27 0,-29 4,-27 0,-25" fill="#cfc4a8" stroke="#5c5446" strokeWidth="0.5" />
+        <polygon points="-4,-27 0,-25 0,-22 -4,-24" fill="#ab9f84" stroke="#5c5446" strokeWidth="0.5" />
+        <polygon points="4,-27 0,-25 0,-22 4,-24" fill="#8a7f68" stroke="#5c5446" strokeWidth="0.5" />
+      </g>
+    )
+    : (
+      <g transform="translate(0,-3) rotate(-12 0 -25)">
+        {[-26.4, -23.8].map((y, k) => (
+          <g key={k}>
+            <rect x="-7" y={y - 1.3} width="13" height="2.6" rx="1.3" fill="#8a6338" stroke="#4a3018" strokeWidth="0.5" />
+            <ellipse cx="6" cy={y} rx="1" ry="1.3" fill="#d6b07a" stroke="#4a3018" strokeWidth="0.4" />
+          </g>
+        ))}
+      </g>
+    );
 }
 
 function WorkerSprite({ i, j, type, mode, carrying, haulResource }) {
@@ -2750,49 +3008,6 @@ function slotOffset(anchor, slot) {
   return { i: anchor.i + dx, j: anchor.j + 0.38 };
 }
 
-function buildBlockedEdges(structures) {
-  const list = [...WATER_BLOCKED_EDGES];
-  const castleCenterI = (structures.keep && structures.keep.stage === 'done') ? structures.keep.i : DEPOT_I;
-  const castleCenterJ = (structures.keep && structures.keep.stage === 'done') ? structures.keep.j : DEPOT_J;
-  Object.values(structures).forEach((s) => {
-    if (s.type === 'wall' && s.stage === 'done' && s.diagonal) {
-      // A diagonal wall piece isn't part of the worker pathing graph (which only understands
-      // the four axis-aligned tile-boundary edges) — rather than teach it a whole new kind of
-      // edge, the simplest safe fix is to treat the diagonal's own tile as fully walled off
-      // for routing purposes, same as if all four of its sides were built. Workers go around
-      // the tile instead of (incorrectly) routing straight through the middle of it.
-      const ti = Math.min(s.i1, s.i2), tj = Math.min(s.j1, s.j2);
-      list.push({ i1: ti, j1: tj, i2: ti + 1, j2: tj });
-      list.push({ i1: ti, j1: tj + 1, i2: ti + 1, j2: tj + 1 });
-      list.push({ i1: ti, j1: tj, i2: ti, j2: tj + 1 });
-      list.push({ i1: ti + 1, j1: tj, i2: ti + 1, j2: tj + 1 });
-    } else if (s.type === 'wall' && s.stage === 'done') {
-      list.push({ i1: s.i1, j1: s.j1, i2: s.i2, j2: s.j2 });
-    } else if (s.type === 'gate' && s.stage === 'done' && !s.doorOpen && s.diagonal) {
-      // Same reasoning as a diagonal wall: a shut diagonal gate blocks its whole tile for
-      // routing purposes, not just its own corner-to-corner line the pathing graph can't
-      // represent directly.
-      const ti = Math.min(s.i1, s.i2), tj = Math.min(s.j1, s.j2);
-      list.push({ i1: ti, j1: tj, i2: ti + 1, j2: tj });
-      list.push({ i1: ti, j1: tj + 1, i2: ti + 1, j2: tj + 1 });
-      list.push({ i1: ti, j1: tj, i2: ti, j2: tj + 1 });
-      list.push({ i1: ti + 1, j1: tj, i2: ti + 1, j2: tj + 1 });
-    } else if (s.type === 'gate' && s.stage === 'done' && !s.doorOpen) {
-      // A finished gate blocks movement exactly like a wall while its doors are shut.
-      list.push({ i1: s.i1, j1: s.j1, i2: s.i2, j2: s.j2 });
-    } else if (s.type === 'graben' && s.stage === 'done') {
-      // A finished ditch blocks movement just like a wall — workers have to go around via
-      // the gate. Exception: an open gate one tile behind this exact segment bridges it
-      // with its drawbridge, so the ditch stops blocking right there while that gate is open.
-      const key = `${s.i1},${s.j1}-${s.i2},${s.j2}`;
-      const bridged = Object.values(structures).some((g) => g.type === 'gate' && g.stage === 'done' && g.doorOpen
-        && gateBridgedGrabenKey(g, castleCenterI, castleCenterJ) === key);
-      if (!bridged) list.push({ i1: s.i1, j1: s.j1, i2: s.i2, j2: s.j2 });
-    }
-  });
-  return list;
-}
-
 // Which side of a gate its drawbridge lays down on — always away from the castle interior.
 // Shared by both the visual bridge (WallNode) and the movement/blocking logic above, so the
 // two always agree on which moat segment (if any) a given gate is actually spanning.
@@ -2856,21 +3071,6 @@ function autoMoatEdges(structures) {
   return out;
 }
 
-// Finished towers stand right on a grid vertex and should be solid — workers walking
-// straight past that corner (or worse, straight through it) used to just clip through the
-// building. The keep is the same idea but bigger: its footprint covers the four grid
-// vertices at its corners, not just one. Each obstacle's vertex/vertices are only ever
-// forbidden as a *pass-through* waypoint (see bfsGridPath below); never a worker's actual
-// destination, so there's no risk of the old "isolated, unreachable node" bug that a blanket
-// edge-block used to cause.
-function buildPointObstacles(structures) {
-  const list = [];
-  Object.values(structures).forEach((s) => {
-    if (s.type === 'tower' && s.stage === 'done') list.push({ i: s.i, j: s.j, radius: 0.42 });
-    if (s.type === 'keep' && s.stage === 'done') list.push({ i: s.i, j: s.j, radius: 0.78 });
-  });
-  return list;
-}
 function pointSegmentDistance(pt, a, b) {
   const abi = b.i - a.i, abj = b.j - a.j;
   const lenSq = abi * abi + abj * abj;
@@ -2896,159 +3096,263 @@ function segmentsIntersect(p1, p2, p3, p4) {
   if (Math.abs(d4) < 1e-9 && onSeg(p1, p4, p2)) return true;
   return false;
 }
-function lineCrossesWall(fromI, fromJ, toI, toJ, blockedEdgeList) {
-  // Shrinking the tested segment slightly inward from BOTH ends, rather than trying to special
-  // -case every wall edge that happens to touch one of its endpoints, sidesteps the whole class
-  // of "touches a corner exactly" numerical edge cases that kept causing false positives (and
-  // froze workers solid) — a segment that no longer touches any lattice point exactly can't
-  // trigger segmentsIntersect's touching-endpoint branch by accident. A genuine crossing
-  // through a wall's interior, by contrast, still crosses well within the shrunk segment too,
-  // so real blocking is unaffected.
-  const dx = toI - fromI, dy = toJ - fromJ;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-9) return false;
-  const inset = Math.min(0.08, len * 0.15);
-  const ux = dx / len, uy = dy / len;
-  const p1 = { i: fromI + ux * inset, j: fromJ + uy * inset };
-  const p2 = { i: toI - ux * inset, j: toJ - uy * inset };
-  for (const e of blockedEdgeList) {
-    if (segmentsIntersect(p1, p2, { i: e.i1, j: e.j1 }, { i: e.i2, j: e.j2 })) return true;
-  }
-  return false;
+// ============================================================================================
+// NAVIGATION — tile-based routing shared by workers and attackers.
+//
+// The map's walls, gates and ditches all sit ON the lines between tiles, so the natural
+// walking graph is the tiles themselves: a worker steps from tile centre to tile centre and a
+// wall simply cuts the connection between the two tiles it separates. (The old router walked
+// along the tile *corners* instead — i.e. right along the wall lines — which let routes slip
+// through the joint between two wall pieces and then froze the worker there when the per-step
+// safety check caught it.) Diagonal steps are allowed only when both "L-shaped" detours are
+// open too, so nobody ever squeezes through a wall corner or past the edge of a tower.
+// Finished buildings (keep, amenities), diagonal walls and the river occupy whole tiles.
+// ============================================================================================
+const NAV_W = GRID_COLS, NAV_H = GRID_ROWS;
+const NAV_TOWER_R = 0.4;
+function navIdx(ci, cj) { return cj * NAV_W + ci; }
+function navCellOf(i, j) {
+  return [Math.min(NAV_W - 1, Math.max(0, Math.floor(i))), Math.min(NAV_H - 1, Math.max(0, Math.floor(j)))];
 }
-function lineBlocked(fromI, fromJ, toI, toJ, blockedEdgeList, pointObstacles) {
-  if (lineCrossesWall(fromI, fromJ, toI, toJ, blockedEdgeList)) return true;
-  if (pointObstacles && pointObstacles.length) {
-    const p1 = { i: fromI, j: fromJ }, p2 = { i: toI, j: toJ };
-    for (const o of pointObstacles) {
-      if (pointSegmentDistance(o, p1, p2) < o.radius) return true;
+function makeNavGrid() {
+  const nav = {
+    // vEdge[j*(W+1)+i]: line x=i between y=j..j+1   hEdge[j*W+i]: line y=j between x=i..i+1
+    vEdge: new Float64Array((NAV_W + 1) * NAV_H),
+    hEdge: new Float64Array(NAV_W * (NAV_H + 1)),
+    cell: new Float64Array(NAV_W * NAV_H),
+    vObs: new Int32Array((NAV_W + 1) * NAV_H).fill(-1),
+    hObs: new Int32Array(NAV_W * (NAV_H + 1)).fill(-1),
+    cObs: new Int32Array(NAV_W * NAV_H).fill(-1),
+    vtx: new Uint8Array((NAV_W + 1) * (NAV_H + 1)),
+    towers: [],
+    sig: [],
+  };
+  for (let j = 0; j < NAV_H; j++) for (let i = 0; i < NAV_W; i++) if (TERRAIN[j][i] === 'water') nav.cell[navIdx(i, j)] = Infinity;
+  return nav;
+}
+// Put a cost on crossing a wall-like edge (Infinity = impassable). Long runs are split into
+// unit steps; diagonal pieces close off the tile they cut across instead.
+function navBlockEdge(nav, i1, j1, i2, j2, cost, obsIdx = -1) {
+  if (i1 !== i2 && j1 !== j2) {
+    const k = navIdx(Math.min(i1, i2), Math.min(j1, j2));
+    if (k >= 0 && k < nav.cell.length) { nav.cell[k] = Math.max(nav.cell[k], cost); nav.cObs[k] = obsIdx; }
+    return;
+  }
+  if (j1 === j2) {
+    if (j1 < 0 || j1 > NAV_H) return;
+    for (let i = Math.min(i1, i2); i < Math.max(i1, i2); i++) {
+      if (i < 0 || i >= NAV_W) continue;
+      const k = j1 * NAV_W + i;
+      nav.hEdge[k] = Math.max(nav.hEdge[k], cost); nav.hObs[k] = obsIdx;
+    }
+  } else {
+    if (i1 < 0 || i1 > NAV_W) return;
+    for (let j = Math.min(j1, j2); j < Math.max(j1, j2); j++) {
+      if (j < 0 || j >= NAV_H) continue;
+      const k = j * (NAV_W + 1) + i1;
+      nav.vEdge[k] = Math.max(nav.vEdge[k], cost); nav.vObs[k] = obsIdx;
     }
   }
-  return false;
+}
+function navAddTower(nav, i, j) {
+  if (i < 0 || i > NAV_W || j < 0 || j > NAV_H) return;
+  nav.vtx[j * (NAV_W + 1) + i] = 1;
+  nav.towers.push({ i, j });
+}
+// Cost of the line between two orthogonally adjacent tiles (a → a + (di,dj)).
+function navEdgeCost(nav, ci, cj, di, dj) {
+  if (di === 1) return nav.vEdge[cj * (NAV_W + 1) + ci + 1];
+  if (di === -1) return nav.vEdge[cj * (NAV_W + 1) + ci];
+  if (dj === 1) return nav.hEdge[(cj + 1) * NAV_W + ci];
+  return nav.hEdge[cj * NAV_W + ci];
+}
+function navEdgeObs(nav, ci, cj, di, dj) {
+  if (di === 1) return nav.vObs[cj * (NAV_W + 1) + ci + 1];
+  if (di === -1) return nav.vObs[cj * (NAV_W + 1) + ci];
+  if (dj === 1) return nav.hObs[(cj + 1) * NAV_W + ci];
+  return nav.hObs[cj * NAV_W + ci];
+}
+function navInside(ci, cj) { return ci >= 0 && ci < NAV_W && cj >= 0 && cj < NAV_H; }
+// Extra cost of entering tile (ci,cj) — Infinity if it's solid. The start and goal tiles are
+// always enterable (a worker may be standing in a just-finished building, or be delivering to
+// the warehouse that fills its tile).
+function navCellCost(nav, ci, cj, exA, exB) {
+  const k = navIdx(ci, cj);
+  if (k === exA || k === exB) return 0;
+  return nav.cell[k];
+}
+// Cost of one step between neighbouring tiles, or Infinity. Diagonal steps must be completely
+// free (no wall either side, no tower on the corner they pass) — anything breakable has to be
+// crossed head-on through a straight step.
+function navStepCost(nav, ci, cj, di, dj, exA, exB) {
+  const ni = ci + di, nj = cj + dj;
+  if (!navInside(ni, nj)) return Infinity;
+  const enter = navCellCost(nav, ni, nj, exA, exB);
+  if (enter === Infinity) return Infinity;
+  if (di === 0 || dj === 0) {
+    const e = navEdgeCost(nav, ci, cj, di, dj);
+    return e === Infinity ? Infinity : 1 + e + enter;
+  }
+  if (enter > 0) return Infinity;
+  const vx = ci + (di > 0 ? 1 : 0), vy = cj + (dj > 0 ? 1 : 0);
+  if (nav.vtx[vy * (NAV_W + 1) + vx]) return Infinity;
+  if (navCellCost(nav, ci + di, cj, exA, exB) !== 0 || navCellCost(nav, ci, cj + dj, exA, exB) !== 0) return Infinity;
+  if (navEdgeCost(nav, ci, cj, di, 0) !== 0 || navEdgeCost(nav, ci, cj, 0, dj) !== 0) return Infinity;
+  if (navEdgeCost(nav, ci + di, cj, 0, dj) !== 0 || navEdgeCost(nav, ci, cj + dj, di, 0) !== 0) return Infinity;
+  return Math.SQRT2;
+}
+const NAV_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+// A* over tiles. Returns the list of tile indices from start to goal — or, when the goal is
+// walled off completely, to whichever reachable tile lies closest to it (so a worker waits at
+// the wall nearest its job instead of freezing wherever it happened to be standing).
+function navAStar(nav, sci, scj, gci, gcj) {
+  const N = NAV_W * NAV_H;
+  const start = navIdx(sci, scj), goal = navIdx(gci, gcj);
+  if (start === goal) return { cells: [start], reached: true };
+  const g = new Float64Array(N).fill(Infinity);
+  const came = new Int32Array(N).fill(-1);
+  const closed = new Uint8Array(N);
+  const heap = [];
+  const h = (k) => { const dx = Math.abs((k % NAV_W) - gci), dy = Math.abs(Math.floor(k / NAV_W) - gcj); return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy); };
+  const push = (k, f) => {
+    heap.push([f, k]);
+    let n = heap.length - 1;
+    while (n > 0) { const p = (n - 1) >> 1; if (heap[p][0] <= heap[n][0]) break; [heap[p], heap[n]] = [heap[n], heap[p]]; n = p; }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let n = 0;
+      for (;;) {
+        const l = 2 * n + 1, r = l + 1;
+        let m = n;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === n) break;
+        [heap[m], heap[n]] = [heap[n], heap[m]]; n = m;
+      }
+    }
+    return top;
+  };
+  g[start] = 0;
+  push(start, h(start));
+  let best = start, bestH = h(start);
+  while (heap.length) {
+    const [, k] = pop();
+    if (closed[k]) continue;
+    closed[k] = 1;
+    if (k === goal) break;
+    const hk = h(k);
+    if (hk < bestH) { bestH = hk; best = k; }
+    const ci = k % NAV_W, cj = Math.floor(k / NAV_W);
+    for (const [di, dj] of NAV_DIRS) {
+      const c = navStepCost(nav, ci, cj, di, dj, start, goal);
+      if (c === Infinity) continue;
+      const nk = navIdx(ci + di, cj + dj);
+      const ng = g[k] + c;
+      if (ng < g[nk]) { g[nk] = ng; came[nk] = k; push(nk, ng + h(nk)); }
+    }
+  }
+  const reached = g[goal] < Infinity;
+  const end = reached ? goal : best;
+  const cells = [];
+  for (let k = end; k !== -1; k = came[k]) { cells.push(k); if (k === start) break; }
+  cells.reverse();
+  return { cells, reached };
+}
+function navCenter(k) { return { i: (k % NAV_W) + 0.5, j: Math.floor(k / NAV_W) + 0.5 }; }
+
+// Is the straight line a→b walkable? Traverses exactly the tiles the line passes through and
+// checks every tile boundary it crosses (free crossings only), every tile it enters, and keeps
+// a little clearance from towers. Tiles exA/exB are exempt (start and goal).
+function navLineClear(nav, a, b, exA = -1, exB = -1) {
+  const dx = b.i - a.i, dy = b.j - a.j;
+  let [ci, cj] = navCellOf(a.i, a.j);
+  const [ei, ej] = navCellOf(b.i, b.j);
+  const sx = dx > 0 ? 1 : dx < 0 ? -1 : 0, sy = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+  let tMaxX = sx === 0 ? Infinity : ((sx > 0 ? ci + 1 : ci) - a.i) / dx;
+  let tMaxY = sy === 0 ? Infinity : ((sy > 0 ? cj + 1 : cj) - a.j) / dy;
+  const tDX = sx === 0 ? Infinity : Math.abs(1 / dx), tDY = sy === 0 ? Infinity : Math.abs(1 / dy);
+  let guard = 0;
+  while ((ci !== ei || cj !== ej) && guard++ < 200) {
+    if (Math.min(tMaxX, tMaxY) > 1 + 1e-9) break;
+    if (Math.abs(tMaxX - tMaxY) < 1e-9) {
+      if (navStepCost(nav, ci, cj, sx, sy, exA, exB) === Infinity) return false;
+      ci += sx; cj += sy; tMaxX += tDX; tMaxY += tDY;
+    } else if (tMaxX < tMaxY) {
+      if (navEdgeCost(nav, ci, cj, sx, 0) !== 0 || navCellCost(nav, ci + sx, cj, exA, exB) !== 0) return false;
+      ci += sx; tMaxX += tDX;
+    } else {
+      if (navEdgeCost(nav, ci, cj, 0, sy) !== 0 || navCellCost(nav, ci, cj + sy, exA, exB) !== 0) return false;
+      cj += sy; tMaxY += tDY;
+    }
+    if (!navInside(ci, cj)) return false;
+  }
+  for (const t of nav.towers) {
+    if (Math.abs(t.i - a.i) > 1.5 + Math.abs(dx) || Math.abs(t.j - a.j) > 1.5 + Math.abs(dy)) continue;
+    if (Math.hypot(a.i - t.i, a.j - t.j) < NAV_TOWER_R || Math.hypot(b.i - t.i, b.j - t.j) < NAV_TOWER_R) continue;
+    if (pointSegmentDistance(t, a, b) < NAV_TOWER_R) return false;
+  }
+  return true;
+}
+// Turn a tile route into a short list of waypoints by pulling the string tight: from each
+// point, jump straight to the farthest later point that's still in clear line of sight.
+function navSmooth(nav, pts, exA, exB) {
+  const out = [];
+  let cur = 0;
+  while (cur < pts.length - 1) {
+    let next = cur + 1;
+    for (let k = pts.length - 1; k > cur + 1; k--) {
+      if (navLineClear(nav, pts[cur], pts[k], exA, exB)) { next = k; break; }
+    }
+    out.push(pts[next]);
+    cur = next;
+  }
+  return out;
 }
 
-function edgeKeyN(i1, j1, i2, j2) {
-  if (i1 < i2 || (i1 === i2 && j1 < j2)) return `${i1},${j1}-${i2},${j2}`;
-  return `${i2},${j2}-${i1},${j1}`;
-}
-function bfsGridPath(blockedSet, start, end, pointObstacles) {
-  const startKey = `${start.i},${start.j}`;
-  const endKey = `${end.i},${end.j}`;
-  if (startKey === endKey) return [];
-  // A vertex sitting inside any point obstacle's radius (a tower's own corner, or one of the
-  // keep's four footprint corners) may never be used as a waypoint to somewhere else — but
-  // it's still fair game if it genuinely is the destination itself.
-  const vertexBlocked = (v, key) => key !== endKey && !!pointObstacles && pointObstacles.some((o) => Math.hypot(v.i - o.i, v.j - o.j) < o.radius);
-  const visited = new Set([startKey]);
-  const prev = {};
-  const queue = [start];
-  let qi = 0;
-  let found = false;
-  while (qi < queue.length) {
-    const cur = queue[qi++];
-    const curKey = `${cur.i},${cur.j}`;
-    if (curKey === endKey) { found = true; break; }
-    const neighbors = [{ i: cur.i + 1, j: cur.j }, { i: cur.i - 1, j: cur.j }, { i: cur.i, j: cur.j + 1 }, { i: cur.i, j: cur.j - 1 }];
-    for (const n of neighbors) {
-      if (n.i < 0 || n.i > GRID_COLS || n.j < 0 || n.j > GRID_ROWS) continue;
-      const nKey = `${n.i},${n.j}`;
-      if (visited.has(nKey)) continue;
-      if (blockedSet.has(edgeKeyN(cur.i, cur.j, n.i, n.j))) continue;
-      if (vertexBlocked(n, nKey)) continue;
-      visited.add(nKey);
-      prev[nKey] = curKey;
-      queue.push(n);
+// Everything a builder has to walk around: finished walls, shut gates, un-bridged ditches,
+// towers, the keep and finished buildings, plus the river.
+function buildWorkerNav(structures) {
+  const nav = makeNavGrid();
+  const castleCenterI = (structures.keep && structures.keep.stage === 'done') ? structures.keep.i : DEPOT_I;
+  const castleCenterJ = (structures.keep && structures.keep.stage === 'done') ? structures.keep.j : DEPOT_J;
+  Object.entries(structures).forEach(([key, s]) => {
+    if (s.stage !== 'done') return;
+    if (s.type === 'wall' || (s.type === 'gate' && !s.doorOpen)) {
+      navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity);
+      nav.sig.push(key);
+    } else if (s.type === 'graben') {
+      const gkey = `${s.i1},${s.j1}-${s.i2},${s.j2}`;
+      const bridged = Object.values(structures).some((g) => g.type === 'gate' && g.stage === 'done' && g.doorOpen
+        && gateBridgedGrabenKey(g, castleCenterI, castleCenterJ) === gkey);
+      if (!bridged) { navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity); nav.sig.push(key); }
+    } else if (s.type === 'tower') {
+      navAddTower(nav, s.i, s.j);
+      nav.sig.push(key);
+    } else if (s.type === 'keep' || s.type === 'amenity') {
+      nav.cell[navIdx(...navCellOf(s.i, s.j))] = Infinity;
+      nav.sig.push(key);
     }
-  }
-  if (!found) return null;
-  const path = [];
-  let ck = endKey;
-  while (ck !== startKey) {
-    const [pi, pj] = ck.split(',').map(Number);
-    path.unshift({ i: pi, j: pj });
-    ck = prev[ck];
-    if (!ck) return null;
-  }
-  return path;
+  });
+  nav.signature = nav.sig.sort().join('|');
+  return nav;
 }
-// Math.round(fromI/fromJ) alone can round a worker's real (fractional) position onto the
-// wrong side of a nearby wall — e.g. they're standing just outside a wall face but the
-// nearest grid vertex happens to be just inside it. Picking, among the four lattice points
-// surrounding the worker, the closest one actually reachable in a straight line avoids
-// spawning a route that starts by clipping through that same wall.
-function nearestGraphVertex(fromI, fromJ, blockedEdgeList, pointObstacles) {
-  const candidates = [
-    { i: Math.floor(fromI), j: Math.floor(fromJ) },
-    { i: Math.ceil(fromI), j: Math.floor(fromJ) },
-    { i: Math.floor(fromI), j: Math.ceil(fromJ) },
-    { i: Math.ceil(fromI), j: Math.ceil(fromJ) },
-  ];
-  let best = null, bestD = Infinity, fallback = null, fallbackD = Infinity;
-  for (const c of candidates) {
-    const d = distance({ i: fromI, j: fromJ }, c);
-    if (d < fallbackD) { fallbackD = d; fallback = c; }
-    // Checking the full obstacle set here (walls AND towers/keep), not just walls, matters
-    // right at a tower base: without it, a worker standing just outside a tower could pick
-    // that tower's own vertex as its jumping-off point even though the straight hop to it
-    // actually clips the tower's rounded footprint — and from there every route the BFS finds
-    // still starts with that one bad, unverified step.
-    if (!lineBlocked(fromI, fromJ, c.i, c.j, blockedEdgeList, pointObstacles) && d < bestD) { bestD = d; best = c; }
-  }
-  return best || fallback;
-}
-// Mirror of nearestGraphVertex, but for the destination side of a route: which of the lattice
-// points around the actual target (a construction site's slot position, say) can be reached
-// by a straight, obstacle-free hop. Building sites are routinely placed right against a tower
-// or the keep — their anchor point can sit close enough to fall inside that building's own
-// point-obstacle radius — so the very last leg of a route needs the same verification the BFS
-// already gives every other leg, instead of being appended on blind faith.
-function nearestClearVertexToTarget(toI, toJ, blockedEdgeList, pointObstacles) {
-  const candidates = [
-    { i: Math.floor(toI), j: Math.floor(toJ) },
-    { i: Math.ceil(toI), j: Math.floor(toJ) },
-    { i: Math.floor(toI), j: Math.ceil(toJ) },
-    { i: Math.ceil(toI), j: Math.ceil(toJ) },
-  ];
-  let best = null, bestD = Infinity, fallback = null, fallbackD = Infinity;
-  for (const c of candidates) {
-    const d = distance({ i: toI, j: toJ }, c);
-    if (d < fallbackD) { fallbackD = d; fallback = c; }
-    if (!lineBlocked(toI, toJ, c.i, c.j, blockedEdgeList, pointObstacles) && d < bestD) { bestD = d; best = c; }
-  }
-  return best || fallback;
-}
-function computeWorkerPath(fromI, fromJ, toI, toJ, blockedEdgeList, pointObstacles) {
-  if (blockedEdgeList.length === 0 && (!pointObstacles || pointObstacles.length === 0)) return null;
-  if (!lineBlocked(fromI, fromJ, toI, toJ, blockedEdgeList, pointObstacles)) return null;
-  const blockedSet = new Set(blockedEdgeList.map((e) => edgeKeyN(e.i1, e.j1, e.i2, e.j2)));
-  const start = nearestGraphVertex(fromI, fromJ, blockedEdgeList, pointObstacles);
-  const end = { i: Math.round(toI), j: Math.round(toJ) };
-  const gridPath = bfsGridPath(blockedSet, start, end, pointObstacles);
-  // No legal route exists at all (e.g. sealed inside a closed ring) — previously this fell
-  // back to unobstructed straight-line movement, which meant workers simply walked through
-  // the wall. An empty array is a distinct "hold position, don't cross" signal (as opposed
-  // to null, which means "no obstacle in the way, walk straight").
-  if (!gridPath) return [];
-  // Prepend `start` itself: nearestGraphVertex only guarantees the segment from the worker's
-  // real (fractional) position to `start` is obstacle-free, not the next hop from `start` to
-  // `gridPath[0]` as seen from the worker's actual position. Walking to `start` first, then
-  // strictly along BFS-verified grid edges from there, closes that gap.
-  const lastGridVertex = gridPath.length ? gridPath[gridPath.length - 1] : start;
-  // The final leg — from the last BFS-verified grid vertex to the worker's actual, fractional
-  // destination — used to be taken on faith. Right beside a tower or the keep, that faith was
-  // often misplaced: the destination slot can sit close enough to the building's rounded
-  // footprint that this "last mile" hop clips it, and since nothing downstream ever revisits
-  // an already-computed path, the worker just parks at ARRIVE_EPS from a target it can never
-  // actually reach — frozen for good, not just for a tick. If that leg is blocked, route
-  // through whichever lattice point around the destination itself is actually reachable
-  // in a straight line first.
-  if (lineBlocked(lastGridVertex.i, lastGridVertex.j, toI, toJ, blockedEdgeList, pointObstacles)) {
-    const approach = nearestClearVertexToTarget(toI, toJ, blockedEdgeList, pointObstacles);
-    if (approach && (approach.i !== lastGridVertex.i || approach.j !== lastGridVertex.j)) {
-      return [start, ...gridPath, approach, { i: toI, j: toJ }];
-    }
-  }
-  return [start, ...gridPath, { i: toI, j: toJ }];
+
+// Route a worker from where it stands to (toI,toJ). null = walk straight, it's clear.
+// Otherwise a list of waypoints; when the target is sealed off completely the route ends at
+// the closest reachable spot instead.
+function computeWorkerPath(fromI, fromJ, toI, toJ, nav) {
+  const from = { i: fromI, j: fromJ }, to = { i: toI, j: toJ };
+  const [sci, scj] = navCellOf(fromI, fromJ);
+  const [gci, gcj] = navCellOf(toI, toJ);
+  const exA = navIdx(sci, scj), exB = navIdx(gci, gcj);
+  if (navLineClear(nav, from, to, exA, exB)) return null;
+  const { cells, reached } = navAStar(nav, sci, scj, gci, gcj);
+  const pts = [from, ...cells.map(navCenter)];
+  if (reached) pts.push(to);
+  return navSmooth(nav, pts, exA, exB);
 }
 
 function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, haulPriority, fleeMode, treesIn, rocksIn, currentDay) {
@@ -3183,15 +3487,10 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
 
   const availPile = { ...pilesIn };
   let deliveredStone = 0, deliveredWood = 0;
-  const blockedEdges = buildBlockedEdges(structures);
-  const pointObstacles = buildPointObstacles(structures);
-  // A real content signature, not just a count — two different obstacle layouts with the
-  // same total edge/tower count used to hash identically, which meant a worker's cached
-  // route wasn't recomputed even though a wall had just gone up (or come down) somewhere
-  // else, and they'd walk straight through the change until their route happened to be
-  // invalidated for some unrelated reason.
-  const wallSignature = blockedEdges.map((e) => edgeKeyN(e.i1, e.j1, e.i2, e.j2)).sort().join(',')
-    + '|' + pointObstacles.map((o) => `${o.i},${o.j},${o.radius}`).sort().join(',');
+  const nav = buildWorkerNav(structures);
+  // A real content signature of everything that blocks movement — a worker's cached route is
+  // recomputed the moment a wall goes up (or comes down), a gate opens, or a building finishes.
+  const wallSignature = nav.signature;
 
   workingList = workingList.map((w) => {
     let targetPos, targetKey;
@@ -3213,8 +3512,10 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
 
     let path = w.path, pathIdx = w.pathIdx || 0;
     const cacheKey = `${targetKey}|${wallSignature}`;
-    if (w.pathTargetKey !== cacheKey) {
-      path = computeWorkerPath(w.curI, w.curJ, targetPos.i, targetPos.j, blockedEdges, pointObstacles);
+    // Recompute when the target or the obstacles changed — and, as a safety valve, whenever a
+    // worker has made no headway for a while although it isn't where it's meant to be.
+    if (w.pathTargetKey !== cacheKey || (w.stuckTicks || 0) >= 12) {
+      path = computeWorkerPath(w.curI, w.curJ, targetPos.i, targetPos.j, nav);
       pathIdx = 0;
     }
 
@@ -3230,35 +3531,27 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
 
     const d = distance(cur, moveTarget);
     let newI = w.curI, newJ = w.curJ;
+    let forceReplan = false;
     if (d > 0.001) {
       const t = Math.min(1, SPEED_PER_TICK / d);
       newI = w.curI + (moveTarget.i - w.curI) * t;
       newJ = w.curJ + (moveTarget.j - w.curJ) * t;
-      // Last-resort safety net: whatever produced moveTarget, never actually take a step that
-      // cuts through a wall OR clips a tower/keep this tick (lineCrossesWall insets its tested
-      // segment specifically so this doesn't misfire right at a wall corner — see its own
-      // comment). This used to only check walls, so a worker approaching its final target
-      // right next to a tower could still be walked straight into its footprint by the
-      // per-tick mover even though the path-planning side now goes out of its way to avoid
-      // that. The one deliberate exception is the very last leg of the route, straight into
-      // the worker's actual destination: a construction slot or gathering spot is routinely
-      // placed right against a tower or the keep, so it can legitimately sit inside that
-      // building's point-obstacle radius, and checking towers on that specific leg would just
-      // recreate the freeze this whole fix is meant to remove — that final approach only needs
-      // to stay out of actual walls. Worst case the worker stands still for a moment while the
-      // path catches up next tick, which reads far better than visibly clipping through the
-      // stonework.
-      const isFinalLeg = !path || path.length === 0 || pathIdx >= path.length - 1;
-      const stepBlocked = isFinalLeg
-        ? lineCrossesWall(cur.i, cur.j, newI, newJ, blockedEdges)
-        : lineBlocked(cur.i, cur.j, newI, newJ, blockedEdges, pointObstacles);
+      // Never take a step through a wall, a shut gate or into a solid building. With proper
+      // routes this shouldn't trigger; if it ever does (say a wall was just completed right
+      // where someone was walking), the worker stays put and re-plans on the next tick.
+      const [sci, scj] = navCellOf(cur.i, cur.j);
+      const [gci, gcj] = navCellOf(targetPos.i, targetPos.j);
+      const stepBlocked = !navLineClear(nav, cur, { i: newI, j: newJ }, navIdx(sci, scj), navIdx(gci, gcj));
+      if (stepBlocked) forceReplan = true;
       if (stepBlocked) { newI = w.curI; newJ = w.curJ; }
     }
     if (path && pathIdx < path.length && distance({ i: newI, j: newJ }, moveTarget) < ARRIVE_EPS) {
       pathIdx += 1;
     }
     const atTarget = distance({ i: newI, j: newJ }, targetPos) < ARRIVE_EPS;
-    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: cacheKey };
+    const madeProgress = Math.abs(newI - w.curI) + Math.abs(newJ - w.curJ) > 0.004;
+    const stuckTicks = atTarget || madeProgress ? 0 : ((w.stuckTicks || 0) >= 12 ? 0 : (w.stuckTicks || 0) + 1);
+    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: forceReplan ? null : cacheKey, stuckTicks };
 
     if (fleeMode) return next;
 
@@ -3439,7 +3732,7 @@ function isCastleEnclosed(structures) {
   const blockedEdges = new Set();
   Object.values(structures).forEach((s) => {
     if ((s.type === 'wall' || s.type === 'gate') && s.stage === 'done' && s.diagonal) {
-      // Same reasoning as buildBlockedEdges: a diagonal wall/gate piece blocks its whole tile
+      // A diagonal wall/gate piece blocks its whole tile
       // for this flood-fill's purposes rather than a real edge the fill would ever step along.
       const ti = Math.min(s.i1, s.i2), tj = Math.min(s.j1, s.j2);
       [[ti, tj, ti + 1, tj], [ti, tj + 1, ti + 1, tj + 1], [ti, tj, ti, tj + 1], [ti + 1, tj, ti + 1, tj + 1]].forEach(([a, b, c, d]) => {
@@ -3656,6 +3949,56 @@ function distance2(a, b) {
 const ENGAGE_RADIUS = 1.1;
 const MAX_BATTLE_TICKS = 600;
 
+
+// Battle routing: the same tile graph as the workers', but walls, gates and ditches are not
+// impassable — they cost extra in proportion to how much punishment they can still take. The
+// cheapest route therefore runs through an open gap or an existing breach whenever there is
+// one, and otherwise through the weakest point. The first intact obstacle along that route is
+// what the attacker has to smash (or, for ladder crews, climb).
+function buildBattleNav(obstacles, keepPos, mode) {
+  const nav = makeNavGrid();
+  obstacles.forEach((o, idx) => {
+    if (o.isPoint) { if (o.type === 'tower') navAddTower(nav, o.i, o.j); return; }
+    if (o.breached || o.hp <= 0) return;
+    if (o.type === 'wall' && mode === 'ladder') { navBlockEdge(nav, o.i1, o.j1, o.i2, o.j2, 1.5, -1); return; }
+    const cost = o.type === 'wall' ? 8 + o.hp * 1.5
+      : o.type === 'gate' ? (mode === 'ram' ? 1 + o.hp * 0.3 : 6 + o.hp * 1.4)
+      : 6 + o.hp * 1.2;
+    navBlockEdge(nav, o.i1, o.j1, o.i2, o.j2, cost, idx);
+  });
+  if (keepPos) nav.cell[navIdx(...navCellOf(keepPos.i, keepPos.j))] = Infinity;
+  return nav;
+}
+// Next waypoint toward dest, plus the first obstacle (index into obstacles, or -1) that stands
+// in the way and the spot right in front of it.
+function battleRoute(nav, u, dest) {
+  const [sci, scj] = navCellOf(u.i, u.j);
+  const [gci, gcj] = navCellOf(dest.i, dest.j);
+  const exA = navIdx(sci, scj), exB = navIdx(gci, gcj);
+  if (exA === exB) return { waypoint: dest, blocker: -1, standPoint: dest };
+  const { cells, reached } = navAStar(nav, sci, scj, gci, gcj);
+  let cut = cells.length - 1, blocker = -1;
+  for (let k = 0; k < cells.length - 1; k++) {
+    const a = cells[k], b = cells[k + 1];
+    const ai = a % NAV_W, aj = Math.floor(a / NAV_W);
+    const di = (b % NAV_W) - ai, dj = Math.floor(b / NAV_W) - aj;
+    let ob = -1;
+    if (b !== exB && nav.cObs[b] >= 0 && nav.cell[b] > 0) ob = nav.cObs[b];
+    else if ((di === 0 || dj === 0) && navEdgeCost(nav, ai, aj, di, dj) > 0) ob = navEdgeObs(nav, ai, aj, di, dj);
+    if (ob >= 0) { blocker = ob; cut = k; break; }
+  }
+  const pts = [{ i: u.i, j: u.j }, ...cells.slice(0, cut + 1).map(navCenter)];
+  if (blocker < 0 && reached) pts.push(dest);
+  let waypoint = null;
+  for (let k = Math.min(pts.length - 1, 8); k >= 1; k--) {
+    if (navLineClear(nav, pts[0], pts[k], exA, exB)) { waypoint = pts[k]; break; }
+  }
+  // Nothing in clear sight (e.g. a ladder crew right at the foot of the wall): step to the
+  // next tile on the route directly.
+  if (!waypoint || (Math.abs(waypoint.i - u.i) < 0.05 && Math.abs(waypoint.j - u.j) < 0.05)) waypoint = pts[Math.min(2, pts.length - 1)];
+  return { waypoint, blocker, standPoint: pts[pts.length - 1] };
+}
+
 function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCount, moraleDebuffActive, kapelleBonus, moorishBonus, lowCourtMorale, crossbowMult, knightRaiseMult) {
   let units = unitsIn.map((u) => ({ ...u }));
   let obstacles = obstaclesIn.map((o) => ({ ...o }));
@@ -3672,6 +4015,54 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   // "engineHandlesIt" note further down for what this gates.
   const hasRam = units.some((u) => u.side === 'attacker' && u.type === 'saxonRam' && u.hp > 0 && !u.exited && !u.routed);
   const hasCatapult = units.some((u) => u.side === 'attacker' && u.type === 'saxonCatapult' && u.hp > 0 && !u.exited && !u.routed);
+
+  // Routing helpers for attackers (see buildBattleNav / battleRoute). One nav grid per
+  // movement mode is built lazily per tick.
+  const navCache = {};
+  const navFor = (u) => {
+    const mode = u.type === 'saxonLadder' ? 'ladder' : u.type === 'saxonRam' ? 'ram' : 'foot';
+    if (!navCache[mode]) navCache[mode] = buildBattleNav(obstacles, keepPos, mode);
+    return navCache[mode];
+  };
+  const stepToward = (u, p, maxStep = Infinity) => {
+    const d = distance2(u, p);
+    if (d < 1e-6) return;
+    const step = Math.min(1, UNIT_SPEED_PER_TICK / d, maxStep / d);
+    u.i += (p.i - u.i) * step;
+    u.j += (p.j - u.j) * step;
+  };
+  // Walk toward dest along the cheapest route; if an intact wall/gate/ditch is in the way,
+  // go stand in front of it and break it down. Returns true once dest itself is in reach.
+  const attackerAdvance = (u, dest) => {
+    const r = battleRoute(navFor(u), u, dest);
+    if (r.blocker >= 0) {
+      const blocker = obstacles[r.blocker];
+      const mid = obstacleMidpoint(blocker);
+      const near = distance2(u, mid) <= MELEE_RANGE + 0.25 || distance2(u, r.standPoint) < 0.15;
+      if (!near) { stepToward(u, r.waypoint); return false; }
+      if (u.type === 'saxonRam' && blocker.type === 'gate') {
+        blocker.hp = Math.max(0, blocker.hp - GATE_DAMAGE_PER_TICK * RAM_DAMAGE_MULT * moraleDmgMult);
+        if (blocker.hp <= 0) blocker.breached = true;
+        return false;
+      }
+      // A ram is on hand to break down gates, and a catapult to smash walls — real siege
+      // vehicles, not just another sword. While one of those exists on the field, the plain
+      // foot soldiers hang back at the blocked point rather than uselessly hacking at solid
+      // stone themselves; they only get to work on something hand-choppable (namely,
+      // shovelling a ditch full of dirt) regardless. Once no ram or catapult is left standing
+      // the infantry goes back to battering a way through on their own.
+      const engineHandlesIt = u.type !== 'saxonRam' && ((blocker.type === 'gate' && hasRam) || (blocker.type === 'wall' && hasCatapult));
+      if (engineHandlesIt) return false;
+      // Filling in a ditch means standing out in the open shovelling dirt for a while —
+      // defenders get a clean shot at anyone doing it.
+      if (blocker.type === 'graben') u.fillingDitch = true;
+      blocker.hp = Math.max(0, blocker.hp - GATE_DAMAGE_PER_TICK * moraleDmgMult);
+      if (blocker.hp <= 0) blocker.breached = true;
+      return false;
+    }
+    if (distance2(u, dest) > MELEE_RANGE) { stepToward(u, r.waypoint); return false; }
+    return true;
+  };
 
   // Continuous morale: a badly-bloodied attacker force hits softer even before it breaks
   // outright. Defenders never get this treatment — they fight at full strength no matter
@@ -3783,9 +4174,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
           if (target.hp <= 0) target.breached = true;
           shots.push({ fromI: u.i, fromJ: u.j, fromElev: 4, toI: mid.i, toJ: mid.j, toElev: 0, heavy: true });
         } else {
-          const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
-          u.i += (mid.i - u.i) * step;
-          u.j += (mid.j - u.j) * step;
+          stepToward(u, battleRoute(navFor(u), u, mid).waypoint);
         }
         return;
       }
@@ -3818,19 +4207,15 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
               if (wasAlive && target.hp <= 0) target.diedAtTick = tickCount || 0;
             }
           } else if (!isArcher) {
-            const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
-            u.i += (target.i - u.i) * step;
-            u.j += (target.j - u.j) * step;
+            // Close in along a real route — through a gap if there is one, otherwise by
+            // breaking through whatever stands between them (never by walking through stone).
+            attackerAdvance(u, target);
           } else {
             // Attacking archers close the distance only until they're within their own
             // range — they never march all the way into melee, and once in range they hold
             // their ground and keep shooting rather than drifting closer with every tick.
             const desiredD = range * 0.92;
-            if (d > desiredD) {
-              const step = Math.min(1, UNIT_SPEED_PER_TICK / d, (d - desiredD) / d);
-              u.i += (target.i - u.i) * step;
-              u.j += (target.j - u.j) * step;
-            }
+            if (d > desiredD) stepToward(u, battleRoute(navFor(u), u, target).waypoint, d - desiredD);
           }
         }
         return;
@@ -3842,15 +4227,10 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       if (u.type === 'saxonRam') {
         const gate = nearestUnbreachedGate(obstacles);
         if (gate) {
-          const mid = { i: (gate.i1 + gate.i2) / 2, j: (gate.j1 + gate.j2) / 2 };
-          const d = distance2(u, mid);
-          if (d <= MELEE_RANGE + 0.25) {
+          const mid = obstacleMidpoint(gate);
+          if (attackerAdvance(u, mid)) {
             gate.hp = Math.max(0, gate.hp - GATE_DAMAGE_PER_TICK * RAM_DAMAGE_MULT * moraleDmgMult);
             if (gate.hp <= 0) gate.breached = true;
-          } else {
-            const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
-            u.i += (mid.i - u.i) * step;
-            u.j += (mid.j - u.j) * step;
           }
           return;
         }
@@ -3870,39 +4250,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       });
       const dest = destUnit || keepPos;
       if (!dest) return;
-      const blocker = findBlockingObstacle(u, dest, obstacles);
-      if (blocker) {
-        const mid = { i: (blocker.i1 + blocker.i2) / 2, j: (blocker.j1 + blocker.j2) / 2 };
-        const d = distance2(u, mid);
-        // A ram is on hand to break down gates, and a catapult to smash walls and towers —
-        // real siege vehicles, not just another sword. While one of those exists on the
-        // field, the plain foot soldiers hang back at the blocked point rather than
-        // uselessly hacking at solid stone themselves; they only get to work on something
-        // hand-choppable (namely, shovelling a ditch full of dirt) regardless. Once no ram
-        // or catapult is left standing (or none was ever sent, in the earliest years), the
-        // infantry goes back to battering a way through on their own — someone still has to.
-        const engineHandlesIt = (blocker.type === 'gate' && hasRam) || ((blocker.type === 'wall' || blocker.type === 'tower') && hasCatapult);
-        if (d <= MELEE_RANGE + 0.25) {
-          if (engineHandlesIt) return; // waiting on the ram/catapult to open the way
-          // Filling in a ditch means standing out in the open shovelling dirt for a while —
-          // defenders get a clean shot at anyone doing it.
-          if (blocker.type === 'graben') u.fillingDitch = true;
-          blocker.hp = Math.max(0, blocker.hp - GATE_DAMAGE_PER_TICK * moraleDmgMult);
-          if (blocker.hp <= 0) blocker.breached = true;
-        } else {
-          const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
-          u.i += (mid.i - u.i) * step;
-          u.j += (mid.j - u.j) * step;
-        }
-        return;
-      }
-      const d = distance2(u, dest);
-      if (d > MELEE_RANGE) {
-        const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
-        u.i += (dest.i - u.i) * step;
-        u.j += (dest.j - u.j) * step;
-        return;
-      }
+      if (!attackerAdvance(u, dest)) return;
       // Arrived, and there was no living defender to aim for — that means this attacker
       // made it all the way to the keep itself with nothing left standing in the way.
       // Garrison-free (or overrun) castles don't just sit there safely: the assault
@@ -6029,16 +6377,35 @@ export default function CastleBuilder() {
     if (piles.stone > 0.05) list.push({ depth: STONE_GATHER.i + STONE_GATHER.j + 0.7 + 0.6, node: <PileProp key="pile-stone" i={STONE_GATHER.i} j={STONE_GATHER.j + 0.7} amount={piles.stone} kind="stone" /> });
     if (piles.wood > 0.05) list.push({ depth: WOOD_GATHER.i + (WOOD_GATHER.j + 0.7) + 0.6, node: <PileProp key="pile-wood" i={WOOD_GATHER.i} j={WOOD_GATHER.j + 0.7} amount={piles.wood} kind="wood" /> });
 
-    const vertexOccupancy = {};
+    // Where finished walls meet at an angle (an L-corner, a T or a cross) with no tower on the
+    // spot, a square corner post is set exactly on the joint so the stonework reads as one
+    // continuous mitred piece instead of two slabs poking past each other. Straight runs
+    // don't need one, and gates bring their own pillars.
+    const vertexInfo = {};
+    const doneWallEdges = new Set();
     Object.values(structures).forEach((s) => {
-      if (s.type === 'wall' || s.type === 'gate') {
-        const k1 = `${s.i1},${s.j1}`, k2 = `${s.i2},${s.j2}`;
-        vertexOccupancy[k1] = (vertexOccupancy[k1] || 0) + 1;
-        vertexOccupancy[k2] = (vertexOccupancy[k2] || 0) + 1;
-      } else if (s.type === 'tower') {
-        const k = `${s.i},${s.j}`;
-        vertexOccupancy[k] = (vertexOccupancy[k] || 0) + 10;
+      if ((s.type === 'wall' || s.type === 'gate') && s.stage === 'done') {
+        if (s.type === 'wall') { doneWallEdges.add(`${s.i1},${s.j1}>${s.i2},${s.j2}`); doneWallEdges.add(`${s.i2},${s.j2}>${s.i1},${s.j1}`); }
+        const add = (vi, vj, oi, oj) => {
+          const k = `${vi},${vj}`;
+          const info = vertexInfo[k] || (vertexInfo[k] = { dirs: new Set(), gate: false });
+          info.dirs.add(`${Math.sign(oi - vi)},${Math.sign(oj - vj)}`);
+          if (s.type === 'gate') info.gate = true;
+        };
+        add(s.i1, s.j1, s.i2, s.j2);
+        add(s.i2, s.j2, s.i1, s.j1);
       }
+    });
+    const postVertices = new Set();
+    Object.entries(vertexInfo).forEach(([k, info]) => {
+      if (info.gate || info.dirs.size < 2 || structures[`v:${k}`]) return;
+      if (info.dirs.size === 2) {
+        const [a, b] = [...info.dirs].map((d) => d.split(',').map(Number));
+        if (a[0] === -b[0] && a[1] === -b[1]) return;
+      }
+      postVertices.add(k);
+      const [vi, vj] = k.split(',').map(Number);
+      list.push({ depth: vi + vj + 0.3, node: <WallJunctionPost key={`post-${k}`} i={vi} j={vj} /> });
     });
 
     // Reference point for "inside the castle", used to make sure a drawbridge always lays
@@ -6048,8 +6415,8 @@ export default function CastleBuilder() {
 
     Object.entries(structures).forEach(([key, s]) => {
       if (s.type === 'wall' || s.type === 'gate') {
-        const junction1 = (vertexOccupancy[`${s.i1},${s.j1}`] || 0) > 1;
-        const junction2 = (vertexOccupancy[`${s.i2},${s.j2}`] || 0) > 1;
+        const junction1 = postVertices.has(`${s.i1},${s.j1}`);
+        const junction2 = postVertices.has(`${s.i2},${s.j2}`);
         const towerV1 = structures[`v:${s.i1},${s.j1}`];
         const towerV2 = structures[`v:${s.i2},${s.j2}`];
         const towerAt1 = !!(towerV1 && towerV1.type === 'tower' && towerV1.stage === 'done');
@@ -6081,7 +6448,10 @@ export default function CastleBuilder() {
       } else if (s.type === 'graben') {
         list.push({ depth: (s.i1 + s.j1 + s.i2 + s.j2) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
       } else if (s.type === 'tower') {
-        list.push({ depth: s.i + s.j + 0.6, node: <TowerNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} damageFrac={battleDamageByKey[key] || 0} ruined={!!s.ruined} /> });
+        // A doorway on each visible tower face where a wall-walk runs into it.
+        const doorA = doneWallEdges.has(`${s.i},${s.j}>${s.i + 1},${s.j}`);
+        const doorB = doneWallEdges.has(`${s.i},${s.j}>${s.i},${s.j + 1}`);
+        list.push({ depth: s.i + s.j + 0.6, node: <TowerNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} damageFrac={battleDamageByKey[key] || 0} ruined={!!s.ruined} doorA={doorA} doorB={doorB} /> });
       } else if (s.type === 'keep') {
         list.push({ depth: s.i + s.j + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
       } else if (s.type === 'amenity') {
@@ -6373,6 +6743,12 @@ export default function CastleBuilder() {
         .cb-game-paused .cb-leg-walk, .cb-game-paused .cb-person-walk, .cb-game-paused .cb-person-work .cb-arm, .cb-game-paused .cb-person-idle, .cb-game-paused .cb-tree-fell, .cb-game-paused .cb-fire-flicker, .cb-game-paused .cb-smoke-rise, .cb-game-paused .cb-ram-swing, .cb-game-paused .cb-catapult-arm { animation-play-state: paused; }
         .cb-wall-anchor-ring { animation: cb-wall-anchor-pulse 1.1s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
         @keyframes cb-wall-anchor-pulse { 0%, 100% { r: 15; opacity: 1; } 50% { r: 18; opacity: 0.6; } }
+        .cb-hoof-walk { transform-box: fill-box; transform-origin: top center; }
+        .cb-hoof-walk.cb-hoof-a { animation: cb-hoof-a 0.42s ease-in-out infinite; }
+        .cb-hoof-walk.cb-hoof-b { animation: cb-hoof-b 0.42s ease-in-out infinite; }
+        @keyframes cb-hoof-a { 0%, 100% { transform: rotate(22deg); } 50% { transform: rotate(-22deg); } }
+        @keyframes cb-hoof-b { 0%, 100% { transform: rotate(-22deg); } 50% { transform: rotate(22deg); } }
+        .cb-game-paused .cb-hoof-walk { animation-play-state: paused; }
         .cb-glint { animation: cb-glint 3.4s ease-in-out infinite; }
         @keyframes cb-glint { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
         .cb-window-glow { animation: cb-window-flicker 2.8s ease-in-out infinite; }
