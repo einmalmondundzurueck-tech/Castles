@@ -3703,6 +3703,7 @@ function PortraitAvatar({ stage, dead = false, size = 56 }) {
 }
 
 function Modal({ title, onClose, children, maxWidth = 380, zIndex = 60 }) {
+  useEffect(() => { SOUND.play('open'); }, []);
   // Esc closes any panel.
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -5174,7 +5175,8 @@ const UI_CSS = `
   @keyframes cb-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
   .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
   @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
-  @media (max-width: 1650px) { .cb-nav-label { display: none; } }
+  @media (max-width: 2100px) { .cb-nav-label { display: none; } }
+  @media (max-width: 1400px) { .cb-navbtn { padding: 5px 6px !important; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
   @media (max-width: 1280px) { .cb-chip .cb-cap { display: none; } .cb-date-sub { display: none; } }
 `;
@@ -5231,6 +5233,612 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
   );
 }
 
+// ---------------------------------------------------------------------------------- Klang --
+// Music, ambience and effects are all synthesised live with the Web Audio API — no audio
+// files. The peaceful score is a small lute-and-recorder consort in D dorian over a drone,
+// assembled section by section (with ornaments varied each time round); sieges switch to
+// war drums and low brass. Browsers only allow sound after a first click or key press, so
+// the engine stays silent until then.
+const SETTINGS_KEY = 'castles-einstellungen';
+const DEFAULT_SETTINGS = { master: 0.8, music: 0.55, sfx: 0.8, ambience: 0.6, muted: false, autosave: true };
+function loadSettings() {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) { /* no storage */ }
+  return { ...DEFAULT_SETTINGS };
+}
+function storeSettings(s) {
+  try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) { /* no storage */ }
+}
+
+const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+// D dorian (D E F G A B C), as pitch classes.
+const DORIAN_PC = [2, 4, 5, 7, 9, 11, 0];
+function dorianStep(midi, dir) {
+  let m = midi + dir;
+  while (!DORIAN_PC.includes(((m % 12) + 12) % 12)) m += dir;
+  return m;
+}
+// Lute voicings (arpeggio tones) with their bass note.
+const MUSIC_CHORDS = {
+  Dm: { bass: 38, tones: [50, 53, 57] },
+  C: { bass: 36, tones: [48, 52, 55] },
+  F: { bass: 41, tones: [48, 53, 57] },
+  G: { bass: 43, tones: [50, 55, 59] },
+  Am: { bass: 45, tones: [48, 52, 57] },
+  Em: { bass: 40, tones: [47, 52, 55] },
+};
+// Two original tunes in 3/4, written as [midi, length in eighths] (six eighths per bar).
+const PEACE_TUNES = [
+  {
+    melody: [
+      [62, 2], [65, 1], [67, 1], [69, 2],
+      [69, 2], [72, 1], [69, 1], [67, 2],
+      [65, 2], [67, 1], [65, 1], [64, 2],
+      [62, 4], [60, 2],
+      [62, 2], [65, 1], [67, 1], [69, 2],
+      [74, 2], [72, 1], [69, 1], [67, 2],
+      [65, 1], [64, 1], [65, 1], [67, 1], [64, 2],
+      [62, 6],
+    ],
+    chords: ['Dm', 'Am', 'F', 'Dm', 'Dm', 'G', 'C', 'Dm'],
+  },
+  {
+    melody: [
+      [69, 2], [74, 2], [74, 1], [76, 1],
+      [77, 2], [76, 1], [74, 1], [72, 2],
+      [74, 2], [69, 2], [71, 1], [72, 1],
+      [69, 4], [67, 2],
+      [65, 2], [69, 2], [72, 2],
+      [71, 2], [67, 2], [64, 2],
+      [65, 2], [64, 1], [62, 1], [64, 2],
+      [62, 6],
+    ],
+    chords: ['Dm', 'F', 'G', 'Am', 'F', 'Em', 'C', 'Dm'],
+  },
+];
+// Sections of the peaceful score, played in this order and then round again.
+const PEACE_PLAN = ['intro', 'A', 'B', 'A2', 'interlude', 'B2', 'A', 'rest'];
+
+class SoundEngine {
+  constructor() {
+    this.ctx = null;
+    this.settings = { ...DEFAULT_SETTINGS };
+    this.mode = 'peace';
+    this.season = 0;
+    this.sections = [];
+    this.nextSectionAt = 0;
+    this.planIdx = 0;
+    this.timer = null;
+    this.lastPlayed = {};
+  }
+
+  // ---- setup ---------------------------------------------------------------------------
+  attach(ctx) {
+    this.ctx = ctx;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 4;
+    comp.attack.value = 0.004; comp.release.value = 0.25;
+    comp.connect(ctx.destination);
+    this.master = ctx.createGain(); this.master.connect(comp);
+    this.musicBus = ctx.createGain(); this.musicBus.connect(this.master);
+    this.sfxBus = ctx.createGain(); this.sfxBus.connect(this.master);
+    this.ambBus = ctx.createGain(); this.ambBus.connect(this.master);
+    // A small hall: a generated impulse response, shared by every voice through a send.
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = this.makeImpulse(2.4, 2.8);
+    this.reverbOut = ctx.createGain(); this.reverbOut.gain.value = 0.32;
+    this.reverb.connect(this.reverbOut); this.reverbOut.connect(this.master);
+    this.musicVerb = ctx.createGain(); this.musicVerb.connect(this.reverb);
+    this.sfxVerb = ctx.createGain(); this.sfxVerb.connect(this.reverb);
+    const len = Math.floor(ctx.sampleRate * 2);
+    this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let k = 0; k < len; k++) d[k] = Math.random() * 2 - 1;
+    this.applyVolumes();
+  }
+  makeImpulse(seconds, decay) {
+    const ctx = this.ctx;
+    const len = Math.floor(ctx.sampleRate * seconds);
+    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let k = 0; k < len; k++) d[k] = (Math.random() * 2 - 1) * Math.pow(1 - k / len, decay);
+    }
+    return buf;
+  }
+  // Called on every click / key press: creates the context the first time (browsers only
+  // allow that after a user gesture) and resumes it if the browser suspended it.
+  unlock() {
+    if (typeof window === 'undefined') return false;
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      try { this.attach(new AC()); } catch (e) { return false; }
+      this.startAmbience();
+      this.nextSectionAt = this.ctx.currentTime + 0.6;
+      this.timer = setInterval(() => this.pump(), 250);
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    return true;
+  }
+  get live() { return !!this.ctx && this.ctx.state === 'running'; }
+  setSettings(s) { this.settings = { ...s }; this.applyVolumes(); }
+  applyVolumes() {
+    if (!this.ctx) return;
+    const s = this.settings, t = this.ctx.currentTime;
+    this.master.gain.setTargetAtTime(s.muted ? 0 : s.master, t, 0.05);
+    this.musicBus.gain.setTargetAtTime(s.music * 0.9, t, 0.05);
+    this.musicVerb.gain.setTargetAtTime(s.music * 0.9, t, 0.05);
+    this.sfxBus.gain.setTargetAtTime(s.sfx, t, 0.05);
+    this.sfxVerb.gain.setTargetAtTime(s.sfx * 0.6, t, 0.05);
+    this.ambBus.gain.setTargetAtTime(s.ambience, t, 0.05);
+  }
+  setSeason(month) {
+    this.season = month;
+    if (!this.windGain) return;
+    const winter = month <= 1 || month === 11, autumn = month >= 8 && month <= 10;
+    this.windGain.gain.setTargetAtTime(winter ? 0.11 : autumn ? 0.07 : 0.035, this.ctx.currentTime, 2);
+  }
+  // Rate limiter so a hundred simultaneous hits don't turn into noise.
+  ready(kind, gap) {
+    if (!this.live) return false;
+    const now = this.ctx.currentTime;
+    if (this.lastPlayed[kind] != null && now - this.lastPlayed[kind] < gap) return false;
+    this.lastPlayed[kind] = now;
+    return true;
+  }
+
+  // ---- building blocks -----------------------------------------------------------------
+  gain(dest, v = 1) { const g = this.ctx.createGain(); g.gain.value = v; g.connect(dest); return g; }
+  filter(type, freq, q, dest) {
+    const f = this.ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    f.connect(dest); return f;
+  }
+  osc(type, freq, t, dur, dest, detune = 0) {
+    const o = this.ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (detune) o.detune.value = detune;
+    o.connect(dest); o.start(t); o.stop(t + dur + 0.05); return o;
+  }
+  noiseSrc(t, dur, dest) {
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise; s.loop = true;
+    s.connect(dest); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.05); return s;
+  }
+  // Percussive envelope: quick attack to `peak`, exponential decay over `decay` seconds.
+  perc(g, t, peak, decay, attack = 0.003) {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+  }
+  send(node, bus, amount) { const g = this.gain(bus, amount); node.connect(g); }
+
+  // ---- instruments ---------------------------------------------------------------------
+  pluck(t, midi, dur, vel, dest, verbBus, bright = 1) {
+    const hz = midiHz(midi);
+    const g = this.gain(dest, 0);
+    const decay = Math.min(2.4, dur + 0.9);
+    this.perc(g, t, vel * 0.26, decay, 0.004);
+    const f = this.filter('lowpass', 600, 1.2, g);
+    f.frequency.setValueAtTime(Math.min(9000, hz * 9 * bright), t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(200, hz * 1.6), t + 0.45);
+    this.osc('triangle', hz, t, decay, f);
+    const sg = this.gain(f, 0.35); this.osc('sawtooth', hz, t, decay, sg, 4);
+    if (verbBus) this.send(g, verbBus, 0.3);
+  }
+  flute(t, midi, dur, vel, dest, verbBus) {
+    const hz = midiHz(midi);
+    const end = t + dur;
+    const g = this.gain(dest, 0);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vel * 0.15, t + 0.06);
+    g.gain.setValueAtTime(vel * 0.13, Math.max(t + 0.07, end - 0.06));
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.14);
+    const lp = this.filter('lowpass', hz * 5, 0.5, g);
+    const o1 = this.osc('sine', hz, t, dur + 0.2, lp);
+    const g2 = this.gain(lp, 0.22); const o2 = this.osc('triangle', hz * 2, t, dur + 0.2, g2);
+    // Delayed vibrato, as a player would.
+    const lfo = this.ctx.createOscillator(); lfo.frequency.value = 5.3;
+    const lg = this.ctx.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(hz * 0.007, t + Math.min(0.5, dur));
+    lfo.connect(lg); lg.connect(o1.frequency); lg.connect(o2.frequency);
+    lfo.start(t); lfo.stop(end + 0.2);
+    // A breath of air at the attack.
+    const bg = this.gain(g, 0); this.perc(bg, t, vel * 0.5, 0.12, 0.02);
+    this.noiseSrc(t, 0.2, this.filter('bandpass', hz * 2, 3, bg));
+    if (verbBus) this.send(g, verbBus, 0.45);
+  }
+  drone(t, notes, dur, vel, dest) {
+    const g = this.gain(dest, 0);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vel * 0.03, t + 1.2);
+    g.gain.setValueAtTime(vel * 0.03, t + dur - 0.2);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur + 1.2);
+    const lp = this.filter('lowpass', 520, 0.6, g);
+    notes.forEach((m) => { this.osc('sawtooth', midiHz(m), t, dur + 1.3, lp, -3); this.osc('sawtooth', midiHz(m), t, dur + 1.3, lp, 4); });
+  }
+  frameDrum(t, vel, dest, pitch = 1) {
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.55, 0.32);
+    const o = this.osc('sine', 120 * pitch, t, 0.4, g);
+    o.frequency.exponentialRampToValueAtTime(52 * pitch, t + 0.16);
+    const ng = this.gain(dest, 0); this.perc(ng, t, vel * 0.12, 0.06);
+    this.noiseSrc(t, 0.1, this.filter('lowpass', 900, 0.7, ng));
+  }
+  tambourine(t, vel, dest) {
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.09, 0.14);
+    this.noiseSrc(t, 0.2, this.filter('highpass', 7000, 0.8, g));
+  }
+  timpani(t, midi, vel, dest, verbBus) {
+    const hz = midiHz(midi);
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.6, 1.3);
+    const o = this.osc('sine', hz * 1.06, t, 1.5, g); o.frequency.exponentialRampToValueAtTime(hz, t + 0.08);
+    const g2 = this.gain(g, 0.35); this.osc('sine', hz * 1.5, t, 1.0, g2);
+    const ng = this.gain(dest, 0); this.perc(ng, t, vel * 0.25, 0.1);
+    this.noiseSrc(t, 0.15, this.filter('lowpass', 500, 0.8, ng));
+    if (verbBus) this.send(g, verbBus, 0.25);
+  }
+  snare(t, vel, dest) {
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.22, 0.16);
+    this.noiseSrc(t, 0.2, this.filter('bandpass', 1900, 0.7, g));
+    const tg = this.gain(dest, 0); this.perc(tg, t, vel * 0.15, 0.07);
+    this.osc('triangle', 190, t, 0.1, tg);
+  }
+  brass(t, midi, dur, vel, dest, verbBus) {
+    const hz = midiHz(midi);
+    const end = t + dur;
+    const g = this.gain(dest, 0);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vel * 0.16, t + 0.06);
+    g.gain.setValueAtTime(vel * 0.14, Math.max(t + 0.07, end - 0.05));
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18);
+    const f = this.filter('lowpass', 300, 1.5, g);
+    f.frequency.setValueAtTime(300, t);
+    f.frequency.linearRampToValueAtTime(400 + 2400 * vel, t + 0.09);
+    f.frequency.exponentialRampToValueAtTime(900 + 700 * vel, t + 0.4);
+    this.osc('sawtooth', hz, t, dur + 0.25, f, -6);
+    this.osc('sawtooth', hz, t, dur + 0.25, f, 6);
+    if (verbBus) this.send(g, verbBus, 0.4);
+  }
+  bell(t, midi, vel, dest, verbBus) {
+    const hz = midiHz(midi);
+    [[0.5, 1, 4], [1, 0.8, 3], [1.19, 0.5, 2.2], [1.5, 0.35, 2], [2, 0.3, 1.6], [2.74, 0.2, 1.1], [3.76, 0.12, 0.8]].forEach(([r, a, d]) => {
+      const g = this.gain(dest, 0); this.perc(g, t, vel * 0.12 * a, d, 0.002);
+      this.osc('sine', hz * r, t, d, g);
+      if (verbBus) this.send(g, verbBus, 0.5);
+    });
+  }
+
+  // ---- music ---------------------------------------------------------------------------
+  setMusicMode(mode) {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.planIdx = 0;
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.sections.forEach((s) => { s.bus.gain.setTargetAtTime(0, now, 0.5); s.end = Math.min(s.end, now + 4); });
+    this.nextSectionAt = now + (mode === 'battle' ? 0.4 : 3.5);
+  }
+  pump() {
+    if (!this.live) return;
+    const now = this.ctx.currentTime;
+    // Old section buses are dropped once everything in them has rung out.
+    this.sections = this.sections.filter((s) => { if (s.end < now) { s.bus.disconnect(); return false; } return true; });
+    if (this.mode !== 'off') {
+      if (this.nextSectionAt < now) this.nextSectionAt = now + 0.1;
+      if (this.nextSectionAt - now < 1.2) {
+        const bus = this.gain(this.musicBus, 1);
+        const len = this.scheduleSection(this.mode, this.nextSectionAt, bus, this.musicVerb);
+        this.sections.push({ bus, end: this.nextSectionAt + len + 4 });
+        this.nextSectionAt += len;
+      }
+    }
+    // Birdsong on spring and summer days.
+    if (this.mode === 'peace' && this.season >= 3 && this.season <= 7 && Math.random() < 0.035) this.birdCall(now + Math.random() * 0.2);
+  }
+  // Schedules one section starting at `t0`; returns its length in seconds.
+  scheduleSection(mode, t0, bus, verb) {
+    return mode === 'battle' ? this.battleSection(t0, bus, verb) : this.peaceSection(t0, bus, verb);
+  }
+  peaceSection(t0, bus, verb) {
+    const kind = PEACE_PLAN[this.planIdx % PEACE_PLAN.length];
+    this.planIdx += 1;
+    const winter = this.season <= 1 || this.season === 11;
+    const e = winter ? 0.34 : 0.3; // seconds per eighth
+    const bar = e * 6;
+    const hum = () => (Math.random() - 0.5) * 0.016;
+    const vel = (v) => v * (0.88 + Math.random() * 0.2);
+    const lute = (chords, startBar, busy) => {
+      chords.forEach((name, b) => {
+        const c = MUSIC_CHORDS[name], tb = t0 + (startBar + b) * bar;
+        this.pluck(tb + hum(), c.bass, bar, vel(0.75), bus, verb, 0.7);
+        const pat = busy ? [[2, c.tones[0]], [3, c.tones[1]], [4, c.tones[2]], [5, c.tones[1]]] : [[2, c.tones[1]], [4, c.tones[2]]];
+        pat.forEach(([s, m]) => this.pluck(tb + s * e + hum(), m, e * 2, vel(0.45), bus, verb, 0.8));
+      });
+    };
+    const percussion = (bars, startBar) => {
+      for (let b = 0; b < bars; b++) {
+        const tb = t0 + (startBar + b) * bar;
+        this.frameDrum(tb + hum(), vel(0.5), bus);
+        this.frameDrum(tb + 3 * e + hum(), vel(0.28), bus, 1.3);
+        if (!winter) { this.tambourine(tb + 2 * e, vel(0.6), bus); this.tambourine(tb + 4 * e, vel(0.6), bus); this.tambourine(tb + 5 * e, vel(0.4), bus); }
+      }
+    };
+    // Each pass varies a few notes: a long note becomes a note plus a neighbour.
+    const ornament = (mel, amount) => {
+      const out = [];
+      mel.forEach(([m, l]) => {
+        if (l === 2 && Math.random() < amount) { out.push([m, 1], [dorianStep(m, Math.random() < 0.5 ? 1 : -1), 1]); }
+        else out.push([m, l]);
+      });
+      return out;
+    };
+    const melody = (mel, startBar, voice, transpose = 0) => {
+      let s = 0;
+      mel.forEach(([m, l]) => {
+        const t = t0 + startBar * bar + s * e + hum();
+        if (voice === 'flute') this.flute(t, m + transpose, l * e * 0.95, vel(0.85), bus, verb);
+        else this.pluck(t, m + transpose, l * e, vel(0.75), bus, verb, 1.1);
+        s += l;
+      });
+    };
+    if (kind === 'intro' || kind === 'rest') {
+      const chords = kind === 'intro' ? ['Dm', 'Dm'] : ['Dm', 'C', 'Am', 'Dm'];
+      this.drone(t0, [38, 45], chords.length * bar, 0.8, bus);
+      lute(chords, 0, false);
+      return chords.length * bar + (kind === 'rest' ? bar : 0);
+    }
+    const tune = PEACE_TUNES[kind.startsWith('A') ? 0 : 1];
+    const bars = tune.chords.length;
+    this.drone(t0, [38, 45], bars * bar, 0.75, bus);
+    if (kind === 'interlude') {
+      // The lute alone takes the tune an octave down.
+      lute(tune.chords, 0, false);
+      melody(ornament(tune.melody, 0.15), 0, 'lute', -12);
+      return bars * bar;
+    }
+    lute(tune.chords, 0, true);
+    const second = kind.endsWith('2');
+    melody(ornament(tune.melody, second ? 0.35 : 0.1), 0, second && kind === 'A2' ? 'lute' : 'flute');
+    if (second) percussion(bars, 0);
+    return bars * bar;
+  }
+  battleSection(t0, bus, verb) {
+    const e = 0.235, bar = e * 8;
+    const n = this.planIdx;
+    this.planIdx += 1;
+    const vel = (v) => v * (0.9 + Math.random() * 0.15);
+    // A phrygian ostinato in the low brass, timpani and snare under it.
+    const ost = [[38, 0, 1.5], [38, 2, 1], [38, 3, 1], [41, 4, 1.5], [39, 6, 1], [38, 7, 1]];
+    const ostEnd = [[38, 0, 1.5], [36, 2, 1], [34, 3, 1], [36, 4, 1.5], [37, 6, 1], [38, 7, 1]];
+    for (let b = 0; b < 4; b++) {
+      const tb = t0 + b * bar;
+      (b === 3 ? ostEnd : ost).forEach(([m, s, l]) => this.brass(tb + s * e, m, l * e * 0.9, vel(0.55), bus, verb));
+      this.timpani(tb, 38, vel(0.9), bus, verb);
+      this.timpani(tb + 4 * e, 33, vel(0.7), bus, verb);
+      if (n > 0) { this.snare(tb + 2 * e, vel(0.8), bus); this.snare(tb + 6 * e, vel(0.8), bus); }
+      for (let s = 0; s < 8; s++) this.frameDrum(tb + s * e, vel(s % 2 ? 0.18 : 0.3), bus, 1.6);
+      if (b === 3 && n > 0) [6, 6.5, 7, 7.5].forEach((s, k) => this.snare(tb + s * e, vel(0.4 + k * 0.15), bus));
+    }
+    // Every other pass, the horns call over it.
+    if (n % 2 === 1) {
+      const call = [[57, 0, 3], [62, 3, 1], [65, 4, 2], [64, 6, 2], [63, 8, 4], [62, 12, 4], [57, 16, 3], [60, 19, 1], [62, 20, 2], [65, 22, 2], [63, 24, 2], [62, 26, 6]];
+      call.forEach(([m, s, l]) => this.brass(t0 + s * e, m, l * e * 0.95, vel(0.85), bus, verb));
+    }
+    return 4 * bar;
+  }
+
+  // ---- ambience ------------------------------------------------------------------------
+  startAmbience() {
+    const ctx = this.ctx, t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this.noise; src.loop = true;
+    this.windGain = this.gain(this.ambBus, 0.04);
+    const bp = this.filter('bandpass', 420, 0.8, this.windGain);
+    src.connect(bp);
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.07;
+    const lg = ctx.createGain(); lg.gain.value = 260; lfo.connect(lg); lg.connect(bp.frequency);
+    src.start(t); lfo.start(t);
+    this.setSeason(this.season);
+  }
+  birdCall(t) {
+    const base = 2600 + Math.random() * 1800;
+    const notes = 2 + Math.floor(Math.random() * 4);
+    for (let k = 0; k < notes; k++) {
+      const tk = t + k * (0.09 + Math.random() * 0.05);
+      const g = this.gain(this.ambBus, 0); this.perc(g, tk, 0.035, 0.07, 0.01);
+      const o = this.osc('sine', base, tk, 0.1, g);
+      o.frequency.exponentialRampToValueAtTime(base * (1.2 + Math.random() * 0.4), tk + 0.06);
+    }
+  }
+  // Construction noise, played from the game loop according to who is working.
+  work(kind) {
+    if (!this.ready(`work-${kind}`, 0.07)) return;
+    const t = this.ctx.currentTime + Math.random() * 0.05;
+    const dest = this.ambBus;
+    const v = 0.6 + Math.random() * 0.4;
+    if (kind === 'chisel' || kind === 'pick') {
+      // Iron on stone: a bright inharmonic ping and a gritty click.
+      const p = kind === 'pick' ? 0.7 : 1;
+      [2300, 3550, 5150].forEach((f, k) => { const g = this.gain(dest, 0); this.perc(g, t, v * 0.05 / (k + 1), 0.07 + 0.04 * p); this.osc('sine', f * p * (0.95 + Math.random() * 0.1), t, 0.15, g); });
+      const ng = this.gain(dest, 0); this.perc(ng, t, v * 0.08, 0.03);
+      this.noiseSrc(t, 0.05, this.filter('highpass', 2500, 0.7, ng));
+    } else if (kind === 'axe' || kind === 'hammer') {
+      // Iron on wood: a dull knock.
+      const lo = kind === 'axe' ? 160 : 260;
+      const g = this.gain(dest, 0); this.perc(g, t, v * 0.16, 0.09);
+      const o = this.osc('triangle', lo * 1.6, t, 0.12, g); o.frequency.exponentialRampToValueAtTime(lo, t + 0.05);
+      const ng = this.gain(dest, 0); this.perc(ng, t, v * 0.09, 0.05);
+      this.noiseSrc(t, 0.08, this.filter('bandpass', kind === 'axe' ? 700 : 1300, 1.2, ng));
+    } else if (kind === 'saw') {
+      const g = this.gain(dest, 0);
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v * 0.03, t + 0.12); g.gain.linearRampToValueAtTime(0.0001, t + 0.3);
+      this.noiseSrc(t, 0.32, this.filter('bandpass', 2600 + Math.random() * 600, 4, g));
+    }
+  }
+
+  // ---- effects -------------------------------------------------------------------------
+  play(name, opt = {}) {
+    if (!this.live) return;
+    const t = this.ctx.currentTime + 0.01;
+    const out = this.sfxBus, verb = this.sfxVerb;
+    switch (name) {
+      case 'click': {
+        if (!this.ready('click', 0.04)) return;
+        const g = this.gain(out, 0); this.perc(g, t, 0.07, 0.04, 0.001);
+        this.osc('triangle', 1250, t, 0.06, g);
+        const ng = this.gain(out, 0); this.perc(ng, t, 0.04, 0.02);
+        this.noiseSrc(t, 0.03, this.filter('highpass', 3000, 0.7, ng));
+        break;
+      }
+      case 'open': {
+        if (!this.ready('open', 0.15)) return;
+        const g = this.gain(out, 0);
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+        const f = this.filter('bandpass', 900, 1.2, g);
+        f.frequency.setValueAtTime(700, t); f.frequency.exponentialRampToValueAtTime(2600, t + 0.2);
+        this.noiseSrc(t, 0.3, f);
+        break;
+      }
+      case 'place': {
+        if (!this.ready('place', 0.05)) return;
+        const g = this.gain(out, 0); this.perc(g, t, 0.14, 0.12);
+        const o = this.osc('sine', 200, t, 0.15, g); o.frequency.exponentialRampToValueAtTime(90, t + 0.1);
+        const ng = this.gain(out, 0); this.perc(ng, t, 0.06, 0.06);
+        this.noiseSrc(t, 0.08, this.filter('lowpass', 1200, 0.7, ng));
+        break;
+      }
+      case 'good': {
+        if (!this.ready('toast', 0.6)) return;
+        [74, 78, 81].forEach((m, k) => this.pluck(t + k * 0.07, m, 0.4, 0.5, out, verb, 1.3));
+        break;
+      }
+      case 'bad': {
+        if (!this.ready('toast', 0.6)) return;
+        this.pluck(t, 57, 0.6, 0.6, out, verb, 0.7); this.pluck(t + 0.12, 56, 0.8, 0.55, out, verb, 0.7);
+        break;
+      }
+      case 'complete': {
+        if (!this.ready('complete', 0.5)) return;
+        [62, 66, 69, 74].forEach((m, k) => this.pluck(t + k * 0.08, m + 12, 0.6, 0.55, out, verb, 1.4));
+        break;
+      }
+      case 'coin': {
+        if (!this.ready('coin', 0.15)) return;
+        [0, 0.07].forEach((d) => [2093, 3136, 4186].forEach((f, k) => { const g = this.gain(out, 0); this.perc(g, t + d, 0.06 / (k + 1), 0.25); this.osc('sine', f * (1 + d), t + d, 0.3, g); }));
+        break;
+      }
+      case 'event': {
+        if (!this.ready('event', 1)) return;
+        // A strummed D-minor chord and a little run on the lute.
+        [50, 57, 62, 65, 69].forEach((m, k) => this.pluck(t + k * 0.03, m, 1.4, 0.55, out, verb, 1));
+        [74, 72, 74].forEach((m, k) => this.pluck(t + 0.45 + k * 0.13, m, 0.3, 0.5, out, verb, 1.2));
+        break;
+      }
+      case 'bell': {
+        if (!this.ready('bell', 3)) return;
+        [0, 1.1, 2.2].forEach((d) => this.bell(t + d, 62, 1, out, verb));
+        break;
+      }
+      case 'horn': {
+        // The watchman's horn: an attack is coming.
+        if (!this.ready('horn', 2)) return;
+        this.brass(t, 57, 0.5, 0.8, out, verb); this.brass(t + 0.55, 62, 1.3, 0.9, out, verb);
+        break;
+      }
+      case 'warhorn': {
+        if (!this.ready('warhorn', 3)) return;
+        [0, 1.6].forEach((d) => { this.brass(t + d, 38, 1.3, 1, out, verb); this.brass(t + d, 45, 1.3, 0.7, out, verb); });
+        this.timpani(t + 3.1, 38, 1, out, verb);
+        break;
+      }
+      case 'victory': {
+        if (!this.ready('fanfare', 3)) return;
+        [[62, 0, 0.18], [66, 0.2, 0.18], [69, 0.4, 0.18], [74, 0.6, 0.6], [69, 1.25, 0.18], [74, 1.45, 1.4]].forEach(([m, d, l]) => { this.brass(t + d, m, l, 0.9, out, verb); this.brass(t + d, m - 12, l, 0.6, out, verb); });
+        this.timpani(t + 0.6, 38, 1, out, verb); this.timpani(t + 1.45, 38, 1, out, verb);
+        break;
+      }
+      case 'defeat': {
+        if (!this.ready('fanfare', 3)) return;
+        [[62, 0, 0.8], [60, 0.9, 0.8], [58, 1.8, 0.8], [57, 2.7, 2]].forEach(([m, d, l]) => { this.brass(t + d, m - 12, l, 0.7, out, verb); this.brass(t + d, m - 5, l, 0.45, out, verb); });
+        this.timpani(t, 38, 0.8, out, verb); this.timpani(t + 2.7, 33, 0.9, out, verb);
+        break;
+      }
+      case 'coronation': {
+        if (!this.ready('fanfare', 3)) return;
+        [[62, 0, 0.15], [62, 0.17, 0.15], [62, 0.34, 0.15], [69, 0.52, 0.5], [67, 1.05, 0.15], [69, 1.22, 0.15], [74, 1.4, 1.5]].forEach(([m, d, l]) => { this.brass(t + d, m, l, 0.85, out, verb); this.brass(t + d, m - 7, l, 0.5, out, verb); });
+        [0, 0.6, 1.2].forEach((d) => this.bell(t + 1.4 + d, 74, 0.5, out, verb));
+        break;
+      }
+      // ---- battle ----
+      case 'bow': {
+        if (!this.ready('bow', 0.05)) return;
+        const tt = t + Math.random() * 0.08;
+        const g = this.gain(out, 0); this.perc(g, tt, 0.05, 0.08);
+        this.osc('triangle', 210 + Math.random() * 60, tt, 0.1, g);
+        const wg = this.gain(out, 0);
+        wg.gain.setValueAtTime(0.0001, tt); wg.gain.linearRampToValueAtTime(0.05, tt + 0.08); wg.gain.exponentialRampToValueAtTime(0.0001, tt + 0.35);
+        const f = this.filter('bandpass', 2500, 2, wg);
+        f.frequency.setValueAtTime(3200, tt); f.frequency.exponentialRampToValueAtTime(900, tt + 0.35);
+        this.noiseSrc(tt, 0.4, f);
+        break;
+      }
+      case 'catapult': {
+        if (!this.ready('catapult', 0.2)) return;
+        const g = this.gain(out, 0); this.perc(g, t, 0.35, 0.3);
+        const o = this.osc('sine', 110, t, 0.35, g); o.frequency.exponentialRampToValueAtTime(45, t + 0.25);
+        const cg = this.gain(out, 0); this.perc(cg, t + 0.02, 0.05, 0.2);
+        this.osc('sawtooth', 95, t + 0.02, 0.25, this.filter('lowpass', 700, 2, cg));
+        break;
+      }
+      case 'impact': {
+        if (!this.ready('impact', 0.06)) return;
+        const g = this.gain(out, 0); this.perc(g, t, 0.06, 0.06);
+        this.noiseSrc(t, 0.08, this.filter('bandpass', 1200, 1, g));
+        break;
+      }
+      case 'crash': {
+        if (!this.ready('crash', 0.12)) return;
+        const g = this.gain(out, 0); this.perc(g, t, 0.45, 0.55);
+        this.noiseSrc(t, 0.6, this.filter('lowpass', 900, 0.6, g));
+        const bg = this.gain(out, 0); this.perc(bg, t, 0.4, 0.4);
+        const o = this.osc('sine', 80, t, 0.45, bg); o.frequency.exponentialRampToValueAtTime(38, t + 0.35);
+        this.send(g, verb, 0.3);
+        break;
+      }
+      case 'clash': {
+        if (!this.ready('clash', 0.07)) return;
+        const tt = t + Math.random() * 0.1;
+        const p = 0.85 + Math.random() * 0.35;
+        [1420, 2260, 3180, 4420, 5900].forEach((f, k) => { const g = this.gain(out, 0); this.perc(g, tt, 0.05 / (1 + k * 0.4), 0.18 + Math.random() * 0.12, 0.001); this.osc('sine', f * p, tt, 0.35, g); });
+        const ng = this.gain(out, 0); this.perc(ng, tt, 0.12, 0.05, 0.001);
+        this.noiseSrc(tt, 0.08, this.filter('highpass', 3000, 0.7, ng));
+        break;
+      }
+      case 'crumble': {
+        if (!this.ready('crumble', 0.4)) return;
+        for (let k = 0; k < 7; k++) {
+          const tk = t + k * 0.09 + Math.random() * 0.05;
+          const g = this.gain(out, 0); this.perc(g, tk, 0.3 * (1 - k / 9), 0.25 + Math.random() * 0.2);
+          this.noiseSrc(tk, 0.5, this.filter('lowpass', 500 + Math.random() * 500, 0.7, g));
+        }
+        const bg = this.gain(out, 0); this.perc(bg, t, 0.5, 0.9);
+        const o = this.osc('sine', 60, t, 1, bg); o.frequency.exponentialRampToValueAtTime(30, t + 0.8);
+        this.send(bg, verb, 0.3);
+        break;
+      }
+      case 'fire': {
+        if (!this.ready('fire', 0.08)) return;
+        for (let k = 0; k < 4; k++) {
+          const tk = t + Math.random() * 0.25;
+          const g = this.gain(out, 0); this.perc(g, tk, 0.05 + Math.random() * 0.05, 0.02 + Math.random() * 0.03, 0.001);
+          this.noiseSrc(tk, 0.06, this.filter('bandpass', 1500 + Math.random() * 3000, 1.5, g));
+        }
+        break;
+      }
+      default: break;
+    }
+  }
+}
+const SOUND = new SoundEngine();
+
 // ---------------------------------------------------------------------------- Spielstände --
 // Four save slots. Saves go to the artifact's persistent storage (window.storage) when the
 // game runs as a Claude artifact, otherwise to the browser's localStorage; if neither is
@@ -5238,6 +5846,11 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
 const SAVE_SLOTS = 4;
 const SAVE_VERSION = 1;
 const saveKey = (slot) => `castles-spielstand-${slot}`;
+// Two automatic saves, overwritten each time: at the start of every year (after the Saxon
+// attack has been dealt with) and shortly before every battle.
+const AUTOSAVE_KINDS = ['jahr', 'schlacht'];
+const autoSaveKey = (kind) => `castles-spielstand-auto-${kind}`;
+const AUTOSAVE_LABEL = { jahr: 'Jahresbeginn', schlacht: 'Vor der Schlacht' };
 const memorySaves = {};
 function saveBackend() {
   try { if (typeof window !== 'undefined' && window.storage && typeof window.storage.set === 'function') return 'artifact'; } catch (e) { /* ignore */ }
@@ -5615,7 +6228,11 @@ export default function CastleBuilder() {
     saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
+  const [settings, setSettings] = useState(loadSettings);
+  const updateSettings = useCallback((patch) => setSettings((s) => ({ ...s, ...patch })), []);
+  useEffect(() => { SOUND.setSettings(settings); storeSettings(settings); }, [settings]);
   const [saveSlots, setSaveSlots] = useState(() => Array(SAVE_SLOTS).fill(null));
+  const [autoSlots, setAutoSlots] = useState({ jahr: null, schlacht: null });
   const [saveBusy, setSaveBusy] = useState(false);
   const [slotConfirm, setSlotConfirm] = useState(null); // e.g. 'save-2', 'load-1', 'del-3'
   const [saveNote, setSaveNote] = useState(null);
@@ -5628,6 +6245,14 @@ export default function CastleBuilder() {
       out.push(parsed && parsed.meta ? parsed : null);
     }
     setSaveSlots(out);
+    const autos = {};
+    for (const kind of AUTOSAVE_KINDS) {
+      const raw = await saveStoreGet(autoSaveKey(kind));
+      let parsed = null;
+      try { parsed = raw ? JSON.parse(raw) : null; } catch (e) { parsed = null; }
+      autos[kind] = parsed && parsed.meta ? parsed : null;
+    }
+    setAutoSlots(autos);
   }, []);
   useEffect(() => { refreshSaveSlots(); }, [refreshSaveSlots]);
   const buildSaveData = () => {
@@ -5666,6 +6291,9 @@ export default function CastleBuilder() {
     const maxWorkerId = (st.workerUnits || []).reduce((m, w) => Math.max(m, w.id || 0), 0);
     workerIdSeq = Math.max(workerIdSeq, maxWorkerId + 1);
     setIsPaused(true);
+    autoQuietDayRef.current = st.day;
+    autoYearRef.current = null;
+    soundQuietUntilRef.current = Date.now() + 1500;
     return true;
   };
   const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome;
@@ -5680,13 +6308,27 @@ export default function CastleBuilder() {
     logEvent('💾', `Spielstand ${slot} gespeichert`, 'good');
   };
   const loadFromSlot = (slot) => {
-    const data = saveSlots[slot - 1];
+    const auto = typeof slot === 'string';
+    const data = auto ? autoSlots[slot] : saveSlots[slot - 1];
     if (!data) return;
     applySaveData(data);
     setSlotConfirm(null);
     setSaveNote(null);
-    setTimeout(() => logEvent('📂', `Spielstand ${slot} geladen`, 'neutral'), 0);
+    setTimeout(() => logEvent('📂', auto ? `Automatischer Spielstand „${AUTOSAVE_LABEL[slot]}“ geladen` : `Spielstand ${slot} geladen`, 'neutral'), 0);
   };
+  const autoSave = async (kind) => {
+    const data = buildSaveData();
+    data.meta.auto = kind;
+    await saveStoreSet(autoSaveKey(kind), JSON.stringify(data));
+    await refreshSaveSlots();
+    logEvent('💾', `Automatisch gespeichert (${AUTOSAVE_LABEL[kind]})`, 'neutral');
+  };
+  // Autosave bookkeeping: the year last saved, the battle last saved before, and a day up to
+  // which nothing is saved (right after loading, so a load doesn't immediately overwrite).
+  const autoYearRef = useRef(null);
+  const autoBattleRef = useRef(null);
+  const autoQuietDayRef = useRef(-1);
+  const soundQuietUntilRef = useRef(0);
   const deleteSlot = async (slot) => {
     await saveStoreDelete(saveKey(slot));
     await refreshSaveSlots();
@@ -5715,6 +6357,11 @@ export default function CastleBuilder() {
   const [chronicleSeen, setChronicleSeen] = useState(0);
   const [toastNow, setToastNow] = useState(Date.now());
   const logEvent = useCallback((icon, text, tone = 'neutral') => {
+    if (Date.now() > soundQuietUntilRef.current) {
+      if (icon === '🏗️' || icon === '🗼' || icon === '🏰' || icon === '🚪') SOUND.play('complete');
+      else if (tone === 'good') SOUND.play('good');
+      else if (tone === 'bad') SOUND.play('bad');
+    }
     setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
   }, []);
   const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
@@ -7025,6 +7672,7 @@ export default function CastleBuilder() {
       if (k === 'h' || k === 'H') { centerOnCastle(); return; }
       if (k === 'c' || k === 'C') { setOpenPanel((p) => (p === 'chronik' ? null : 'chronik')); return; }
       if (k === 's' || k === 'S') { setOpenPanel((p) => (p === 'speicher' ? null : 'speicher')); return; }
+      if (k === 'm' || k === 'M') { setSettings((st) => ({ ...st, muted: !st.muted })); return; }
       const step = 70;
       if (k === 'ArrowLeft') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x + step })); return; }
       if (k === 'ArrowRight') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x - step })); return; }
@@ -7388,6 +8036,13 @@ export default function CastleBuilder() {
       setBattleUnits(units);
       setBattleObstacles(obstacles);
       setAttackerMorale(morale);
+      const tickNow = battleTickCountRef.current || 0;
+      const heavyShots = shots.filter((sh) => sh.heavy).length;
+      if (heavyShots) SOUND.play('catapult');
+      for (let k = 0; k < Math.min(3, shots.length - heavyShots); k++) setTimeout(() => SOUND.play('bow'), k * 70);
+      const hits = units.filter((u) => u.hitTick === tickNow && u.hp > 0).length;
+      for (let k = 0; k < Math.min(3, hits); k++) setTimeout(() => SOUND.play('clash'), k * 90);
+      if (obstacles.some((o) => o.breachTick === tickNow)) SOUND.play('crumble');
       if (shots.length > 0) {
         // Only the newly-fired shots are appended here — their in-flight progress is
         // advanced separately, on a much faster loop (see below), so the arc actually
@@ -7420,7 +8075,10 @@ export default function CastleBuilder() {
         prev.forEach((a) => {
           const progress = a.progress + ARROW_STEP * gameSpeed;
           if (progress < 1) next.push({ ...a, progress });
-          else impactQueueRef.current.push({ id: a.id, i: a.toI, j: a.toJ, elev: a.toElev || 0, heavy: !!a.heavy });
+          else {
+            impactQueueRef.current.push({ id: a.id, i: a.toI, j: a.toJ, elev: a.toElev || 0, heavy: !!a.heavy });
+            SOUND.play(a.heavy ? 'crash' : 'impact');
+          }
         });
         return next;
       });
@@ -7742,6 +8400,7 @@ export default function CastleBuilder() {
     if ((tool === 'wall' || tool === 'gate') && !isBuildableEdge(effInfo.i1, effInfo.j1, effInfo.i2, effInfo.j2)) return;
     if (tool === 'graben' && !moatUnlocked) return;
     if (tool === 'graben' && !isBuildableEdge(info.i1, info.j1, info.i2, info.j2, true)) return;
+    SOUND.play('place');
     setStructures((prev) => {
       const current = prev[effKey];
       const next = { ...prev };
@@ -7789,6 +8448,7 @@ export default function CastleBuilder() {
         const [ai, aj] = wallChainAnchor.split(',').map(Number);
         setWallChainAnchor(null);
         const pathEdges = wallChainPathEdges(ai, aj, i, j);
+        SOUND.play('place');
         setStructures((prev) => {
           const next = { ...prev };
           pathEdges.forEach((e) => {
@@ -7802,6 +8462,7 @@ export default function CastleBuilder() {
       }
       if (isTowerHere) { setWallChainAnchor(key); return; }
     }
+    SOUND.play('place');
     setStructures((prev) => {
       const next = { ...prev };
       if (tool === 'tower') {
@@ -7826,6 +8487,7 @@ export default function CastleBuilder() {
     }
     if (tool === 'keep') {
       if (terrainAt(i, j) !== 'grass') return;
+      SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
         if (next.keep && Math.floor(next.keep.i) === i && Math.floor(next.keep.j) === j) delete next.keep;
@@ -7838,6 +8500,7 @@ export default function CastleBuilder() {
       if (!structuresRef.current.keep) return;
       if (terrainAt(i, j) !== 'grass') return;
       if (tool === 'kemenate' && !isKemenateAllowed(structuresRef.current, i, j)) return;
+      SOUND.play('place');
       setStructures((prev) => {
         const current = prev[key];
         const next = { ...prev };
@@ -7873,6 +8536,7 @@ export default function CastleBuilder() {
         const ii = i1, lo = Math.min(j1, j2), hi = Math.max(j1, j2);
         for (let j = lo; j < hi; j++) pathEdges.push({ key: `${ii},${j}-${ii},${j + 1}`, i1: ii, j1: j, i2: ii, j2: j + 1 });
       }
+      SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
         pathEdges.forEach((e) => {
@@ -8286,6 +8950,83 @@ export default function CastleBuilder() {
   const warningActive = daysUntilAttack <= 30;
   const currentDefense = computeDefense(structures, soldiers);
 
+  // ---- Autosave ----------------------------------------------------------------------------
+  // Once a year (as soon as the new year's attack and its report are over) and once before
+  // each battle — the Saxons when their warning starts, a feud ten days ahead.
+  useEffect(() => {
+    if (!settings.autosave || !canSaveNow || battleEvent || raidEvent || desertionForecast) return;
+    const quiet = day <= autoQuietDayRef.current;
+    const nextFeud = pendingFeudAttacks.reduce((m, fa) => (m == null || fa.day < m.day ? fa : m), null);
+    const battleKey = warningActive ? `sachsen-${calDate.year}` : (nextFeud && nextFeud.day - day <= 10 ? `fehde-${nextFeud.day}` : null);
+    let yearDue = false;
+    if (autoYearRef.current == null) autoYearRef.current = calDate.year;
+    else if (calDate.year > autoYearRef.current) { autoYearRef.current = calDate.year; yearDue = !quiet; }
+    let battleDue = false;
+    if (battleKey && autoBattleRef.current !== battleKey) { autoBattleRef.current = battleKey; battleDue = !quiet; }
+    if (yearDue) autoSave('jahr');
+    if (battleDue) autoSave('schlacht');
+  });
+
+  // ---- Klang -------------------------------------------------------------------------------
+  // The audio context may only start after a user gesture; every click also gets a soft tick.
+  useEffect(() => {
+    const unlock = () => SOUND.unlock();
+    const click = (e) => {
+      SOUND.unlock();
+      const b = e.target && e.target.closest && e.target.closest('button, label.cb-btn');
+      if (b && !b.disabled) SOUND.play('click');
+    };
+    window.addEventListener('pointerdown', click, true);
+    window.addEventListener('keydown', unlock, true);
+    return () => { window.removeEventListener('pointerdown', click, true); window.removeEventListener('keydown', unlock, true); };
+  }, []);
+  useEffect(() => { SOUND.setMusicMode(battlePhase ? 'battle' : 'peace'); }, [battlePhase]);
+  useEffect(() => { SOUND.setSeason(calDate.month); }, [calDate.month]);
+  // Construction noise from whoever is actually at work.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (isPausedRef.current || battlePhaseRef.current || !SOUND.live) return;
+      const n = { mason: 0, carpenter: 0, laborer: 0, quarrier: 0, lumberjack: 0 };
+      workersRef.current.forEach((w) => {
+        if (w.type === 'quarrier' || w.type === 'lumberjack') { if (w.atTarget) n[w.type] += 1; }
+        else if (w.siteKey && w.arrived) n[w.type === 'arbeiter' ? 'laborer' : w.type] = (n[w.type === 'arbeiter' ? 'laborer' : w.type] || 0) + 1;
+      });
+      const chance = (c, per) => Math.random() < 1 - Math.exp(-c * per);
+      if (chance(n.mason, 0.22)) SOUND.work('chisel');
+      if (chance(n.carpenter, 0.18)) SOUND.work(Math.random() < 0.3 ? 'saw' : 'hammer');
+      if (chance(n.laborer, 0.08)) SOUND.work('hammer');
+      if (chance(n.quarrier, 0.12)) SOUND.work('pick');
+      if (chance(n.lumberjack, 0.12)) SOUND.work('axe');
+    }, 280);
+    return () => clearInterval(id);
+  }, []);
+  // Signals for what happens in the realm.
+  const soundPrevRef = useRef({});
+  useEffect(() => {
+    const prev = soundPrevRef.current;
+    const quiet = Date.now() < soundQuietUntilRef.current;
+    const cur = { warningActive, battlePhase, battleEvent, petitionEvent: !!petitionEvent, dynastyEvent: !!dynastyEvent, kingName, year: calDate.year, gameOver: !!gameOverEvent };
+    if (!quiet && prev.kingName !== undefined) {
+      if (cur.kingName && !prev.kingName) SOUND.play('coronation');
+      if (cur.warningActive && !prev.warningActive && !cur.battlePhase) SOUND.play('horn');
+      const newYear = cur.year > prev.year;
+      if (newYear) SOUND.play('bell');
+      if (cur.battlePhase === 'fleeing' && prev.battlePhase !== 'fleeing') {
+        if (newYear) setTimeout(() => SOUND.play('warhorn'), 2600); else SOUND.play('warhorn');
+      }
+      if (cur.battleEvent && cur.battleEvent !== prev.battleEvent) SOUND.play(cur.battleEvent.won ? 'victory' : 'defeat');
+      if ((cur.petitionEvent && !prev.petitionEvent) || (cur.dynastyEvent && !prev.dynastyEvent)) SOUND.play('event');
+      if (cur.gameOver && !prev.gameOver) SOUND.play('defeat');
+    }
+    soundPrevRef.current = cur;
+  });
+  // A burning castle crackles.
+  useEffect(() => {
+    if (battlePhase !== 'raiding') return undefined;
+    const id = setInterval(() => SOUND.play('fire'), 180);
+    return () => clearInterval(id);
+  }, [battlePhase]);
+
   const smithWageMult = SMITH_WAGE_MULT[smithTier] || 1;
   const effectiveSoldierWage = SOLDIER_WAGE.soldier * smithWageMult * soldierWageMultiplier;
   const effectiveArcherWage = SOLDIER_WAGE.archer * smithWageMult * soldierWageMultiplier;
@@ -8588,7 +9329,7 @@ export default function CastleBuilder() {
                   style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>
                   Krönen
                 </button>
-                {saveSlots.some(Boolean) && (
+                {(saveSlots.some(Boolean) || autoSlots.jahr || autoSlots.schlacht) && (
                   <button onClick={() => setOpenPanel('speicher')}
                     style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginLeft: 8 }}>
                     Spielstand laden
@@ -8640,7 +9381,7 @@ export default function CastleBuilder() {
                   <button onClick={() => window.location.reload()} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10 }}>
                     Neues Spiel
                   </button>
-                  {saveSlots.some(Boolean) && (
+                  {(saveSlots.some(Boolean) || autoSlots.jahr || autoSlots.schlacht) && (
                     <button onClick={() => setOpenPanel('speicher')} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10, marginLeft: 8 }}>
                       Spielstand laden
                     </button>
@@ -8656,7 +9397,7 @@ export default function CastleBuilder() {
                   <button onClick={() => window.location.reload()} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10 }}>
                     Neues Spiel
                   </button>
-                  {saveSlots.some(Boolean) && (
+                  {(saveSlots.some(Boolean) || autoSlots.jahr || autoSlots.schlacht) && (
                     <button onClick={() => setOpenPanel('speicher')} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10, marginLeft: 8 }}>
                       Spielstand laden
                     </button>
@@ -8894,13 +9635,14 @@ export default function CastleBuilder() {
             { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
             { id: 'speicher', icon: '💾', label: 'Spielstände' },
           ].map((p) => (
-            <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
+            <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark cb-navbtn${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
               title={p.label} style={{ padding: '5px 9px', fontSize: '0.88rem', position: 'relative' }}>
               <span>{p.icon}</span><span className="cb-nav-label">{p.label}</span>
               {p.badge > 0 && <span style={{ position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, borderRadius: 8, background: '#c0392b', color: '#fff', fontSize: '0.66rem', lineHeight: '16px', textAlign: 'center', padding: '0 3px' }}>{p.badge > 9 ? '9+' : p.badge}</span>}
             </button>
           ))}
-          <button onClick={() => setHelpOpen(true)} className="cb-btn-dark" title="Hilfe & Tastenkürzel (?)" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>❔</button>
+          <button onClick={() => setOpenPanel('einstellungen')} className={`cb-btn-dark cb-navbtn${openPanel === 'einstellungen' ? ' is-active' : ''}`} title="Klang & Einstellungen" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>⚙️</button>
+          <button onClick={() => setHelpOpen(true)} className="cb-btn-dark cb-navbtn" title="Hilfe & Tastenkürzel (?)" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>❔</button>
         </div>
       </div>
 
@@ -9141,6 +9883,35 @@ export default function CastleBuilder() {
             );
             return (
               <>
+                <div className="cb-section-title">Automatisch gespeichert {!settings.autosave && <span style={{ textTransform: 'none', fontStyle: 'italic', letterSpacing: 0 }}>(abgeschaltet)</span>}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 10, marginBottom: 12 }}>
+                  {AUTOSAVE_KINDS.map((kind) => {
+                    const sv = autoSlots[kind];
+                    const m = sv && sv.meta;
+                    return (
+                      <div key={kind} className="cb-parch" style={{ padding: '8px 10px', boxShadow: 'inset 0 0 0 2px rgba(201,162,75,0.35)', background: m ? 'linear-gradient(180deg,#efe6cc,#e2d4ae)' : 'rgba(255,250,235,0.35)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <span className="cb-title" style={{ fontSize: '0.84rem', color: '#5a4a34' }}>{kind === 'jahr' ? '🔔' : '⚔️'} {AUTOSAVE_LABEL[kind]}</span>
+                          {m && <span style={{ fontSize: '0.7rem', color: '#7a6a50', fontStyle: 'italic' }}>{new Date(m.savedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+                        </div>
+                        {m ? (
+                          <div style={{ fontSize: '0.8rem', color: '#5A5044', marginTop: 3 }}>👑 {m.king} · {m.dayOfMonth}. {MONTH_NAMES[m.month]} {m.year} · 🪙 {m.gold} · 🛡️ {m.defenders}</div>
+                        ) : (
+                          <div style={{ fontSize: '0.8rem', color: '#8a7a5a', fontStyle: 'italic', marginTop: 3 }}>— noch nichts gespeichert —</div>
+                        )}
+                        {m && (
+                          <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
+                            {kingName && !gameOverEvent
+                              ? confirmBtn(`load-${kind}`, 'Laden', 'Aktuelles Spiel verwerfen?', () => loadFromSlot(kind))
+                              : <button className="cb-btn is-active" onClick={() => loadFromSlot(kind)} style={{ flex: 1, padding: '5px 6px', fontSize: '0.84rem' }}>Laden</button>}
+                            <button className="cb-btn" onClick={() => downloadText(`castles-autosave-${kind}.json`, JSON.stringify(sv))} style={{ flex: '0 0 auto', padding: '3px 8px', fontSize: '0.76rem' }} title="Als Datei herunterladen">⬇</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="cb-section-title">Eigene Spielstände</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 10 }}>
                   {saveSlots.map((sv, idx) => {
                     const slot = idx + 1;
@@ -9196,6 +9967,37 @@ export default function CastleBuilder() {
         </Modal>
       )}
 
+      {openPanel === 'einstellungen' && (
+        <Modal title="⚙️ Klang & Einstellungen" onClose={() => setOpenPanel(null)} maxWidth={440}>
+          <div className="cb-section-title">Klang</div>
+          {[
+            { key: 'master', icon: '🔊', label: 'Gesamtlautstärke' },
+            { key: 'music', icon: '🎵', label: 'Musik' },
+            { key: 'sfx', icon: '⚔️', label: 'Effekte' },
+            { key: 'ambience', icon: '🌿', label: 'Umgebung & Baustellen' },
+          ].map((row) => (
+            <label key={row.key} style={{ display: 'grid', gridTemplateColumns: '22px 1fr 120px 36px', alignItems: 'center', gap: 8, fontSize: '0.9rem', marginBottom: 6 }}>
+              <span>{row.icon}</span><span>{row.label}</span>
+              <input type="range" min="0" max="100" value={Math.round(settings[row.key] * 100)} disabled={settings.muted}
+                onChange={(e) => updateSettings({ [row.key]: Number(e.target.value) / 100 })}
+                onPointerUp={() => { if (row.key === 'sfx') SOUND.play('clash'); else if (row.key === 'ambience') SOUND.work('chisel'); }}
+                style={{ width: '100%', accentColor: '#a8822e' }} />
+              <span style={{ fontSize: '0.78rem', color: '#6b5536', textAlign: 'right' }}>{Math.round(settings[row.key] * 100)}</span>
+            </label>
+          ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem', marginTop: 4 }}>
+            <input type="checkbox" checked={settings.muted} onChange={(e) => updateSettings({ muted: e.target.checked })} style={{ accentColor: '#a8822e' }} />
+            Alles stumm <span className="cb-key" style={{ marginLeft: 4 }}>M</span>
+          </label>
+          <div className="cb-section-title" style={{ marginTop: 14 }}>Spielstände</div>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.9rem' }}>
+            <input type="checkbox" checked={settings.autosave} onChange={(e) => updateSettings({ autosave: e.target.checked })} style={{ accentColor: '#a8822e', marginTop: 4 }} />
+            <span>Automatisch speichern<br /><span style={{ fontSize: '0.78rem', color: '#6b5536', fontStyle: 'italic' }}>zu jedem Jahresbeginn und kurz vor jeder Schlacht — in zwei eigene Speicherplätze, die vier normalen bleiben unberührt.</span></span>
+          </label>
+          <div style={{ fontSize: '0.74rem', color: '#7a6a50', fontStyle: 'italic', marginTop: 12, lineHeight: 1.4 }}>Musik und Geräusche werden live im Browser erzeugt. Der Ton startet nach dem ersten Klick.</div>
+        </Modal>
+      )}
+
       {helpOpen && (
         <Modal title="❔ Hilfe & Tastenkürzel" onClose={() => setHelpOpen(false)} maxWidth={460}>
           <div className="cb-section-title">Zeit</div>
@@ -9215,7 +10017,7 @@ export default function CastleBuilder() {
             <div><span className="cb-key">Mausrad</span> Zoom · <span className="cb-key">+</span> <span className="cb-key">−</span> Zoom</div>
             <div>Rechte Maustaste halten oder <span className="cb-key">←</span><span className="cb-key">↑</span><span className="cb-key">→</span><span className="cb-key">↓</span>: verschieben</div>
             <div><span className="cb-key">H</span> zum Burgfried · Minikarte anklicken: dorthin springen</div>
-            <div><span className="cb-key">C</span> Chronik · <span className="cb-key">S</span> Spielstände · <span className="cb-key">?</span> diese Hilfe</div>
+            <div><span className="cb-key">C</span> Chronik · <span className="cb-key">S</span> Spielstände · <span className="cb-key">M</span> Ton an/aus · <span className="cb-key">?</span> diese Hilfe</div>
           </div>
         </Modal>
       )}
@@ -9969,6 +10771,7 @@ export default function CastleBuilder() {
             <span style={{ fontSize: '0.78rem', minWidth: 38, textAlign: 'center' }}>{Math.round(zoom * 100)} %</span>
             <button className="cb-btn-dark" title="Hineinzoomen (+)" onClick={() => zoomBy(1.2)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>+</button>
             <button className="cb-btn-dark" title="Auf den Burgfried zentrieren (H)" onClick={centerOnCastle} style={{ height: 28, padding: '0 8px', fontSize: '0.85rem' }}>🏰</button>
+            <button className="cb-btn-dark" title={settings.muted ? 'Ton einschalten (M)' : 'Ton ausschalten (M)'} onClick={() => updateSettings({ muted: !settings.muted })} style={{ height: 28, padding: '0 8px', fontSize: '0.85rem' }}>{settings.muted ? '🔇' : '🔊'}</button>
           </div>
           {/* Alerts */}
           <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, zIndex: 10, pointerEvents: 'none' }}>
