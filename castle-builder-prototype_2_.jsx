@@ -3702,7 +3702,7 @@ function PortraitAvatar({ stage, dead = false, size = 56 }) {
   );
 }
 
-function Modal({ title, onClose, children, maxWidth = 380 }) {
+function Modal({ title, onClose, children, maxWidth = 380, zIndex = 60 }) {
   // Esc closes any panel.
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -3710,7 +3710,7 @@ function Modal({ title, onClose, children, maxWidth = 380 }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.58)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, padding: '48px 16px', overflowY: 'auto' }}>
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.58)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex, padding: '48px 16px', overflowY: 'auto' }}>
       <div onClick={(e) => e.stopPropagation()} className="cb-parch cb-modal-in" style={{ maxWidth, width: '100%', overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px 9px 18px', background: 'linear-gradient(180deg, #4b3925, #2e2216)', borderBottom: '2px solid #c9a24b' }}>
           <div className="cb-title" style={{ fontSize: '1.02rem', color: '#f1e6c8', letterSpacing: '0.05em' }}>{title}</div>
@@ -5231,6 +5231,53 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
   );
 }
 
+// ---------------------------------------------------------------------------- Spielstände --
+// Four save slots. Saves go to the artifact's persistent storage (window.storage) when the
+// game runs as a Claude artifact, otherwise to the browser's localStorage; if neither is
+// available they only live until the page is closed — export/import as a file always works.
+const SAVE_SLOTS = 4;
+const SAVE_VERSION = 1;
+const saveKey = (slot) => `castles-spielstand-${slot}`;
+const memorySaves = {};
+function saveBackend() {
+  try { if (typeof window !== 'undefined' && window.storage && typeof window.storage.set === 'function') return 'artifact'; } catch (e) { /* ignore */ }
+  try { if (typeof window !== 'undefined' && window.localStorage) { window.localStorage.setItem('castles-probe', '1'); window.localStorage.removeItem('castles-probe'); return 'local'; } } catch (e) { /* ignore */ }
+  return 'memory';
+}
+async function saveStoreGet(key) {
+  try {
+    if (window.storage && window.storage.get) {
+      const r = await window.storage.get(key);
+      if (r && r.value != null) return r.value;
+    }
+  } catch (e) { /* missing key or no storage */ }
+  try { const v = window.localStorage.getItem(key); if (v != null) return v; } catch (e) { /* ignore */ }
+  return memorySaves[key] != null ? memorySaves[key] : null;
+}
+async function saveStoreSet(key, value) {
+  let ok = false;
+  try { if (window.storage && window.storage.set) { await window.storage.set(key, value); ok = true; } } catch (e) { /* ignore */ }
+  try { window.localStorage.setItem(key, value); ok = true; } catch (e) { /* ignore */ }
+  memorySaves[key] = value;
+  return ok;
+}
+async function saveStoreDelete(key) {
+  try { if (window.storage && window.storage.delete) await window.storage.delete(key); } catch (e) { /* ignore */ }
+  try { window.localStorage.removeItem(key); } catch (e) { /* ignore */ }
+  delete memorySaves[key];
+}
+function downloadText(filename, text) {
+  try {
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (e) { return false; }
+}
+
 const TOOLS = [
   { id: 'wall', label: 'Mauer', emoji: '🧱', hint: 'Klicke auf eine Kante für eine einzelne Mauer, oder ziehe von Punkt zu Punkt für eine ganze Reihe. Einen Turm anklicken und danach einen beliebigen Punkt verbindet beide automatisch (nutzt diagonale Stücke, wo sie kürzer sind). Mausrad dreht die Ausrichtung im Uhrzeigersinn (gerade ↔ beide Diagonalen), Tab schaltet zusätzlich schnell auf diagonal um. Rechtsklick auf eine bestehende Mauer zeigt Infos & Abriss.' },
   { id: 'tower', label: 'Turm', emoji: '🗼', hint: 'Klicke auf einen Rasterpunkt auf Grasland für einen Turm.' },
@@ -5559,6 +5606,108 @@ export default function CastleBuilder() {
       if (units[k].side === 'defender' && units[k].type === 'soldier') { units[k].merc = true; left--; }
     }
   };
+  // ---- Spielstände ---------------------------------------------------------------------------
+  // Everything that makes up a running game; UI-only and in-battle state is left out (saving
+  // is only offered in calm moments) and reset on load.
+  const saveSnapshotRef = useRef(null);
+  const initialSnapshotRef = useRef(null);
+  useEffect(() => {
+    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm };
+    if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
+  });
+  const [saveSlots, setSaveSlots] = useState(() => Array(SAVE_SLOTS).fill(null));
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [slotConfirm, setSlotConfirm] = useState(null); // e.g. 'save-2', 'load-1', 'del-3'
+  const [saveNote, setSaveNote] = useState(null);
+  const refreshSaveSlots = useCallback(async () => {
+    const out = [];
+    for (let n = 1; n <= SAVE_SLOTS; n++) {
+      const raw = await saveStoreGet(saveKey(n));
+      let parsed = null;
+      try { parsed = raw ? JSON.parse(raw) : null; } catch (e) { parsed = null; }
+      out.push(parsed && parsed.meta ? parsed : null);
+    }
+    setSaveSlots(out);
+  }, []);
+  useEffect(() => { refreshSaveSlots(); }, [refreshSaveSlots]);
+  const buildSaveData = () => {
+    const st = saveSnapshotRef.current;
+    const values = Object.values(st.structures);
+    const d = getCalendarDate(st.day);
+    return {
+      version: SAVE_VERSION,
+      meta: {
+        king: st.kingName ? `${st.kingName} ${regnalNumeral(st.kingOrdinal)}.` : '—',
+        year: d.year, month: d.month, dayOfMonth: d.dayOfMonth,
+        gold: Math.round(st.resources.gold), pop: st.villagePop, reputation: Math.round(st.reputation),
+        walls: values.filter((x) => x.type === 'wall' && x.stage === 'done').length,
+        towers: values.filter((x) => x.type === 'tower' && x.stage === 'done').length,
+        buildings: values.filter((x) => x.type === 'amenity' && x.stage === 'done').length,
+        defenders: st.soldiers.soldier + st.soldiers.archer,
+        savedAt: Date.now(),
+      },
+      state: st,
+    };
+  };
+  const applySaveData = (data) => {
+    if (!data || !data.state) return false;
+    const st = data.state;
+    const init = initialSnapshotRef.current || {};
+    // Clear anything in flight first, then restore every saved value (or the starting value
+    // for anything an older save didn't know about yet).
+    setPetitionEvent(null); setEventOutcome(null); setGameOverEvent(null); setDynastyEvent(null);
+    setCourtRivalryEvent(null); setDesertionForecast(null); setBattleEvent(null); setRaidEvent(null);
+    setInfoTarget(null); setBattlePhase(null); setBattleUnits([]); setBattleObstacles([]);
+    setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
+    prevDoneRef.current = null; prevPopRef.current = null;
+    desertionForecastWarnedRef.current = false;
+    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm };
+    Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
+    const maxWorkerId = (st.workerUnits || []).reduce((m, w) => Math.max(m, w.id || 0), 0);
+    workerIdSeq = Math.max(workerIdSeq, maxWorkerId + 1);
+    setIsPaused(true);
+    return true;
+  };
+  const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome;
+  const saveToSlot = async (slot) => {
+    setSaveBusy(true);
+    const data = buildSaveData();
+    const ok = await saveStoreSet(saveKey(slot), JSON.stringify(data));
+    await refreshSaveSlots();
+    setSaveBusy(false);
+    setSlotConfirm(null);
+    setSaveNote(ok ? `Spielstand ${slot} gespeichert.` : `Spielstand ${slot} nur bis zum Schließen der Seite gesichert — bitte exportieren.`);
+    logEvent('💾', `Spielstand ${slot} gespeichert`, 'good');
+  };
+  const loadFromSlot = (slot) => {
+    const data = saveSlots[slot - 1];
+    if (!data) return;
+    applySaveData(data);
+    setSlotConfirm(null);
+    setSaveNote(null);
+    setTimeout(() => logEvent('📂', `Spielstand ${slot} geladen`, 'neutral'), 0);
+  };
+  const deleteSlot = async (slot) => {
+    await saveStoreDelete(saveKey(slot));
+    await refreshSaveSlots();
+    setSlotConfirm(null);
+  };
+  const importIntoSlot = (slot, file) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (!data || !data.state || !data.meta) throw new Error('kein Spielstand');
+        await saveStoreSet(saveKey(slot), JSON.stringify(data));
+        await refreshSaveSlots();
+        setSaveNote(`Datei in Spielstand ${slot} importiert.`);
+      } catch (e) {
+        setSaveNote('Diese Datei ist kein gültiger Spielstand.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // ---- Chronik & Meldungen -----------------------------------------------------------------
   // A running log of what happened in the realm; the newest entries also pop up briefly as
   // toasts over the map.
@@ -6875,6 +7024,7 @@ export default function CastleBuilder() {
       if (k === '?') { setHelpOpen((o) => !o); return; }
       if (k === 'h' || k === 'H') { centerOnCastle(); return; }
       if (k === 'c' || k === 'C') { setOpenPanel((p) => (p === 'chronik' ? null : 'chronik')); return; }
+      if (k === 's' || k === 'S') { setOpenPanel((p) => (p === 'speicher' ? null : 'speicher')); return; }
       const step = 70;
       if (k === 'ArrowLeft') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x + step })); return; }
       if (k === 'ArrowRight') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x - step })); return; }
@@ -8438,6 +8588,12 @@ export default function CastleBuilder() {
                   style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>
                   Krönen
                 </button>
+                {saveSlots.some(Boolean) && (
+                  <button onClick={() => setOpenPanel('speicher')}
+                    style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginLeft: 8 }}>
+                    Spielstand laden
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -8484,6 +8640,11 @@ export default function CastleBuilder() {
                   <button onClick={() => window.location.reload()} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10 }}>
                     Neues Spiel
                   </button>
+                  {saveSlots.some(Boolean) && (
+                    <button onClick={() => setOpenPanel('speicher')} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10, marginLeft: 8 }}>
+                      Spielstand laden
+                    </button>
+                  )}
                 </>
               )}
               {gameOverEvent.type === 'keepFallen' && (
@@ -8495,6 +8656,11 @@ export default function CastleBuilder() {
                   <button onClick={() => window.location.reload()} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10 }}>
                     Neues Spiel
                   </button>
+                  {saveSlots.some(Boolean) && (
+                    <button onClick={() => setOpenPanel('speicher')} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#C9A24B', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 10, marginLeft: 8 }}>
+                      Spielstand laden
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -8726,6 +8892,7 @@ export default function CastleBuilder() {
             { id: 'dynastie', icon: '👑', label: 'Dynastie' },
             { id: 'hof', icon: '🎭', label: 'Hof' },
             { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
+            { id: 'speicher', icon: '💾', label: 'Spielstände' },
           ].map((p) => (
             <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
               title={p.label} style={{ padding: '5px 9px', fontSize: '0.88rem', position: 'relative' }}>
@@ -8958,6 +9125,77 @@ export default function CastleBuilder() {
         </Modal>
       )}
 
+      {openPanel === 'speicher' && (
+        <Modal title="💾 Spielstände" onClose={() => { setOpenPanel(null); setSlotConfirm(null); setSaveNote(null); }} maxWidth={660} zIndex={75}>
+          {(() => {
+            const backend = saveBackend();
+            const reason = !kingName ? 'Erst nach der Krönung kann gespeichert werden.'
+              : battlePhase ? 'Während einer Schlacht kann nicht gespeichert werden.'
+              : (petitionEvent || eventOutcome || dynastyEvent || courtRivalryEvent || gameOverEvent) ? 'Erst das offene Ereignis beantworten, dann speichern.' : null;
+            const confirmBtn = (id, label, armedLabel, onGo, cls = '') => (
+              <button className={`cb-btn${slotConfirm === id ? ' is-danger' : ''} ${cls}`} disabled={saveBusy}
+                onClick={() => { if (slotConfirm === id) onGo(); else setSlotConfirm(id); }}
+                style={{ flex: 1, padding: '5px 6px', fontSize: '0.84rem' }}>
+                {slotConfirm === id ? armedLabel : label}
+              </button>
+            );
+            return (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 10 }}>
+                  {saveSlots.map((sv, idx) => {
+                    const slot = idx + 1;
+                    const m = sv && sv.meta;
+                    return (
+                      <div key={slot} className="cb-parch" style={{ padding: 10, boxShadow: 'inset 0 0 0 2px rgba(201,162,75,0.35)', background: m ? 'linear-gradient(180deg,#f6eed6,#e9dcb8)' : 'rgba(255,250,235,0.35)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <span className="cb-title" style={{ fontSize: '0.9rem', color: '#5a4a34' }}>Spielstand {slot}</span>
+                          {m && <span style={{ fontSize: '0.7rem', color: '#7a6a50', fontStyle: 'italic' }}>{new Date(m.savedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+                        </div>
+                        {m ? (
+                          <>
+                            <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: 4 }}>👑 {m.king}</div>
+                            <div style={{ fontSize: '0.82rem', color: '#5A5044' }}>{m.dayOfMonth}. {MONTH_NAMES[m.month]} {m.year} · Regierungsjahr {m.year - START_YEAR + 1}</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', fontSize: '0.8rem', marginTop: 4 }}>
+                              <span>🪙 {m.gold}</span><span>👥 {m.pop}</span><span>🧱 {m.walls}</span><span>🗼 {m.towers}</span><span>🏛️ {m.buildings}</span><span>🛡️ {m.defenders}</span><span>⚜️ {m.reputation}</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: '0.86rem', color: '#8a7a5a', fontStyle: 'italic', margin: '14px 0 12px' }}>— leer —</div>
+                        )}
+                        <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
+                          {reason ? (
+                            <button className="cb-btn" disabled style={{ flex: 1, padding: '5px 6px', fontSize: '0.84rem' }} title={reason}>Speichern</button>
+                          ) : m ? confirmBtn(`save-${slot}`, 'Speichern', 'Überschreiben?', () => saveToSlot(slot)) : (
+                            <button className="cb-btn" disabled={saveBusy} onClick={() => saveToSlot(slot)} style={{ flex: 1, padding: '5px 6px', fontSize: '0.84rem' }}>Speichern</button>
+                          )}
+                          {m && (kingName && !gameOverEvent
+                            ? confirmBtn(`load-${slot}`, 'Laden', 'Aktuelles Spiel verwerfen?', () => loadFromSlot(slot))
+                            : <button className="cb-btn is-active" onClick={() => loadFromSlot(slot)} style={{ flex: 1, padding: '5px 6px', fontSize: '0.84rem' }}>Laden</button>)}
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, marginTop: 5 }}>
+                          {m && <button className="cb-btn" onClick={() => downloadText(`castles-spielstand-${slot}.json`, JSON.stringify(sv))} style={{ flex: 1, padding: '3px 6px', fontSize: '0.76rem' }} title="Als Datei herunterladen">⬇ Export</button>}
+                          <label className="cb-btn" style={{ flex: 1, padding: '3px 6px', fontSize: '0.76rem', textAlign: 'center' }} title="Spielstand-Datei in dieses Feld laden">
+                            ⬆ Import
+                            <input type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) importIntoSlot(slot, f); e.target.value = ''; }} />
+                          </label>
+                          {m && confirmBtn(`del-${slot}`, '🗑', 'Löschen?', () => deleteSlot(slot))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {(reason || saveNote) && <div style={{ marginTop: 10, fontSize: '0.84rem', color: saveNote && saveNote.includes('nur bis') ? '#8a2d20' : '#3d5a2c' }}>{saveNote || <span style={{ color: '#7a5a20' }}>{reason}</span>}</div>}
+                <div style={{ marginTop: 10, fontSize: '0.74rem', color: '#7a6a50', fontStyle: 'italic', lineHeight: 1.4 }}>
+                  {backend === 'artifact' ? 'Spielstände werden dauerhaft im Artefakt-Speicher abgelegt.'
+                    : backend === 'local' ? 'Spielstände werden dauerhaft in diesem Browser gespeichert.'
+                    : 'Dieser Browser erlaubt kein dauerhaftes Speichern — Spielstände gehen beim Schließen verloren. Nutze „Export“, um sie als Datei zu sichern.'}
+                </div>
+              </>
+            );
+          })()}
+        </Modal>
+      )}
+
       {helpOpen && (
         <Modal title="❔ Hilfe & Tastenkürzel" onClose={() => setHelpOpen(false)} maxWidth={460}>
           <div className="cb-section-title">Zeit</div>
@@ -8977,7 +9215,7 @@ export default function CastleBuilder() {
             <div><span className="cb-key">Mausrad</span> Zoom · <span className="cb-key">+</span> <span className="cb-key">−</span> Zoom</div>
             <div>Rechte Maustaste halten oder <span className="cb-key">←</span><span className="cb-key">↑</span><span className="cb-key">→</span><span className="cb-key">↓</span>: verschieben</div>
             <div><span className="cb-key">H</span> zum Burgfried · Minikarte anklicken: dorthin springen</div>
-            <div><span className="cb-key">C</span> Chronik · <span className="cb-key">?</span> diese Hilfe</div>
+            <div><span className="cb-key">C</span> Chronik · <span className="cb-key">S</span> Spielstände · <span className="cb-key">?</span> diese Hilfe</div>
           </div>
         </Modal>
       )}
