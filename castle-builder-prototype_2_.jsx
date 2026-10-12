@@ -3703,14 +3703,20 @@ function PortraitAvatar({ stage, dead = false, size = 56 }) {
 }
 
 function Modal({ title, onClose, children, maxWidth = 380 }) {
+  // Esc closes any panel.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, padding: '48px 16px', overflowY: 'auto' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#EAE0C4', border: '4px solid #5C554A', borderRadius: 6, padding: 20, maxWidth, width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div className="cb-title" style={{ fontSize: '1.05rem', color: '#5A5044' }}>{title}</div>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: '1.2rem', cursor: 'pointer', color: '#5A5044' }}>✕</button>
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.58)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, padding: '48px 16px', overflowY: 'auto' }}>
+      <div onClick={(e) => e.stopPropagation()} className="cb-parch cb-modal-in" style={{ maxWidth, width: '100%', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px 9px 18px', background: 'linear-gradient(180deg, #4b3925, #2e2216)', borderBottom: '2px solid #c9a24b' }}>
+          <div className="cb-title" style={{ fontSize: '1.02rem', color: '#f1e6c8', letterSpacing: '0.05em' }}>{title}</div>
+          <button onClick={onClose} className="cb-btn-dark" title="Schließen (Esc)" style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '0.9rem' }}>✕</button>
         </div>
-        {children}
+        <div style={{ padding: '16px 20px 20px' }}>{children}</div>
       </div>
     </div>
   );
@@ -5120,6 +5126,111 @@ function makeWorker(type, idx) {
   };
 }
 
+
+// =============================================================================================
+// UI — shared look (parchment panels, a dark-oak command bar, brass buttons) and widgets.
+// =============================================================================================
+const UI_CSS = `
+  .cb-wood { background: linear-gradient(180deg, #4b3925 0%, #36281a 55%, #2a1f14 100%); border-bottom: 3px solid #140d07; box-shadow: inset 0 1px 0 rgba(255,220,160,0.18), 0 6px 18px rgba(0,0,0,0.55); }
+  .cb-parch { background: linear-gradient(180deg, #f1e7cc 0%, #e6d8b2 100%); border: 2px solid #3b2e1f; border-radius: 7px; box-shadow: inset 0 0 0 2px rgba(201,162,75,0.45), inset 0 0 26px rgba(120,90,40,0.22), 0 8px 22px rgba(0,0,0,0.45); }
+  .cb-section-title { font-family: 'Cinzel', serif; letter-spacing: 0.09em; font-size: 0.74rem; color: #6b5536; display: flex; align-items: center; gap: 8px; text-transform: uppercase; margin: 2px 0 8px; }
+  .cb-section-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(107,85,54,0.55), rgba(107,85,54,0)); }
+  .cb-btn { font-family: 'EB Garamond', serif; border: 1.5px solid #5c4a32; border-radius: 5px; background: linear-gradient(180deg, #f6edd3, #dccb9f); color: #2b2420; box-shadow: 0 2px 0 #8a7448, inset 0 1px 0 #fffaea; cursor: pointer; transition: transform 0.08s ease, filter 0.15s ease, box-shadow 0.08s ease; }
+  .cb-btn:hover:not(:disabled) { filter: brightness(1.05); transform: translateY(-1px); }
+  .cb-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 0 0 #8a7448, inset 0 1px 0 #fffaea; }
+  .cb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cb-btn.is-active { background: linear-gradient(180deg, #ecd189, #c9a24b); border-color: #7a5f2f; }
+  .cb-btn.is-danger { background: linear-gradient(180deg, #f0d2c8, #d9a898); border-color: #7a2318; color: #5a160e; }
+  .cb-btn-dark { font-family: 'EB Garamond', serif; border: 1.5px solid #120b05; border-radius: 5px; background: linear-gradient(180deg, #5c4731, #3b2c1c); color: #f1e6c8; box-shadow: 0 2px 0 #0c0703, inset 0 1px 0 rgba(255,220,160,0.22); cursor: pointer; transition: transform 0.08s ease, filter 0.15s ease; display: inline-flex; align-items: center; gap: 6px; }
+  .cb-btn-dark:hover:not(:disabled) { filter: brightness(1.18); transform: translateY(-1px); }
+  .cb-btn-dark:active:not(:disabled) { transform: translateY(1px); }
+  .cb-btn-dark:disabled { opacity: 0.45; cursor: not-allowed; }
+  .cb-btn-dark.is-active { background: linear-gradient(180deg, #e2bd62, #a8822e); color: #241a0e; border-color: #5a4116; }
+  .cb-btn-dark.is-alert { box-shadow: 0 0 0 2px #c0392b, 0 2px 0 #0c0703; animation: cb-pulse-alert 1.4s ease-in-out infinite; }
+  @keyframes cb-pulse-alert { 0%, 100% { box-shadow: 0 0 0 2px rgba(192,57,43,0.9), 0 2px 0 #0c0703; } 50% { box-shadow: 0 0 0 4px rgba(192,57,43,0.35), 0 2px 0 #0c0703; } }
+  .cb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 14px; background: rgba(0,0,0,0.3); border: 1px solid rgba(201,162,75,0.32); color: #f1e6c8; font-size: 0.95rem; white-space: nowrap; cursor: default; }
+  .cb-chip strong { font-weight: 700; color: #fff4d6; }
+  .cb-chip .cb-cap { color: #b8a888; font-size: 0.8rem; }
+  .cb-chip .cb-delta-pos { color: #a5d87f; font-size: 0.78rem; }
+  .cb-chip .cb-delta-neg { color: #ff9e86; font-size: 0.78rem; }
+  .cb-chip.is-warn { border-color: rgba(255,120,90,0.8); background: rgba(120,20,10,0.45); }
+  .cb-tip { display: none; position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); min-width: 210px; z-index: 80; background: #f1e7cc; color: #2b2420; border: 1.5px solid #3b2e1f; border-radius: 6px; padding: 8px 10px; font-size: 0.8rem; line-height: 1.5; box-shadow: 0 8px 20px rgba(0,0,0,0.45); white-space: normal; text-align: left; }
+  .cb-tip::before { content: ''; position: absolute; top: -6px; left: 50%; transform: translateX(-50%) rotate(45deg); width: 10px; height: 10px; background: #f1e7cc; border-left: 1.5px solid #3b2e1f; border-top: 1.5px solid #3b2e1f; }
+  .cb-has-tip:hover .cb-tip { display: block; }
+  .cb-tip-row { display: flex; justify-content: space-between; gap: 12px; }
+  .cb-meter { height: 6px; border-radius: 3px; background: rgba(0,0,0,0.18); overflow: hidden; }
+  .cb-meter > div { height: 100%; border-radius: 3px; }
+  .cb-toolcard { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 8px 6px; text-align: left; position: relative; min-height: 58px; }
+  .cb-toolcard .cb-tool-emoji { font-size: 1.25rem; line-height: 1; }
+  .cb-toolcard .cb-tool-name { font-size: 0.92rem; font-weight: 600; line-height: 1.1; }
+  .cb-toolcard .cb-tool-cost { font-size: 0.72rem; color: #5a4a34; }
+  .cb-toolcard .cb-tool-cost .is-short { color: #a5281a; font-weight: 700; }
+  .cb-key { display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 3px; border: 1px solid #8a7448; background: rgba(255,250,235,0.7); font-family: 'Cinzel', serif; font-size: 0.62rem; line-height: 15px; text-align: center; color: #5a4a34; }
+  .cb-toolcard .cb-key { position: absolute; top: 5px; right: 5px; }
+  .cb-hud { background: rgba(24,18,11,0.78); border: 1px solid rgba(201,162,75,0.35); border-radius: 7px; box-shadow: 0 4px 14px rgba(0,0,0,0.4); color: #f1e6c8; backdrop-filter: blur(2px); }
+  .cb-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; font-size: 0.82rem; background: rgba(24,18,11,0.85); border: 1px solid rgba(201,162,75,0.4); color: #f1e6c8; box-shadow: 0 3px 10px rgba(0,0,0,0.35); }
+  .cb-pill.is-bad { background: rgba(110,22,14,0.92); border-color: rgba(255,140,110,0.7); }
+  .cb-toast { animation: cb-toast-in 0.35s ease-out; }
+  @keyframes cb-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
+  .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
+  @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @media (max-width: 1650px) { .cb-nav-label { display: none; } }
+  @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
+  @media (max-width: 1280px) { .cb-chip .cb-cap { display: none; } .cb-date-sub { display: none; } }
+`;
+
+// Hotkeys for the most-used tools (shown on the tool cards).
+const TOOL_HOTKEYS = { wall: 'Q', tower: 'W', gate: 'E', graben: 'R', keep: 'F', delete: 'X' };
+const SEASON_ICON = ['❄️', '❄️', '🌱', '🌱', '🌸', '☀️', '☀️', '🌾', '🍂', '🍂', '🍂', '❄️'];
+
+// Minimap: the whole board in miniature with every building and the current view outlined;
+// a click recentres the main view there.
+const MINIMAP_W = 210;
+const MinimapTerrain = React.memo(function MinimapTerrain() {
+  const cells = [];
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+    const t = TERRAIN[j][i];
+    const fill = t === 'water' ? '#4b7f96' : t === 'forest' ? '#3f5a30' : t === 'hill' ? '#8a7b5d' : t === 'village' ? '#9a8a5c' : '#6f874b';
+    const pts = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => gridToScreen(a, b, 0));
+    cells.push(<polygon key={`${i}-${j}`} points={ptsStr(pts)} fill={fill} stroke={fill} strokeWidth="2" />);
+  }
+  return <g>{cells}</g>;
+});
+function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits }) {
+  const scale = MINIMAP_W / VIEW_W;
+  const h = VIEW_H * scale;
+  const marks = [];
+  Object.entries(structures).forEach(([k, s]) => {
+    const done = s.stage === 'done';
+    const col = done ? '#e9dfc4' : '#c9a24b';
+    if (s.type === 'wall' || s.type === 'gate' || s.type === 'graben') {
+      const a = gridToScreen(s.i1, s.j1, 0), b = gridToScreen(s.i2, s.j2, 0);
+      marks.push(<line key={k} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={s.type === 'graben' ? '#3d6f86' : col} strokeWidth="14" strokeLinecap="round" />);
+    } else {
+      const p = gridToScreen(s.i, s.j, 0);
+      const r = s.type === 'keep' ? 30 : s.type === 'tower' ? 18 : 20;
+      marks.push(<rect key={k} x={p.x - r} y={p.y - r * 0.6} width={r * 2} height={r * 1.2} rx="4" fill={s.type === 'keep' ? '#f5e6b0' : col} stroke="#2b2014" strokeWidth="4" />);
+    }
+  });
+  const vx = -pan.x / zoom, vy = -pan.y / zoom, vw = viewport.w / zoom, vh = viewport.h / zoom;
+  return (
+    <div className="cb-hud" style={{ position: 'absolute', left: 10, bottom: 10, padding: 5, zIndex: 10 }}>
+      <svg width={MINIMAP_W} height={h} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block', cursor: 'pointer', borderRadius: 4 }}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          onJump(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
+        }}>
+        <rect width={VIEW_W} height={VIEW_H} fill="#171a12" />
+        <MinimapTerrain />
+        {marks}
+        {workers.map((w) => { const p = gridToScreen(w.curI, w.curJ, 0); return <circle key={w.id} cx={p.x} cy={p.y} r="9" fill="#ffe08a" />; })}
+        {(battleUnits || []).filter((u) => u.hp > 0).map((u) => { const p = gridToScreen(u.i, u.j, 0); return <circle key={`b${u.id}`} cx={p.x} cy={p.y} r="12" fill={u.side === 'attacker' ? '#e0452f' : '#5fb2e8'} />; })}
+        <rect x={vx} y={vy} width={vw} height={vh} fill="rgba(255,240,200,0.08)" stroke="#f1e6c8" strokeWidth="10" />
+      </svg>
+    </div>
+  );
+}
+
 const TOOLS = [
   { id: 'wall', label: 'Mauer', emoji: '🧱', hint: 'Klicke auf eine Kante für eine einzelne Mauer, oder ziehe von Punkt zu Punkt für eine ganze Reihe. Einen Turm anklicken und danach einen beliebigen Punkt verbindet beide automatisch (nutzt diagonale Stücke, wo sie kürzer sind). Mausrad dreht die Ausrichtung im Uhrzeigersinn (gerade ↔ beide Diagonalen), Tab schaltet zusätzlich schnell auf diagonal um. Rechtsklick auf eine bestehende Mauer zeigt Infos & Abriss.' },
   { id: 'tower', label: 'Turm', emoji: '🗼', hint: 'Klicke auf einen Rasterpunkt auf Grasland für einen Turm.' },
@@ -5448,6 +5559,64 @@ export default function CastleBuilder() {
       if (units[k].side === 'defender' && units[k].type === 'soldier') { units[k].merc = true; left--; }
     }
   };
+  // ---- Chronik & Meldungen -----------------------------------------------------------------
+  // A running log of what happened in the realm; the newest entries also pop up briefly as
+  // toasts over the map.
+  const [chronicle, setChronicle] = useState([]);
+  const [chronicleSeen, setChronicleSeen] = useState(0);
+  const [toastNow, setToastNow] = useState(Date.now());
+  const logEvent = useCallback((icon, text, tone = 'neutral') => {
+    setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
+  }, []);
+  const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
+  useEffect(() => {
+    if (!toasts.length) return undefined;
+    const t = setTimeout(() => setToastNow(Date.now()), 1000);
+    return () => clearTimeout(t);
+  });
+  useEffect(() => { setToastNow(Date.now()); }, [chronicle]);
+  // Buildings finishing (or an expansion completing), and buildings lost.
+  const prevDoneRef = useRef(null);
+  useEffect(() => {
+    const done = {};
+    Object.entries(structures).forEach(([k, st]) => { if (st.stage === 'done') done[k] = st.level || 1; });
+    const prev = prevDoneRef.current;
+    prevDoneRef.current = done;
+    if (!prev) return;
+    const finished = Object.keys(done).filter((k) => !(k in prev) || done[k] > prev[k]);
+    // Walls come in long runs — summarise them instead of one line per segment.
+    const named = finished.filter((k) => !['wall', 'graben', 'gate'].includes(structures[k].type));
+    const walls = finished.filter((k) => structures[k].type === 'wall').length;
+    const ditches = finished.filter((k) => structures[k].type === 'graben').length;
+    const gates = finished.filter((k) => structures[k].type === 'gate').length;
+    named.slice(0, 3).forEach((k) => {
+      const st = structures[k];
+      logEvent(st.type === 'tower' ? '🗼' : st.type === 'keep' ? '🏰' : '🏗️', (prev[k] ? `${structureLabel(st)} ausgebaut` : `${structureLabel(st)} fertiggestellt`), 'good');
+    });
+    if (walls) logEvent('🧱', walls === 1 ? 'Ein Mauerstück fertiggestellt' : `${walls} Mauerstücke fertiggestellt`, 'good');
+    if (gates) logEvent('🚪', 'Torhaus fertiggestellt', 'good');
+    if (ditches) logEvent('🕳️', ditches === 1 ? 'Ein Grabenstück ausgehoben' : `${ditches} Grabenstücke ausgehoben`, 'good');
+  }, [structures, logEvent]);
+  const prevPopRef = useRef(null);
+  useEffect(() => {
+    if (prevPopRef.current != null && villagePop !== prevPopRef.current) {
+      logEvent('👥', villagePop > prevPopRef.current ? `Das Dorf wächst auf ${villagePop} Bewohner` : `Das Dorf schrumpft auf ${villagePop} Bewohner`, villagePop > prevPopRef.current ? 'good' : 'bad');
+    }
+    prevPopRef.current = villagePop;
+  }, [villagePop, logEvent]);
+  useEffect(() => {
+    if (!battleEvent) return;
+    if (battleEvent.raided) logEvent('🔥', 'Die Burg wurde geplündert!', 'bad');
+    else logEvent(battleEvent.won ? '🏆' : '⚔️', battleEvent.won ? `Sieg gegen ${battleEvent.attackerCount} Angreifer` : `Niederlage gegen ${battleEvent.attackerCount} Angreifer`, battleEvent.won ? 'good' : 'bad');
+  }, [battleEvent, logEvent]);
+  useEffect(() => { if (eventOutcome) logEvent(eventOutcome.emoji, eventOutcome.title, eventOutcome.tone); }, [eventOutcome, logEvent]);
+  useEffect(() => {
+    if (!dynastyEvent) return;
+    if (dynastyEvent.type === 'birth') logEvent('👶', `Ein Thronfolger wurde geboren: ${dynastyEvent.childName}`, 'good');
+    if (dynastyEvent.type === 'wedding') logEvent('💍', `Hochzeit mit ${dynastyEvent.spouseName}`, 'good');
+  }, [dynastyEvent, logEvent]);
+  useEffect(() => { if (desertionAlarm) logEvent('⚠️', 'Verteidiger desertieren — Gold oder Nahrung fehlen!', 'bad'); }, [desertionAlarm, logEvent]);
+
   const adjustRep = (d) => setReputation((r) => Math.max(0, Math.min(100, r + d)));
   const scheduleStory = (storyType, inDays, data = null) => setStoryQueue((q) => [...q, { type: storyType, day: dayRef.current + inDays, data }]);
   // Turns one random finished amenity into a ruin; returns its label (or null if none).
@@ -6659,6 +6828,69 @@ export default function CastleBuilder() {
       setPan({ x: rect.width / 2 - p.x, y: rect.height / 2 - p.y });
     }
   }, []);
+
+  // ---- View helpers: viewport size (for the minimap), zooming around the centre, jumping
+  // to a spot, centring on the castle, and the keyboard shortcuts.
+  const mapFrameRef = useRef(null);
+  const [viewportSize, setViewportSize] = useState({ w: 800, h: 600 });
+  useEffect(() => {
+    const el = mapViewportRef.current;
+    if (!el) return undefined;
+    const update = () => { const r = el.getBoundingClientRect(); setViewportSize({ w: r.width, h: r.height }); };
+    update();
+    if (typeof ResizeObserver === 'undefined') { window.addEventListener('resize', update); return () => window.removeEventListener('resize', update); }
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const zoomBy = useCallback((factor) => {
+    const vw = viewportSize.w, vh = viewportSize.h;
+    const prevZoom = zoomRef.current;
+    const newZoom = Math.max(0.4, Math.min(2.5, prevZoom * factor));
+    const prevPan = panRef.current;
+    const cx = (vw / 2 - prevPan.x) / prevZoom, cy = (vh / 2 - prevPan.y) / prevZoom;
+    setPan({ x: vw / 2 - cx * newZoom, y: vh / 2 - cy * newZoom });
+    setZoom(newZoom);
+  }, [viewportSize]);
+  const jumpTo = useCallback((cx, cy) => {
+    setPan({ x: viewportSize.w / 2 - cx * zoomRef.current, y: viewportSize.h / 2 - cy * zoomRef.current });
+  }, [viewportSize]);
+  const centerOnCastle = useCallback(() => {
+    const k = structuresRef.current.keep;
+    const p = gridToScreen(k ? k.i : DEPOT_I, k ? k.j : DEPOT_J - 2, 0);
+    jumpTo(p.x, p.y);
+  }, [jumpTo]);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key;
+      if (k === ' ') { e.preventDefault(); if (!blockingEventActive) setIsPaused((p) => !p); return; }
+      if (k === 'Escape') { if (!openPanel && !infoTarget && !helpOpen) setTool(null); return; }
+      if (['1', '2', '3', '4'].includes(k)) { setGameSpeed([1, 2, 4, 8][Number(k) - 1]); return; }
+      if (k === '+' || k === '=') { zoomBy(1.2); return; }
+      if (k === '-') { zoomBy(1 / 1.2); return; }
+      if (k === '?') { setHelpOpen((o) => !o); return; }
+      if (k === 'h' || k === 'H') { centerOnCastle(); return; }
+      if (k === 'c' || k === 'C') { setOpenPanel((p) => (p === 'chronik' ? null : 'chronik')); return; }
+      const step = 70;
+      if (k === 'ArrowLeft') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x + step })); return; }
+      if (k === 'ArrowRight') { e.preventDefault(); setPan((p) => ({ ...p, x: p.x - step })); return; }
+      if (k === 'ArrowUp') { e.preventDefault(); setPan((p) => ({ ...p, y: p.y + step })); return; }
+      if (k === 'ArrowDown') { e.preventDefault(); setPan((p) => ({ ...p, y: p.y - step })); return; }
+      if (battlePhase) return;
+      const toolId = Object.keys(TOOL_HOTKEYS).find((id) => TOOL_HOTKEYS[id] === k.toUpperCase());
+      if (toolId) {
+        const hasKeep = !!structuresRef.current.keep;
+        if (toolId !== 'keep' && toolId !== 'delete' && !hasKeep) return;
+        setTool((cur) => (cur === toolId ? null : toolId));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [blockingEventActive, openPanel, infoTarget, helpOpen, zoomBy, centerOnCastle, battlePhase]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -7919,6 +8151,11 @@ export default function CastleBuilder() {
     + (baumeisterHired ? BAUMEISTER_WAGE : 0);
   const foodPerDayTotal = (hired.laborer + hired.arbeiter + hired.carpenter + hired.mason + hired.quarrier + hired.lumberjack) * FOOD_PER_WORKER
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
+  const contractsPerMonth = contracts.reduce((sum, c) => sum + (day <= c.untilDay ? c.perMonth : 0), 0);
+  const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
+  const goldNetPerMonth = villageGoldPerMonth + contractsPerMonth - wagePerDay * MONTH_LENGTH;
+  const foodNetPerMonth = farmFoodPerMonth + brauhausFoodNow - foodPerDayTotal * MONTH_LENGTH;
+  const unreadChronicle = Math.max(0, chronicle.length - chronicleSeen);
   const financeRows = [
     { label: WORKER_LABEL.arbeiter, emoji: WORKER_EMOJI.arbeiter, count: hired.arbeiter, wage: WAGE.arbeiter, food: FOOD_PER_WORKER },
     { label: WORKER_LABEL.carpenter, emoji: WORKER_EMOJI.carpenter, count: hired.carpenter, wage: WAGE.carpenter, food: FOOD_PER_WORKER },
@@ -7934,6 +8171,7 @@ export default function CastleBuilder() {
     <div className={isPaused ? 'cb-game-paused' : ''} style={{ position: 'fixed', inset: 0, background: '#1E1A15', fontFamily: "'EB Garamond', serif", color: '#2B2420', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
+        ${UI_CSS}
         .cb-title { font-family: 'Cinzel', serif; letter-spacing: 0.03em; }
         .cb-tool-btn { transition: transform 0.08s ease, border-color 0.15s ease, background 0.15s ease; }
         .cb-tool-btn:hover { transform: translateY(-1px); }
@@ -8086,7 +8324,7 @@ export default function CastleBuilder() {
                   <button
                     key={idx}
                     disabled={!!opt.disabled}
-                    onClick={() => { opt.apply(); setPetitionEvent(null); }}
+                    onClick={() => { logEvent(petitionEvent.emoji || '📜', `${petitionEvent.title.replace(/:$/, '')} — ${opt.label}`); opt.apply(); setPetitionEvent(null); }}
                     style={{
                       textAlign: 'left', padding: '9px 14px', borderRadius: 4,
                       border: '2px solid #5C554A', background: opt.disabled ? 'rgba(234,224,196,0.4)' : '#EAE0C4',
@@ -8406,77 +8644,96 @@ export default function CastleBuilder() {
         </div>
       )}
 
-      <div className="p-4 pb-0" style={{ flexShrink: 0 }}>
-        <div style={{ background: '#EAE0C4', border: '3px solid #5C554A', borderRadius: 4, padding: '8px 14px' }}>
-          <div className="cb-res-bar">
-            <button onClick={() => !blockingEventActive && setIsPaused((p) => !p)}
-              disabled={blockingEventActive}
-              style={{ padding: '5px 12px', borderRadius: 3, border: '2px solid #5C554A', background: isPaused ? '#C9A24B' : 'transparent', fontFamily: "'Cinzel', serif", fontSize: '0.85rem', cursor: blockingEventActive ? 'not-allowed' : 'pointer', opacity: blockingEventActive ? 0.6 : 1 }}>
-              {isPaused ? '▶ Weiter' : '⏸ Pause'}
-            </button>
-            <div style={{ display: 'flex', gap: 3 }}>
-              {[1, 2, 4, 8].map((s) => (
-                <button key={s} onClick={() => setGameSpeed(s)}
-                  style={{
-                    padding: '5px 8px', borderRadius: 3, fontSize: '0.8rem', cursor: 'pointer', fontFamily: "'Cinzel', serif",
-                    border: `2px solid ${gameSpeed === s ? '#C9A24B' : '#5C554A'}`,
-                    background: gameSpeed === s ? 'rgba(201,162,75,0.2)' : 'transparent',
-                  }}>
-                  {s}×
-                </button>
-              ))}
-            </div>
-            <div className="cb-res-item" style={{ fontStyle: 'italic', color: '#5A5044' }}>{calDate.dayOfMonth}. {monthName} {calDate.year}</div>
-            <div className="cb-res-item">🪙 <strong>{resources.gold.toFixed(0)}</strong></div>
-            <div className="cb-res-item">🪨 <strong>{resources.stone.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
-            <div className="cb-res-item">🪵 <strong>{resources.wood.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
-            <div className="cb-res-item">🌾 <strong>{resources.food.toFixed(0)}</strong> / {storageCapacity(structures)}</div>
-            <div className="cb-res-item" title="Ruf: beeinflusst, wer an den Hof kommt, die Zufriedenheit im Dorf und die Preise der Söldner.">⚜️ <strong>{Math.round(reputation)}</strong> <span style={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#5A5044' }}>{reputationLabel(reputation)}</span></div>
-            {mercenaryCount > 0 && <div className="cb-res-item" title="Angeworbene Söldner für die nächste Schlacht">🗡️ <strong>{mercenaryCount}</strong></div>}
-            <div style={{ flex: 1 }} />
-            <button onClick={() => setOpenPanel('finanzen')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              💰 Finanzen
-            </button>
-            <button onClick={() => setOpenPanel('dorf')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: `2px solid ${onStrike ? '#7a2318' : '#5C554A'}`, background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              👥 Dorf{onStrike ? ' ⚠️' : ''}
-            </button>
-            <button onClick={() => setOpenPanel('arbeit')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              🛠️ Arbeitskräfte
-            </button>
-            <button onClick={() => setOpenPanel('garnison')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: `2px solid ${warningActive ? '#7a2318' : '#5C554A'}`, background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              🛡️ Garnison{warningActive ? ' ⚠️' : ''}
-            </button>
-            <button onClick={() => setOpenPanel('dynastie')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              👑 Dynastie
-            </button>
-            <button onClick={() => setOpenPanel('hof')} className="cb-tool-btn"
-              style={{ padding: '5px 10px', borderRadius: 3, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.85rem', cursor: 'pointer' }}>
-              🎭 Hof
-            </button>
+      <div className="cb-wood" style={{ flexShrink: 0, padding: '8px 14px', position: 'relative', zIndex: 30 }}>
+        <div className="cb-topbar" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {/* Time controls */}
+          <button onClick={() => !blockingEventActive && setIsPaused((p) => !p)} disabled={blockingEventActive}
+            className={`cb-btn-dark${isPaused ? ' is-active' : ''}`} title="Leertaste"
+            style={{ padding: '5px 12px', fontFamily: "'Cinzel', serif", fontSize: '0.85rem' }}>
+            {isPaused ? '▶ Weiter' : '⏸ Pause'}
+          </button>
+          <div style={{ display: 'flex', gap: 2 }}>
+            {[1, 2, 4, 8].map((sp, k) => (
+              <button key={sp} onClick={() => setGameSpeed(sp)} className={`cb-btn-dark${gameSpeed === sp ? ' is-active' : ''}`} title={`Taste ${k + 1}`}
+                style={{ padding: '5px 8px', fontSize: '0.78rem', fontFamily: "'Cinzel', serif" }}>{sp}×</button>
+            ))}
           </div>
-          {blockedCount > 0 && (
-            <div style={{ marginTop: 6, fontSize: '0.78rem', color: '#8a2d20' }}>🚫 {blockedCount} Baustelle(n) warten auf Material</div>
-          )}
-          {warningActive && (
-            <div style={{ marginTop: 6, background: 'rgba(122,35,24,0.15)', border: '1px solid #7a2318', borderRadius: 3, padding: '5px 10px', fontSize: '0.8rem', color: '#7a2318' }}>
-              ⚔️ Sachsen-Angriff in {daysUntilAttack} Tagen ({nextAttackerCount} Angreifer) — Verteidigung: {currentDefense}
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1, color: '#f1e6c8', minWidth: 110 }}>
+            <span style={{ fontFamily: "'Cinzel', serif", fontSize: '0.86rem' }}>{SEASON_ICON[calDate.month]} {calDate.dayOfMonth}. {monthName}</span>
+            <span className="cb-date-sub" style={{ fontSize: '0.74rem', color: '#b8a888', fontStyle: 'italic' }}>Anno {calDate.year} · {kingName ? `${kingName} ${regnalNumeral(kingOrdinal)}.` : ''}</span>
+          </div>
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(201,162,75,0.3)' }} />
+
+          {/* Resources with monthly balance and a breakdown on hover */}
+          <div className={`cb-chip cb-has-tip${resources.gold < 20 ? ' is-warn' : ''}`}>
+            🪙 <strong>{resources.gold.toFixed(0)}</strong>
+            <span className={goldNetPerMonth >= 0 ? 'cb-delta-pos' : 'cb-delta-neg'}>{goldNetPerMonth >= 0 ? '+' : ''}{goldNetPerMonth.toFixed(0)}/M</span>
+            <div className="cb-tip">
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Gold pro Monat</div>
+              <div className="cb-tip-row"><span>Steuern ({taxRate} %)</span><span>+{villageGoldPerMonth}</span></div>
+              {contractsPerMonth > 0 && <div className="cb-tip-row"><span>Verträge & Silber</span><span>+{contractsPerMonth}</span></div>}
+              <div className="cb-tip-row"><span>Löhne & Unterhalt</span><span>−{(wagePerDay * MONTH_LENGTH).toFixed(0)}</span></div>
+              <div className="cb-tip-row" style={{ borderTop: '1px solid rgba(43,36,32,0.25)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}><span>Bilanz</span><span>{goldNetPerMonth >= 0 ? '+' : ''}{goldNetPerMonth.toFixed(0)}</span></div>
             </div>
-          )}
-          {onStrike && (
-            <div style={{ marginTop: 6, background: 'rgba(122,35,24,0.15)', border: '1px solid #7a2318', borderRadius: 3, padding: '5px 10px', fontSize: '0.8rem', color: '#7a2318' }}>
-              😠 Die Bauern streiken — nur Lohnarbeiter arbeiten noch.
+          </div>
+          <div className={`cb-chip cb-has-tip${resources.food < 15 ? ' is-warn' : ''}`}>
+            🌾 <strong>{resources.food.toFixed(0)}</strong><span className="cb-cap">/{storageCapacity(structures)}</span>
+            <span className={foodNetPerMonth >= 0 ? 'cb-delta-pos' : 'cb-delta-neg'}>{foodNetPerMonth >= 0 ? '+' : ''}{foodNetPerMonth.toFixed(0)}/M</span>
+            <div className="cb-tip">
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Nahrung pro Monat</div>
+              <div className="cb-tip-row"><span>Hof-Ernte{onStrike ? ' (Streik!)' : ''}</span><span>+{farmFoodPerMonth.toFixed(0)}</span></div>
+              {brauhausFoodNow > 0 && <div className="cb-tip-row"><span>Brauhaus</span><span>+{brauhausFoodNow}</span></div>}
+              <div className="cb-tip-row"><span>Verbrauch</span><span>−{(foodPerDayTotal * MONTH_LENGTH).toFixed(0)}</span></div>
+              <div className="cb-tip-row" style={{ borderTop: '1px solid rgba(43,36,32,0.25)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}><span>Bilanz</span><span>{foodNetPerMonth >= 0 ? '+' : ''}{foodNetPerMonth.toFixed(0)}</span></div>
             </div>
-          )}
-          {desertionAlarm && (
-            <div style={{ marginTop: 6, background: 'rgba(122,35,24,0.15)', border: '1px solid #7a2318', borderRadius: 3, padding: '5px 10px', fontSize: '0.8rem', color: '#7a2318' }}>
-              ⚠️ Kein Gold oder keine Nahrung mehr — Verteidiger desertieren!
+          </div>
+          <div className="cb-chip cb-has-tip">🪨 <strong>{resources.stone.toFixed(0)}</strong><span className="cb-cap">/{storageCapacity(structures)}</span>
+            <div className="cb-tip">Stein im Lager. Steinmetze brechen ihn im Steinbruch, Träger bringen ihn her. Am Steinbruch liegen noch {piles.stone.toFixed(0)}.</div>
+          </div>
+          <div className="cb-chip cb-has-tip">🪵 <strong>{resources.wood.toFixed(0)}</strong><span className="cb-cap">/{storageCapacity(structures)}</span>
+            <div className="cb-tip">Holz im Lager. Holzfäller schlagen es im Wald, Träger bringen es her. Am Holzplatz liegen noch {piles.wood.toFixed(0)}.</div>
+          </div>
+          <div className={`cb-chip cb-has-tip${onStrike ? ' is-warn' : ''}`}>
+            👥 <strong>{villagePop}</strong>
+            <span style={{ fontSize: '0.8rem', color: happiness >= 60 ? '#a5d87f' : happiness >= STRIKE_THRESHOLD ? '#e8d27a' : '#ff9e86' }}>{happiness >= 60 ? '☺' : happiness >= STRIKE_THRESHOLD ? '😐' : '😠'} {Math.round(happiness)}</span>
+            <div className="cb-tip">
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Dorf</div>
+              <div>{villagePop} von {MAX_VILLAGE_POP} Bewohnern, Zufriedenheit {Math.round(happiness)}.</div>
+              <div style={{ marginTop: 4 }}>{happiness >= 60 ? 'Das Dorf wächst zweimal im Jahr.' : happiness >= STRIKE_THRESHOLD ? 'Das Dorf wächst einmal im Jahr — ab 60 Zufriedenheit doppelt so schnell.' : 'Die Bauern streiken! Kein Wachstum, keine Ernte.'}</div>
             </div>
-          )}
+          </div>
+          <div className="cb-chip cb-has-tip">⚜️ <strong>{Math.round(reputation)}</strong> <span className="cb-rep-label" style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#d8c79a' }}>{reputationLabel(reputation)}</span>
+            <div className="cb-tip">Ruf: beeinflusst, wer an den Hof kommt (Ritter, Händler und Turniere bei hohem Ruf; Spione und Banden bei niedrigem), die Zufriedenheit im Dorf und die Preise der Söldner.</div>
+          </div>
+          {mercenaryCount > 0 && <div className="cb-chip cb-has-tip">🗡️ <strong>{mercenaryCount}</strong><div className="cb-tip">Angeworbene Söldner — sie kämpfen in der nächsten Schlacht mit.</div></div>}
+          <div className={`cb-chip cb-has-tip${warningActive ? ' is-warn' : ''}`}>
+            ⚔️ <strong>{daysUntilAttack}</strong><span className="cb-cap">Tage</span>
+            <div className="cb-tip">
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Nächster Sachsenangriff</div>
+              <div>In {daysUntilAttack} Tagen mit etwa {Math.round(nextAttackerCount * nextAttackMult)} Angreifern{nextAttackMult !== 1 ? ' (durch Spione/Gerüchte verändert)' : ''}.</div>
+              <div style={{ marginTop: 4 }}>Verteidigungswert: {currentDefense}</div>
+              <div className="cb-meter" style={{ marginTop: 6 }}><div style={{ width: `${Math.max(3, Math.min(100, (1 - daysUntilAttack / 360) * 100))}%`, background: warningActive ? '#a8402c' : '#c9a24b' }} /></div>
+            </div>
+          </div>
+
+          <div style={{ flex: 1 }} />
+          {/* Panels */}
+          {[
+            { id: 'finanzen', icon: '💰', label: 'Finanzen' },
+            { id: 'dorf', icon: '👥', label: 'Dorf', alert: onStrike },
+            { id: 'arbeit', icon: '🛠️', label: 'Arbeit' },
+            { id: 'garnison', icon: '🛡️', label: 'Garnison', alert: warningActive },
+            { id: 'dynastie', icon: '👑', label: 'Dynastie' },
+            { id: 'hof', icon: '🎭', label: 'Hof' },
+            { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
+          ].map((p) => (
+            <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
+              title={p.label} style={{ padding: '5px 9px', fontSize: '0.88rem', position: 'relative' }}>
+              <span>{p.icon}</span><span className="cb-nav-label">{p.label}</span>
+              {p.badge > 0 && <span style={{ position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, borderRadius: 8, background: '#c0392b', color: '#fff', fontSize: '0.66rem', lineHeight: '16px', textAlign: 'center', padding: '0 3px' }}>{p.badge > 9 ? '9+' : p.badge}</span>}
+            </button>
+          ))}
+          <button onClick={() => setHelpOpen(true)} className="cb-btn-dark" title="Hilfe & Tastenkürzel (?)" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>❔</button>
         </div>
       </div>
 
@@ -8675,6 +8932,53 @@ export default function CastleBuilder() {
               <div>Tätigkeit: {personActivity(infoTarget)}</div>
             </div>
           )}
+        </Modal>
+      )}
+
+      {openPanel === 'chronik' && (
+        <Modal title="📜 Chronik des Reiches" onClose={() => { setChronicleSeen(chronicle.length); setOpenPanel(null); }} maxWidth={480}>
+          {chronicle.length === 0 ? (
+            <p style={{ fontSize: '0.9rem', color: '#5A5044', fontStyle: 'italic' }}>Noch ist nichts Bemerkenswertes geschehen.</p>
+          ) : (
+            <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {chronicle.map((c, idx) => {
+                const d = getCalendarDate(c.day);
+                return (
+                  <div key={c.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '5px 6px', borderRadius: 4, background: idx < chronicle.length - chronicleSeen ? 'rgba(201,162,75,0.16)' : 'transparent', borderLeft: `3px solid ${c.tone === 'good' ? '#5d8a3c' : c.tone === 'bad' ? '#a8402c' : '#b5a27a'}` }}>
+                    <span style={{ fontSize: '1.05rem' }}>{c.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '0.88rem', lineHeight: 1.35 }}>{c.text}</div>
+                      <div style={{ fontSize: '0.72rem', color: '#7a6a50', fontStyle: 'italic' }}>{d.dayOfMonth}. {MONTH_NAMES[d.month]} {d.year}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {helpOpen && (
+        <Modal title="❔ Hilfe & Tastenkürzel" onClose={() => setHelpOpen(false)} maxWidth={460}>
+          <div className="cb-section-title">Zeit</div>
+          <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
+            <div><span className="cb-key">Leertaste</span> Pause / Weiter</div>
+            <div><span className="cb-key">1</span> <span className="cb-key">2</span> <span className="cb-key">3</span> <span className="cb-key">4</span> Geschwindigkeit 1× / 2× / 4× / 8×</div>
+          </div>
+          <div className="cb-section-title" style={{ marginTop: 10 }}>Bauen</div>
+          <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
+            <div><span className="cb-key">Q</span> Mauer · <span className="cb-key">W</span> Turm · <span className="cb-key">E</span> Tor · <span className="cb-key">R</span> Graben · <span className="cb-key">F</span> Burgfried · <span className="cb-key">X</span> Abriss</div>
+            <div><span className="cb-key">Tab</span> gedrückt halten: diagonale Mauern · <span className="cb-key">Mausrad</span> beim Mauer-/Torbau: drehen</div>
+            <div><span className="cb-key">Esc</span> oder Rechtsklick: Werkzeug abwählen · Fenster schließen</div>
+            <div>Fertige Gebäude und Türme anklicken: Info & <strong>Ausbau</strong>. Tore anklicken: öffnen/schließen, Rechtsklick: Info.</div>
+          </div>
+          <div className="cb-section-title" style={{ marginTop: 10 }}>Karte</div>
+          <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
+            <div><span className="cb-key">Mausrad</span> Zoom · <span className="cb-key">+</span> <span className="cb-key">−</span> Zoom</div>
+            <div>Rechte Maustaste halten oder <span className="cb-key">←</span><span className="cb-key">↑</span><span className="cb-key">→</span><span className="cb-key">↓</span>: verschieben</div>
+            <div><span className="cb-key">H</span> zum Burgfried · Minikarte anklicken: dorthin springen</div>
+            <div><span className="cb-key">C</span> Chronik · <span className="cb-key">?</span> diese Hilfe</div>
+          </div>
         </Modal>
       )}
 
@@ -9175,7 +9479,7 @@ export default function CastleBuilder() {
       })()}
 
       <div className="flex flex-col md:flex-row p-4 pt-3" style={{ flex: 1, minHeight: 0, gap: 16 }}>
-        <div style={{ flex: 1, position: 'relative', minWidth: 0, borderRadius: 4, border: '3px solid #5C554A', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+        <div ref={mapFrameRef} style={{ flex: 1, position: 'relative', minWidth: 0, borderRadius: 8, border: '2px solid #3b2e1f', boxShadow: 'inset 0 0 0 2px rgba(201,162,75,0.45), 0 10px 28px rgba(0,0,0,0.55)', overflow: 'hidden' }}>
           <div ref={mapViewportRef} onMouseDown={handleMapMouseDown}
             onContextMenu={(e) => e.preventDefault()}
             style={{ position: 'absolute', inset: 0, background: '#1b1f15', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
@@ -9421,105 +9725,162 @@ export default function CastleBuilder() {
           </div>
 
           <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5, background: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(8,6,2,0.42) 100%)' }} />
-          <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', gap: 6, alignItems: 'center', background: 'rgba(20,16,10,0.7)', borderRadius: 4, padding: '4px 6px', zIndex: 10 }}>
-            <button onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.15).toFixed(2)))}
-              style={{ width: 26, height: 26, borderRadius: 3, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>−</button>
-            <span style={{ color: '#EAE0C4', fontSize: '0.8rem', minWidth: 34, textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom((z) => Math.min(2.5, +(z + 0.15).toFixed(2)))}
-              style={{ width: 26, height: 26, borderRadius: 3, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>+</button>
-            <span style={{ color: '#C9BFA8', fontSize: '0.72rem', marginLeft: 4 }}>Mausrad: Zoom · Rechtsklick halten: Verschieben · Rechtsklick (kurz): Werkzeug abwählen</span>
+          {/* Zoom & view */}
+          <div className="cb-hud" style={{ position: 'absolute', top: 10, left: 10, display: 'flex', gap: 4, alignItems: 'center', padding: 4, zIndex: 10 }}>
+            <button className="cb-btn-dark" title="Herauszoomen (−)" onClick={() => zoomBy(1 / 1.2)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>−</button>
+            <span style={{ fontSize: '0.78rem', minWidth: 38, textAlign: 'center' }}>{Math.round(zoom * 100)} %</span>
+            <button className="cb-btn-dark" title="Hineinzoomen (+)" onClick={() => zoomBy(1.2)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>+</button>
+            <button className="cb-btn-dark" title="Auf den Burgfried zentrieren (H)" onClick={centerOnCastle} style={{ height: 28, padding: '0 8px', fontSize: '0.85rem' }}>🏰</button>
           </div>
+          {/* Alerts */}
+          <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, zIndex: 10, pointerEvents: 'none' }}>
+            {warningActive && <div className="cb-pill is-bad">⚔️ Sachsenangriff in {daysUntilAttack} Tagen — etwa {Math.round(nextAttackerCount * nextAttackMult)} Angreifer, Verteidigung {currentDefense}</div>}
+            {onStrike && <div className="cb-pill is-bad">😠 Die Bauern streiken — nur Lohnarbeiter arbeiten noch</div>}
+            {desertionAlarm && <div className="cb-pill is-bad">⚠️ Kein Gold oder keine Nahrung — Verteidiger desertieren!</div>}
+            {blockedCount > 0 && <div className="cb-pill">🚫 {blockedCount} Baustelle{blockedCount > 1 ? 'n warten' : ' wartet'} auf Material</div>}
+            {isPaused && !blockingEventActive && <div className="cb-pill">⏸ Pausiert — Leertaste zum Fortsetzen</div>}
+          </div>
+          {/* Toasts */}
+          <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 11, width: 280, pointerEvents: 'none' }}>
+            {toasts.map((t) => (
+              <div key={t.id} className="cb-hud cb-toast" style={{ padding: '7px 10px', fontSize: '0.84rem', display: 'flex', gap: 8, alignItems: 'flex-start', borderColor: t.tone === 'bad' ? 'rgba(255,120,90,0.8)' : t.tone === 'good' ? 'rgba(150,210,110,0.7)' : 'rgba(201,162,75,0.4)' }}>
+                <span style={{ fontSize: '1.05rem', lineHeight: 1.1 }}>{t.icon}</span><span style={{ lineHeight: 1.35 }}>{t.text}</span>
+              </div>
+            ))}
+          </div>
+          {/* Contextual hint for the active tool */}
+          {tool && activeToolInfo && (
+            <div className="cb-hud" style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', maxWidth: 'min(560px, 60%)', padding: '7px 12px', fontSize: '0.82rem', zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: '1.1rem' }}>{activeToolInfo.emoji}</span>
+              <span style={{ lineHeight: 1.35 }}><strong>{activeToolInfo.label}:</strong> {activeToolInfo.hint} <span style={{ color: '#b8a888' }}>Rechtsklick oder Esc: abwählen.</span></span>
+            </div>
+          )}
+          <Minimap structures={structures} workers={workerUnits} pan={pan} zoom={zoom} viewport={viewportSize} onJump={jumpTo} battleUnits={battlePhase ? battleUnits : null} />
         </div>
 
-        <div className="cb-sidebar" style={{ width: 280, flexShrink: 0, overflowY: 'auto', paddingRight: 2 }}>
-          <div style={{ background: '#EAE0C4', borderRadius: 4, border: '3px solid #5C554A', padding: 14, marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div className="cb-title" style={{ fontSize: '0.85rem', color: '#5A5044' }}>WERKZEUGE</div>
-              <button onClick={() => setToolsPanelOpen((o) => !o)} style={{ border: '1px solid #5C554A', background: 'transparent', borderRadius: 3, width: 24, height: 24, cursor: 'pointer', fontSize: '0.8rem' }}>
-                {toolsPanelOpen ? '▲' : '▼'}
-              </button>
-            </div>
-            <button onClick={() => setTool((t) => (t === 'delete' ? null : 'delete'))} className="cb-tool-btn"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 3, textAlign: 'left', width: '100%', marginBottom: 10,
-                border: `2px solid ${tool === 'delete' ? '#7a2318' : '#5C554A'}`,
-                background: tool === 'delete' ? 'rgba(122,35,24,0.15)' : 'transparent',
-                fontFamily: "'EB Garamond', serif", fontSize: '1rem', color: '#2B2420',
-              }}>
-              <span style={{ fontSize: '1.2rem' }}>⛏️</span>
-              <span>Zerstören</span>
-            </button>
-            {toolsPanelOpen && (
-              <div className="flex flex-col gap-2 cb-tool-list">
-                {TOOLS.filter((t) => t.id !== 'delete' && (keepUnlocked || t.id === 'keep')).map((t) => {
-                  const disabled = t.id === 'graben' && !moatUnlocked;
-                  return (
-                    <button key={t.id} disabled={disabled} onClick={() => !disabled && setTool((cur) => (cur === t.id ? null : t.id))} className="cb-tool-btn"
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 3, textAlign: 'left',
-                        border: `2px solid ${tool === t.id ? '#C9A24B' : 'transparent'}`,
-                        background: tool === t.id ? 'rgba(201,162,75,0.18)' : 'transparent',
-                        fontFamily: "'EB Garamond', serif", fontSize: '1rem', color: disabled ? '#a89f8e' : '#2B2420',
-                        opacity: disabled ? 0.55 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
-                      }}>
-                      <span style={{ fontSize: '1.2rem' }}>{t.emoji}</span>
-                      <span>{t.label}{disabled ? ' (erst nach fertiger Mauer)' : ''}</span>
-                    </button>
-                  );
-                })}
-                {!keepUnlocked && (
-                  <p style={{ fontSize: '0.78rem', color: '#7a2318', fontStyle: 'italic', marginTop: 2 }}>
-                    Baue zuerst den Burgfried, um alle anderen Bauoptionen freizuschalten.
-                  </p>
-                )}
-                {moatUnlocked && (
-                  <button
-                    onClick={() => {
-                      const pending = autoMoatEdges(structures);
-                      if (pending.size === 0) return;
-                      setStructures((prev) => {
-                        const next = { ...prev };
-                        pending.forEach((edge, key) => {
-                          if (next[key]) return;
-                          next[key] = { type: 'graben', ...edge, stage: 'foundation', progress: 0, blocked: false };
-                        });
-                        return next;
-                      });
-                    }}
-                    className="cb-tool-btn"
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 3, textAlign: 'left', width: '100%', marginTop: 4,
-                      border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", fontSize: '0.95rem', color: '#2B2420', cursor: 'pointer',
-                    }}>
-                    <span style={{ fontSize: '1.2rem' }}>🌊</span>
-                    <span>Burggraben automatisch ziehen</span>
+        <div className="cb-sidebar" style={{ width: 290, flexShrink: 0, overflowY: 'auto', paddingRight: 2, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="cb-parch" style={{ padding: 12 }}>
+            {(() => {
+              // Tool cards grouped by purpose, each with its material cost (red when the store
+              // can't cover it yet) and its hotkey.
+              const card = (t, extraDisabled = false, why = '') => {
+                const cost = BUILD_COST[t.id];
+                const disabled = extraDisabled;
+                const shortW = cost && resources.wood < cost.wood;
+                const shortS = cost && resources.stone < cost.stone;
+                return (
+                  <button key={t.id} disabled={disabled} title={why || t.hint}
+                    onClick={() => !disabled && setTool((cur) => (cur === t.id ? null : t.id))}
+                    className={`cb-btn cb-toolcard${tool === t.id ? ' is-active' : ''}`}>
+                    <span className="cb-tool-emoji">{t.emoji}</span>
+                    <span className="cb-tool-name">{t.label}</span>
+                    <span className="cb-tool-cost">
+                      {why ? <em>{why}</em> : cost && (cost.wood || cost.stone)
+                        ? <><span className={shortW ? 'is-short' : ''}>🪵{cost.wood}</span> <span className={shortS ? 'is-short' : ''}>🪨{cost.stone}</span></>
+                        : 'kostenlos'}
+                    </span>
+                    {TOOL_HOTKEYS[t.id] && <span className="cb-key">{TOOL_HOTKEYS[t.id]}</span>}
                   </button>
-                )}
-              </div>
-            )}
-            <p style={{ fontSize: '0.85rem', color: '#5A5044', marginTop: 12, lineHeight: 1.4 }}>
-              {tool ? activeToolInfo.hint : 'Kein Werkzeug ausgewählt — klicke auf ein Werkzeug, um zu bauen, oder ziehe frei auf der Karte umher. Rechtsklick auf die Karte wählt das Werkzeug wieder ab.'}
-            </p>
-            <button onClick={() => setStructures({})}
-              style={{ marginTop: 10, width: '100%', padding: '6px 0', borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', color: '#5A5044', fontFamily: "'EB Garamond', serif", fontStyle: 'italic', cursor: 'pointer' }}>
-              Grundriss zurücksetzen
-            </button>
+                );
+              };
+              const byId = (id) => TOOLS.find((t) => t.id === id);
+              if (!keepUnlocked) {
+                return (
+                  <>
+                    <div className="cb-section-title">Bauen</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>{card(byId('keep'))}</div>
+                    <p style={{ fontSize: '0.8rem', color: '#7a2318', fontStyle: 'italic', margin: '8px 0 0', lineHeight: 1.4 }}>
+                      Baue zuerst den Burgfried — er schaltet alle anderen Bauten frei.
+                    </p>
+                  </>
+                );
+              }
+              return (
+                <>
+                  <div className="cb-section-title">Befestigung</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {card(byId('wall'))}{card(byId('tower'))}{card(byId('gate'))}
+                    {card(byId('graben'), !moatUnlocked, !moatUnlocked ? 'erst nach einer Mauer' : '')}
+                    {!structures.keep && card(byId('keep'))}
+                  </div>
+                  {moatUnlocked && (
+                    <button className="cb-btn" style={{ width: '100%', marginTop: 6, padding: '6px 8px', fontSize: '0.86rem', textAlign: 'left' }}
+                      title="Legt einen Graben einen Schritt vor alle fertigen Mauern und Tore"
+                      onClick={() => {
+                        const pending = autoMoatEdges(structures);
+                        if (pending.size === 0) return;
+                        setStructures((prev) => {
+                          const next = { ...prev };
+                          pending.forEach((edge, key) => {
+                            if (next[key]) return;
+                            next[key] = { type: 'graben', ...edge, stage: 'foundation', progress: 0, blocked: false };
+                          });
+                          return next;
+                        });
+                      }}>🌊 Burggraben automatisch ziehen</button>
+                  )}
+                  {toolsPanelOpen && (
+                    <>
+                      <div className="cb-section-title" style={{ marginTop: 12 }}>Gebäude</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        {AMENITY_IDS.map((id) => card(byId(id)))}
+                      </div>
+                    </>
+                  )}
+                  <button className="cb-btn" onClick={() => setToolsPanelOpen((o) => !o)} style={{ width: '100%', marginTop: 6, padding: '3px 0', fontSize: '0.76rem' }}>
+                    {toolsPanelOpen ? '▲ Gebäude ausblenden' : '▼ Gebäude einblenden'}
+                  </button>
+                  <div className="cb-section-title" style={{ marginTop: 12 }}>Werkzeuge</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => setTool((t) => (t === 'delete' ? null : 'delete'))} className={`cb-btn${tool === 'delete' ? ' is-danger' : ''}`}
+                      style={{ flex: 1, padding: '6px 8px', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      ⛏️ Abriss <span className="cb-key" style={{ marginLeft: 'auto' }}>X</span>
+                    </button>
+                    <button onClick={() => { if (resetConfirm) { setStructures({}); setResetConfirm(false); } else setResetConfirm(true); }}
+                      onMouseLeave={() => setResetConfirm(false)}
+                      className={`cb-btn${resetConfirm ? ' is-danger' : ''}`} style={{ flex: 1, padding: '6px 8px', fontSize: '0.82rem', fontStyle: 'italic' }}
+                      title="Entfernt alle Bauwerke — zweimal klicken zum Bestätigen">
+                      {resetConfirm ? 'Wirklich alles?' : 'Grundriss leeren'}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
-          <div style={{ background: '#EAE0C4', borderRadius: 4, border: '3px solid #5C554A', padding: 14 }}>
-            <div className="cb-title" style={{ fontSize: '0.85rem', color: '#5A5044', marginBottom: 10 }}>GRUNDRISS</div>
-            <div style={{ fontSize: '0.95rem', lineHeight: 1.9 }}>
-              <div>🧱 Mauern fertig: {doneWalls}</div>
-              <div>🗼 Türme fertig: {doneTowers}</div>
-              <div>🚪 Tore fertig: {doneGates}</div>
-              <div>🕳️ Gräben fertig: {doneGraben}</div>
-              <div>🏰 Burgfried: {keepDone ? 'fertig' : structures.keep ? 'im Bau' : '—'}</div>
-              <div>🏗️ Sonstige Gebäude fertig: {doneAmenities}</div>
-              <div>🚧 Baustellen aktiv: {inProgress}</div>
+          <div className="cb-parch" style={{ padding: 12 }}>
+            <div className="cb-section-title">Burg</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 10px', fontSize: '0.88rem' }}>
+              <span>🧱 Mauern <strong>{doneWalls}</strong></span>
+              <span>🗼 Türme <strong>{doneTowers}</strong></span>
+              <span>🚪 Tore <strong>{doneGates}</strong></span>
+              <span>🕳️ Gräben <strong>{doneGraben}</strong></span>
+              <span>🏰 {keepDone ? 'Burgfried ✔' : structures.keep ? 'Burgfried im Bau' : 'kein Burgfried'}</span>
+              <span>🏛️ Gebäude <strong>{doneAmenities}</strong></span>
             </div>
-            <p style={{ fontSize: '0.8rem', color: '#5A5044', marginTop: 12, fontStyle: 'italic', lineHeight: 1.4 }}>
-              Nächster Sachsen-Angriff in {daysUntilAttack} Tagen: {nextAttackerCount} Angreifer erwartet.
-            </p>
+            {inProgress > 0 && (
+              <div style={{ marginTop: 8, fontSize: '0.82rem' }}>
+                🚧 {inProgress} Baustelle{inProgress > 1 ? 'n' : ''} aktiv{blockedCount > 0 && <span style={{ color: '#8a2d20' }}> · {blockedCount} ohne Material</span>}
+              </div>
+            )}
+            <div className="cb-section-title" style={{ marginTop: 12 }}>Verteidigung</div>
+            {(() => {
+              const expected = Math.max(1, Math.round(nextAttackerCount * nextAttackMult)) * ATTACKER_STRENGTH;
+              const ratio = Math.min(1.5, currentDefense / expected);
+              return (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem' }}>
+                    <span>🛡️ {soldiers.soldier} Soldaten · 🏹 {soldiers.archer} Bogenschützen</span>
+                  </div>
+                  <div className="cb-meter" style={{ marginTop: 6, height: 8 }}>
+                    <div style={{ width: `${(ratio / 1.5) * 100}%`, background: ratio >= 1.1 ? '#5d8a3c' : ratio >= 0.8 ? '#c9a24b' : '#a8402c' }} />
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4, lineHeight: 1.4 }}>
+                    Verteidigung {currentDefense} gegen etwa {Math.round(nextAttackerCount * nextAttackMult)} Sachsen in {daysUntilAttack} Tagen — {ratio >= 1.1 ? 'gut gerüstet' : ratio >= 0.8 ? 'knapp' : 'zu schwach!'} (grobe Schätzung)
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
