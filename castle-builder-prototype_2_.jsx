@@ -200,8 +200,49 @@ const LAGERHAUS_CAPACITY_BONUS = 200;
 // Without a Lagerhaus the stockpile (wood/stone only — gold and food aren't physical goods
 // sitting in a warehouse) is capped at 200; every finished Lagerhaus adds another 200.
 function storageCapacity(structures) {
-  return BASE_STORAGE_CAPACITY + doneLagerhausList(structures).length * LAGERHAUS_CAPACITY_BONUS;
+  return BASE_STORAGE_CAPACITY + doneLagerhausList(structures).reduce((sum, w) => sum + LAGERHAUS_CAPACITY_BONUS + LAGERHAUS_CAPACITY_PER_LEVEL * ((w.level || 1) - 1), 0);
 }
+
+// ----------------------------------------------------------------- Ausbaustufen ---------
+// Every finished amenity can be expanded twice (Stufe 2 and 3). An expansion costs gold up
+// front plus more timber and stone than the original build, is carried out by carpenters
+// and masons like any other construction (the building's effect pauses meanwhile), and
+// strengthens what the building does. The strongest finished building of a kind counts.
+const AMENITY_MAX_LEVEL = 3;
+const AMENITY_UPGRADE_GOLD = { 2: 60, 3: 140 };
+const AMENITY_LEVEL_COST_MULT = { 1: 1, 2: 1.5, 3: 2 };
+const LAGERHAUS_CAPACITY_PER_LEVEL = 150;
+function amenityLevel(structures, kind) {
+  let level = 0;
+  for (const s of Object.values(structures)) {
+    if (s.type === 'amenity' && s.kind === kind && s.stage === 'done') level = Math.max(level, s.level || 1);
+  }
+  return level;
+}
+function bakeryFoodMult(structures, bakeryUpgraded) {
+  const L = amenityLevel(structures, 'baeckerei');
+  return L ? (bakeryUpgraded ? 1.85 : 1.5) + 0.15 * (L - 1) : 1;
+}
+function brunnenFoodPerMonth(structures) { return 2 * amenityLevel(structures, 'brunnen'); }
+function brauhausFoodPerMonth(structures) { const L = amenityLevel(structures, 'brauhaus'); return L ? 4 + 3 * (L - 1) : 0; }
+function brauhausHappiness(structures) { const L = amenityLevel(structures, 'brauhaus'); return L ? 1.2 + 0.5 * (L - 1) : 0; }
+function kapelleHappiness(structures) { const L = amenityLevel(structures, 'kapelle'); return L ? 1 + 0.6 * (L - 1) : 0; }
+// Combat multiplier of the chapel's blessing (0 = no chapel).
+function kapelleCombatMult(structures) { const L = amenityLevel(structures, 'kapelle'); return L ? 1.15 + 0.07 * (L - 1) : 0; }
+function kemenateCourtMorale(structures) { const L = amenityLevel(structures, 'kemenate'); return L > 1 ? 0.9 * (L - 1) : 0; }
+function stallKnightHpMult(structures) { return 1 + 0.15 * Math.max(0, amenityLevel(structures, 'stallungen') - 1); }
+function smithyLevelDamageMult(structures) { return 1 + 0.05 * Math.max(0, amenityLevel(structures, 'schmied') - 1); }
+// What each level does, for the info panel.
+const AMENITY_LEVEL_TEXT = {
+  kemenate: ['Ermöglicht königliche Hochzeiten.', '+0,9 Stimmung bei Hofe pro Monat.', '+1,8 Stimmung bei Hofe pro Monat.'],
+  stallungen: ['Ritter können angeworben werden.', 'Ritter +15 % Lebenspunkte.', 'Ritter +30 % Lebenspunkte.'],
+  schmied: ['Waffenforschung möglich.', '+5 % Kampfschaden aller Verteidiger.', '+10 % Kampfschaden aller Verteidiger.'],
+  baeckerei: ['Hof-Ernte ×1,5.', 'Hof-Ernte +0,15 zusätzlich.', 'Hof-Ernte +0,30 zusätzlich.'],
+  lagerhaus: ['+200 Lagerplatz.', '+350 Lagerplatz.', '+500 Lagerplatz.'],
+  brunnen: ['+2 Nahrung pro Monat.', '+4 Nahrung pro Monat.', '+6 Nahrung pro Monat.'],
+  kapelle: ['+15 % Kampfschaden, +1 Zufriedenheit/Monat.', '+22 % Kampfschaden, +1,6 Zufriedenheit/Monat.', '+29 % Kampfschaden, +2,2 Zufriedenheit/Monat.'],
+  brauhaus: ['+4 Nahrung, +1,2 Zufriedenheit pro Monat.', '+7 Nahrung, +1,7 Zufriedenheit pro Monat.', '+10 Nahrung, +2,2 Zufriedenheit pro Monat.'],
+};
 // Once at least one Lagerhaus stands, hauled goods go straight there instead of the open
 // depot marker — the nearest finished one to wherever the hauler currently is.
 function haulDeliveryTarget(structures, fromI, fromJ) {
@@ -257,7 +298,10 @@ const BUILD_COST = {
   graben: { wood: 0, stone: 0 },
 };
 function getBuildCost(site) {
-  return site.type === 'amenity' ? BUILD_COST[site.kind] : BUILD_COST[site.type];
+  if (site.type !== 'amenity') return BUILD_COST[site.type];
+  const base = BUILD_COST[site.kind];
+  const m = AMENITY_LEVEL_COST_MULT[site.level || 1] || 1;
+  return m === 1 ? base : { wood: Math.round(base.wood * m), stone: Math.round(base.stone * m) };
 }
 
 const WAGE = { laborer: 0, arbeiter: 0.12, carpenter: 0.12, mason: 0.12, quarrier: 0.1, lumberjack: 0.1 };
@@ -975,7 +1019,9 @@ function PyramidRoof({ corners, baseElev, apexElev, color }) {
 // A pitched roof with a horizontal ridge, overhanging eaves, visible gable end and tile
 // courses — what turns a plain box into a recognisable house, stable or chapel.
 // axis 'i' runs the ridge along the i direction, 'j' along j.
-function GableRoof({ i, j, half, baseElev, roofH, color, wallPal, axis = 'i', overhang = 0.06 }) {
+function GableRoof({ i, j, half, halfJ, baseElev, roofH, color, wallPal, axis = 'i', overhang = 0.06 }) {
+  // half = half-size along i, halfJ (optional) = half-size along j for oblong buildings.
+  const hI = half, hJ = halfJ != null ? halfJ : half;
   const P = (a, b, e) => gridToScreen(a, b, e);
   const B = baseElev, T = baseElev + roofH;
   const lines = (eA, eB, rA, rB) => {
@@ -988,10 +1034,10 @@ function GableRoof({ i, j, half, baseElev, roofH, color, wallPal, axis = 'i', ov
   };
   const stroke = 'rgba(28,20,12,0.5)';
   if (axis === 'i') {
-    const hi = half + overhang * 0.4, hj = half + overhang;
+    const hi = hI + overhang * 0.4, hj = hJ + overhang;
     const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
     const r0 = P(i - hi, j, T), r1 = P(i + hi, j, T);
-    const g0 = P(i + half, j - half, B), g1 = P(i + half, j + half, B), gr = P(i + half, j, T - roofH * (overhang * 0.6 / hj));
+    const g0 = P(i + hI, j - hJ, B), g1 = P(i + hI, j + hJ, B), gr = P(i + hI, j, T - roofH * (overhang * 0.6 / hj));
     return (
       <g pointerEvents="none">
         <polygon points={ptsStr([e0, e1, r1, r0])} fill={shade(color, 0.14)} stroke={stroke} strokeWidth="0.8" />
@@ -1002,10 +1048,10 @@ function GableRoof({ i, j, half, baseElev, roofH, color, wallPal, axis = 'i', ov
       </g>
     );
   }
-  const hi = half + overhang, hj = half + overhang * 0.4;
+  const hi = hI + overhang, hj = hJ + overhang * 0.4;
   const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
   const r0 = P(i, j - hj, T), r1 = P(i, j + hj, T);
-  const g0 = P(i - half, j + half, B), g1 = P(i + half, j + half, B), gr = P(i, j + half, T - roofH * (overhang * 0.6 / hi));
+  const g0 = P(i - hI, j + hJ, B), g1 = P(i + hI, j + hJ, B), gr = P(i, j + hJ, T - roofH * (overhang * 0.6 / hi));
   return (
     <g pointerEvents="none">
       <polygon points={ptsStr([e0, e3, r1, r0])} fill={shade(color, -0.12)} stroke={stroke} strokeWidth="0.8" />
@@ -1015,6 +1061,41 @@ function GableRoof({ i, j, half, baseElev, roofH, color, wallPal, axis = 'i', ov
       <line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke={shade(color, -0.35)} strokeWidth="1.6" strokeLinecap="round" />
     </g>
   );
+}
+
+// Upright cylinder of grid radius r (wells, turrets, barrels, kettles). An iso circle of
+// radius r projects to an ellipse r·√2·TILE_W/2 wide and r·√2·TILE_H/2 tall.
+function Cylinder({ i, j, r, base, h, side, top, courses = false, stroke = 'rgba(30,22,14,0.45)', hoops = null }) {
+  const c0 = gridToScreen(i, j, base), c1 = gridToScreen(i, j, base + h);
+  const rx = r * (TILE_W / 2) * Math.SQRT2, ry = r * (TILE_H / 2) * Math.SQRT2;
+  const body = `M ${(c1.x - rx).toFixed(1)} ${c1.y.toFixed(1)} L ${(c0.x - rx).toFixed(1)} ${c0.y.toFixed(1)} A ${rx.toFixed(1)} ${ry.toFixed(1)} 0 0 0 ${(c0.x + rx).toFixed(1)} ${c0.y.toFixed(1)} L ${(c1.x + rx).toFixed(1)} ${c1.y.toFixed(1)} A ${rx.toFixed(1)} ${ry.toFixed(1)} 0 0 1 ${(c1.x - rx).toFixed(1)} ${c1.y.toFixed(1)} Z`;
+  const ring = (y) => `M ${(c0.x - rx).toFixed(1)} ${y.toFixed(1)} A ${rx.toFixed(1)} ${ry.toFixed(1)} 0 0 0 ${(c0.x + rx).toFixed(1)} ${y.toFixed(1)}`;
+  let lines = '';
+  if (courses) for (let e = 4.5; e < h - 1; e += 4.5) lines += ring(c0.y - e);
+  if (hoops) hoops.forEach((f) => { lines += ring(c0.y - h * f); });
+  return (
+    <g pointerEvents="none">
+      <path d={body} fill={side} stroke={stroke} strokeWidth="0.8" />
+      {lines && <path d={lines} fill="none" stroke={hoops ? '#3a3328' : 'rgba(35,26,16,0.35)'} strokeWidth={hoops ? 0.8 : 0.6} />}
+      <path d={body} fill="url(#cbCylShade)" />
+      {top && <ellipse cx={c1.x} cy={c1.y} rx={rx} ry={ry} fill={top} stroke={stroke} strokeWidth="0.8" />}
+    </g>
+  );
+}
+// Conical roof on a cylinder.
+function ConeRoof({ i, j, r, base, h, color }) {
+  const c = gridToScreen(i, j, base), apex = gridToScreen(i, j, base + h);
+  const rx = r * (TILE_W / 2) * Math.SQRT2, ry = r * (TILE_H / 2) * Math.SQRT2;
+  const d = `M ${(c.x - rx).toFixed(1)} ${c.y.toFixed(1)} L ${apex.x.toFixed(1)} ${apex.y.toFixed(1)} L ${(c.x + rx).toFixed(1)} ${c.y.toFixed(1)} A ${rx.toFixed(1)} ${ry.toFixed(1)} 0 0 1 ${(c.x - rx).toFixed(1)} ${c.y.toFixed(1)} Z`;
+  return (
+    <g pointerEvents="none">
+      <path d={d} fill={color} stroke="rgba(25,20,15,0.5)" strokeWidth="0.8" />
+      <path d={d} fill="url(#cbCylShade)" />
+    </g>
+  );
+}
+function Barrel({ i, j, base = 0, r = 0.055, h = 6 }) {
+  return <Cylinder i={i} j={j} r={r} base={base} h={h} side="#8a5e34" top="#a87a48" hoops={[0.18, 0.82]} stroke="#3a2614" />;
 }
 
 // Arched window/door cut into a face (u = centre along the face, v0 = top of the arch,
@@ -1529,6 +1610,21 @@ function SceneDefs() {
         <stop offset="0.6" stopColor="#0a0d06" stopOpacity="0.08" />
         <stop offset="1" stopColor="#0a0d06" stopOpacity="0" />
       </radialGradient>
+      <linearGradient id="cbCylShade" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stopColor="#000" stopOpacity="0.32" />
+        <stop offset="0.55" stopColor="#000" stopOpacity="0.02" />
+        <stop offset="0.85" stopColor="#fff3d6" stopOpacity="0.14" />
+        <stop offset="1" stopColor="#000" stopOpacity="0.1" />
+      </linearGradient>
+      <radialGradient id="cbFireGlow" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stopColor="#ffd27a" stopOpacity="0.9" />
+        <stop offset="0.5" stopColor="#ff8a2a" stopOpacity="0.45" />
+        <stop offset="1" stopColor="#ff5a1a" stopOpacity="0" />
+      </radialGradient>
+      <radialGradient id="cbDust" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stopColor="#bcae92" stopOpacity="0.85" />
+        <stop offset="1" stopColor="#bcae92" stopOpacity="0" />
+      </radialGradient>
       <radialGradient id="cbWindowGlow" cx="0.5" cy="0.7" r="0.6">
         <stop offset="0" stopColor="#ffd98a" stopOpacity="0.95" />
         <stop offset="1" stopColor="#e09a3a" stopOpacity="0.55" />
@@ -1752,6 +1848,20 @@ const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, sta
     );
   }
   const pal = PALETTE.tower;
+  if (damageFrac >= 0.999) {
+    // Shot to pieces: a broken stump with a ragged top, rubble and smoke.
+    const stumpH = TOWER_H * 0.5;
+    return (
+      <g>
+        <Block corners={sq(i, j, half * 1.1)} baseElev={0} topElev={5} topFill={shade(pal.top, -0.1)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 1} shadowHeight={stumpH} />
+        <Block corners={corners} baseElev={5} topElev={stumpH} topFill={PALETTE_RUINS.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
+        <RaggedTop corners={corners} elev={stumpH} pal={PALETTE_RUINS} seed={seed} />
+        <CrackOverlay corners={corners} baseElev={5} topElev={stumpH} frac={1} />
+        <RubbleDecor i={i} j={j} frac={1} />
+        <RuinSmoke i={i} j={j} elev={stumpH + 2} seed={seed} />
+      </g>
+    );
+  }
   const topH = TOWER_H * (1 - Math.min(0.3, damageFrac * 0.3));
   const showMerlons = damageFrac < 0.45;
   const parBase = Math.max(8, topH - 7);
@@ -1780,6 +1890,7 @@ const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, sta
       {showMerlons && <Merlons centers={rimPoints(i, j, ph - 0.065, 1)} along={0.065} across={0.065} base={topH} height={MERLON_H * 0.85} pal={shadePal(pal, 0.04)} seed={seed} />}
       <CrackOverlay corners={corners} baseElev={5} topElev={parBase} frac={damageFrac} />
       <RubbleDecor i={i} j={j} frac={damageFrac} />
+      {damageFrac > 0.55 && <RuinSmoke i={i} j={j} elev={topH} seed={seed} />}
     </g>
   );
 });
@@ -2017,7 +2128,8 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     const GH = GATEHOUSE_H;
     const woodPal = { top: '#8a6a3f', left: '#7a5a34', right: '#553a22' };
     const ph = 0.15;
-    const effectiveClosed = !doorOpen || siegeActive;
+    const gateBroken = damageFrac >= 0.999;
+    const effectiveClosed = !gateBroken && (!doorOpen || siegeActive);
 
     const leafHeight = GH * 0.6;
     const doorFrac = effectiveClosed ? 1 : 0.16;
@@ -2101,10 +2213,12 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
           return <path d={d} stroke="rgba(40,24,10,0.45)" strokeWidth="0.7" pointerEvents="none" />;
         })()}
         {p1First ? pillar1 : pillar2}
-        <Block corners={leafCorners(i1 + ux * ph, j1 + uy * ph, leftToI, leftToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 3} shadowHeight={0} />
-        <Block corners={leafCorners(i2 - ux * ph, j2 - uy * ph, rightToI, rightToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 4} shadowHeight={0} />
+        {gateBroken && <RubbleDecor i={midI} j={midJ} frac={1} />}
+        {gateBroken && <RuinSmoke i={midI} j={midJ} elev={GH * 0.5} seed={seed} />}
+        {!gateBroken && <Block corners={leafCorners(i1 + ux * ph, j1 + uy * ph, leftToI, leftToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 3} shadowHeight={0} />}
+        {!gateBroken && <Block corners={leafCorners(i2 - ux * ph, j2 - uy * ph, rightToI, rightToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 4} shadowHeight={0} />}
         <g style={{ transform: effectiveClosed ? 'translateY(0px)' : `translateY(-${(GH * 0.55).toFixed(0)}px)`, transition: 'transform 1s ease-in-out' }} pointerEvents="none">
-          <path d={portcullis} stroke="#2b241c" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+          {!gateBroken && <path d={portcullis} stroke="#2b241c" strokeWidth="1.8" strokeLinecap="round" fill="none" />}
         </g>
         <polygon points={ptsStr(lintelTop)} fill={shade(pal.top, -0.18)} stroke="rgba(30,22,14,0.4)" strokeWidth="1" pointerEvents="none" />
         <polygon points={ptsStr(lintelFace)} fill={lintelFill} stroke="rgba(30,22,14,0.45)" strokeWidth="1" pointerEvents="none" />
@@ -2145,6 +2259,18 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       </g>
     );
   }
+  if (damageFrac >= 0.999) {
+    // Breached: only a smoking heap of rubble is left of this stretch.
+    const rc = orientedRect(midI, midJ, ux, uy, len / 2, t * 1.15);
+    return (
+      <g>
+        <Block corners={rc} baseElev={0} topElev={4} topFill={PALETTE_RUINS.top} faceLeft={PALETTE_RUINS.left} faceRight={PALETTE_RUINS.right} texture="stone" seed={seed} />
+        <RaggedTop corners={rc} elev={4} pal={PALETTE_RUINS} seed={seed} />
+        <RubbleDecor i={midI} j={midJ} frac={1} />
+        <RuinSmoke i={midI} j={midJ} elev={6} seed={seed} />
+      </g>
+    );
+  }
   // Battlements are the first thing lost to bombardment — once a segment is significantly
   // damaged its crenellations disappear and the wall body visibly crumbles down.
   const crumbledHeight = v.height * (1 - Math.min(0.35, damageFrac * 0.35));
@@ -2180,6 +2306,7 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       {showCrenellation && <Merlons centers={crenels} ux={ux} uy={uy} along={0.05} across={0.035} base={crumbledHeight} height={MERLON_H * 0.8} pal={pal} seed={seed} />}
       <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />
       <RubbleDecor i={midI} j={midJ} frac={damageFrac} />
+      {damageFrac > 0.55 && <RuinSmoke i={midI} j={midJ} elev={crumbledHeight} seed={seed} />}
     </g>
   );
 });
@@ -2263,6 +2390,85 @@ function CrateStackDecor({ i, j }) {
   );
 }
 
+
+// ------------------------------------------------------------------------ battle effects --
+// All effects are driven by an "age" in 0..1 that the caller derives from the battle tick or
+// a timestamp, so they freeze with the pause button and need no timers of their own.
+
+// Expanding, fading cloud of dust (impacts, collapsing masonry, battering).
+function DustBurst({ x, y, age, size = 1, color = '#bcae92' }) {
+  const a = Math.max(0, Math.min(1, age));
+  const op = (1 - a) * 0.85;
+  const puffs = [[0, 0, 1], [-9, -3, 0.8], [9, -2, 0.85], [-4, -8, 0.7], [5, -9, 0.75], [0, -14, 0.6]];
+  return (
+    <g pointerEvents="none" opacity={op}>
+      {puffs.map(([dx, dy, r], k) => (
+        <circle key={k} cx={x + dx * size * (0.5 + a)} cy={y + dy * size * (0.5 + a * 1.2)} r={(4 + 9 * a) * r * size} fill={color} />
+      ))}
+    </g>
+  );
+}
+// Chunks of stone flung outward and falling back down.
+function DebrisBurst({ x, y, age, size = 1 }) {
+  const a = Math.max(0, Math.min(1, age));
+  return (
+    <g pointerEvents="none" opacity={1 - a * a}>
+      {[[-1, 1.1], [-0.6, 1.5], [-0.2, 1.8], [0.3, 1.6], [0.7, 1.3], [1, 1]].map(([dir, up], k) => {
+        const px = x + dir * 22 * a * size;
+        const py = y - (up * 26 * a - 30 * a * a) * size;
+        return <rect key={k} x={px - 1.6} y={py - 1.2} width="3.2" height="2.4" rx="0.5" fill={k % 2 ? '#8a8074' : '#6b6155'} transform={`rotate(${k * 60 + a * 400} ${px} ${py})`} />;
+      })}
+    </g>
+  );
+}
+// Quick red flash and spark star on a unit that just took a hit.
+function HitFlash() {
+  return (
+    <g pointerEvents="none">
+      <circle cx="0" cy="-12" r="8" fill="rgba(255,70,40,0.32)" />
+      <path d="M -4 -16 L 4 -8 M 4 -16 L -4 -8 M 0 -18 L 0 -6 M -6 -12 L 6 -12" stroke="#fff2c0" strokeWidth="1.1" strokeLinecap="round" opacity="0.9" />
+    </g>
+  );
+}
+// Clashing blades between two melee fighters.
+function ClashSpark({ x, y, seed }) {
+  return (
+    <g pointerEvents="none" className="cb-clash" style={{ animationDelay: `${(seed % 7) * 0.09}s` }}>
+      <path d={`M ${x - 5} ${y - 4} L ${x + 5} ${y + 4} M ${x + 5} ${y - 4} L ${x - 5} ${y + 4}`} stroke="#e8edf2" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx={x} cy={y} r="2.4" fill="#ffe08a" />
+      <path d={`M ${x} ${y - 6} L ${x} ${y - 9} M ${x + 6} ${y} L ${x + 9} ${y - 1} M ${x - 6} ${y} L ${x - 9} ${y - 1}`} stroke="#ffd060" strokeWidth="0.9" strokeLinecap="round" />
+    </g>
+  );
+}
+// A proper fire: glow on the ground, three flickering flame tongues, rising embers and smoke.
+function FireFx({ x, y, scale = 1 }) {
+  const s = scale;
+  return (
+    <g pointerEvents="none" transform={`translate(${x},${y}) scale(${s})`}>
+      <ellipse cx="0" cy="2" rx="26" ry="10" fill="url(#cbFireGlow)" className="cb-window-glow" />
+      {[[-7, 0.8, 0], [7, 0.85, 0.2], [0, 1.15, 0.1]].map(([dx, h, d], k) => (
+        <g key={k} className="cb-fire-flicker" style={{ animationDelay: `${d}s` }} transform={`translate(${dx},0)`}>
+          <path d={`M -5 3 Q -10 ${-8 * h} -2 ${-20 * h} Q 0 ${-12 * h} 3 ${-16 * h} Q 9 ${-6 * h} 5 3 Z`} fill="#e8641f" />
+          <path d={`M -3 3 Q -5 ${-4 * h} -1 ${-12 * h} Q 1 ${-7 * h} 2.5 ${-9 * h} Q 5 ${-3 * h} 3 3 Z`} fill="#f7b23a" />
+          <path d={`M -1.4 3 Q -2 ${-1 * h} 0 ${-6 * h} Q 2 ${-1 * h} 1.4 3 Z`} fill="#fff1b0" />
+        </g>
+      ))}
+      {[0, 1, 2, 3].map((k) => (
+        <circle key={`e${k}`} cx={(k - 1.5) * 5} cy="-10" r="0.9" fill="#ffcf6a">
+          <animate attributeName="cy" values="-10;-38" dur={`${1.4 + k * 0.3}s`} begin={`${k * 0.35}s`} repeatCount="indefinite" />
+          <animate attributeName="cx" values={`${(k - 1.5) * 5};${(k - 1.5) * 9 + 4}`} dur={`${1.4 + k * 0.3}s`} begin={`${k * 0.35}s`} repeatCount="indefinite" />
+          <animate attributeName="opacity" values="1;0" dur={`${1.4 + k * 0.3}s`} begin={`${k * 0.35}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+      <g className="cb-smoke-rise">
+        <circle cx="0" cy="-26" r="7" fill="rgba(55,50,46,0.5)" />
+        <circle cx="5" cy="-36" r="9" fill="rgba(55,50,46,0.35)" />
+        <circle cx="-3" cy="-46" r="10" fill="rgba(55,50,46,0.22)" />
+      </g>
+    </g>
+  );
+}
+
 function BoulderSprite({ fromI, fromJ, fromElev, toI, toJ, toElev, progress }) {
   const releaseElev = fromElev + 6;
   const landElev = (toElev || 0) + 4;
@@ -2272,7 +2478,17 @@ function BoulderSprite({ fromI, fromJ, fromElev, toI, toJ, toElev, progress }) {
   const peakHeight = 20 + dist * 10;
   const curElev = releaseElev + (landElev - releaseElev) * progress + 4 * peakHeight * progress * (1 - progress);
   const p = gridToScreen(curI, curJ, curElev);
-  return <circle cx={p.x.toFixed(1)} cy={p.y.toFixed(1)} r="4" fill="#6b6155" stroke="#3a352e" strokeWidth="0.8" pointerEvents="none" />;
+  const g = gridToScreen(curI, curJ, 0);
+  const rot = progress * 720;
+  return (
+    <g pointerEvents="none">
+      <ellipse cx={g.x.toFixed(1)} cy={g.y.toFixed(1)} rx={(3 + 3 * (1 - curElev / (peakHeight + releaseElev + 1))).toFixed(1)} ry="1.6" fill="rgba(0,0,0,0.22)" />
+      <g transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) rotate(${rot.toFixed(0)})`}>
+        <path d="M -4.6 -1 L -2.6 -4.2 L 1.8 -4.6 L 4.6 -1.4 L 3.6 3 L -1 4.6 L -4.2 2.4 Z" fill="#7a7062" stroke="#3a352e" strokeWidth="0.8" />
+        <path d="M -2.6 -4.2 L 1.8 -4.6 L 0.4 -1 Z" fill="#9a907f" />
+      </g>
+    </g>
+  );
 }
 
 function ArrowSprite({ fromI, fromJ, fromElev, toI, toJ, toElev, progress }) {
@@ -2292,6 +2508,7 @@ function ArrowSprite({ fromI, fromJ, fromElev, toI, toJ, toElev, progress }) {
   const angle = Math.atan2(ahead.y - p.y, ahead.x - p.x) * (180 / Math.PI);
   return (
     <g transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) rotate(${angle.toFixed(1)})`} pointerEvents="none">
+      <line x1="-22" y1="0" x2="-8" y2="0" stroke="rgba(255,250,235,0.35)" strokeWidth="1" strokeLinecap="round" />
       <line x1="-8" y1="0" x2="5" y2="0" stroke="#4a3524" strokeWidth="1.3" />
       <path d="M5,0 L1,-2.2 L1,2.2 Z" fill="#2b2118" />
       <line x1="-8" y1="0" x2="-5.5" y2="-1.6" stroke="#c9a877" strokeWidth="1" />
@@ -2357,28 +2574,404 @@ const WallJunctionPost = React.memo(function WallJunctionPost({ i, j }) {
   );
 });
 
-// Per-building look: wall material, roof covering and ridge direction.
-const AMENITY_STYLE = {
-  kemenate: { texture: 'stone', roof: '#55606c', roofH: 15, axis: 'i', crane: true },
-  stallungen: { texture: 'wood', roof: '#b39550', roofH: 12, axis: 'j' },
-  schmied: { texture: 'stone', roof: null },
-  baeckerei: { texture: null, roof: '#9c4a32', roofH: 12, axis: 'i' },
-  lagerhaus: { texture: 'wood', roof: '#6e5136', roofH: 12, axis: 'j' },
-  brunnen: { texture: 'stone', roof: null },
-  kapelle: { texture: 'stone', roof: '#56606b', roofH: 16, axis: 'j' },
-  brauhaus: { texture: 'wood', roof: '#8f3f2a', roofH: 12, axis: 'i' },
-};
+// ------------------------------------------------------------------------- amenities --
+// Every building is drawn per Ausbaustufe (1–3): each level is visibly bigger and busier, so
+// a glance at the courtyard tells how far the castle has been developed.
+const PLASTER_PAL = { top: '#e6dab8', left: '#e2d4ae', right: '#c0ae86' };
+const STONE_PAL = { top: '#a8a296', left: '#938c7c', right: '#6f695c' };
+const AMENITY_HALF = { brunnen: 0.22, kemenate: 0.48 };
+function amenityHalf(kind) { return AMENITY_HALF[kind] || 0.36; }
+// Height of the walls (roof base) per kind and level — also what the construction stages
+// build up to.
+function amenityWallHeight(kind, level) {
+  switch (kind) {
+    case 'brunnen': return 8;
+    case 'schmied': return 10;
+    case 'kemenate': return level >= 2 ? 33 : 27;
+    case 'baeckerei': return level >= 2 ? 25 : 18;
+    case 'lagerhaus': return level >= 2 ? 25 : 18;
+    case 'kapelle': return level >= 3 ? 25 : 20;
+    case 'brauhaus': return level >= 2 ? 22 : 18;
+    case 'stallungen': return level >= 2 ? 19 : 16;
+    default: return AMENITY_H;
+  }
+}
+const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood' };
 
-const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
-  const half = kind === 'brunnen' ? 0.22 : kind === 'kemenate' ? 0.48 : 0.36;
-  const finalHeight = kind === 'brunnen' ? 10 : kind === 'schmied' ? AMENITY_H * 0.55 : kind === 'kemenate' ? AMENITY_H * 1.5 : AMENITY_H;
+function FlowerBox({ face, u, v }) {
+  const a = facePt(face, u - 0.11, v), b = facePt(face, u + 0.11, v);
+  return (
+    <g pointerEvents="none">
+      <line x1={a.x} y1={a.y + 1} x2={b.x} y2={b.y + 1} stroke="#6b4a28" strokeWidth="2.2" />
+      {[0.2, 0.5, 0.8].map((t) => { const p = lerpPt(a, b, t); return <circle key={t} cx={p.x} cy={p.y - 0.6} r="1.3" fill={t === 0.5 ? '#e8c94a' : '#d0473a'} />; })}
+    </g>
+  );
+}
+function HangingSign({ x, y, icon, flip = false }) {
+  const dx = flip ? -1 : 1;
+  return (
+    <g pointerEvents="none">
+      <line x1={x} y1={y} x2={x + 9 * dx} y2={y} stroke="#3a2a18" strokeWidth="1.2" />
+      <line x1={x + 3 * dx} y1={y} x2={x + 3 * dx} y2={y + 2.5} stroke="#3a2a18" strokeWidth="0.5" />
+      <line x1={x + 8 * dx} y1={y} x2={x + 8 * dx} y2={y + 2.5} stroke="#3a2a18" strokeWidth="0.5" />
+      <rect x={x + (flip ? -9.5 : 1.5)} y={y + 2.5} width="8" height="6.5" rx="1" fill="#d8c08a" stroke="#5c4526" strokeWidth="0.6" />
+      <text x={x + 5.5 * dx} y={y + 8} textAnchor="middle" fontSize="5.5">{icon}</text>
+    </g>
+  );
+}
+function HayBales({ x, y, n = 2 }) {
+  return (
+    <g pointerEvents="none">
+      {Array.from({ length: n }).map((_, k) => {
+        const bx = x + (k % 2) * 7 - (k > 1 ? 3.5 : 0), by = y - Math.floor(k / 2) * 4.5;
+        return (
+          <g key={k}>
+            <polygon points={`${bx - 4},${by - 2} ${bx},${by - 4} ${bx + 4},${by - 2} ${bx},${by}`} fill="#e6c870" stroke="#8a7030" strokeWidth="0.5" />
+            <polygon points={`${bx - 4},${by - 2} ${bx},${by} ${bx},${by + 3} ${bx - 4},${by + 1}`} fill="#cfae52" stroke="#8a7030" strokeWidth="0.5" />
+            <polygon points={`${bx + 4},${by - 2} ${bx},${by} ${bx},${by + 3} ${bx + 4},${by + 1}`} fill="#b39542" stroke="#8a7030" strokeWidth="0.5" />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+function Sacks({ x, y, n = 3 }) {
+  return (
+    <g pointerEvents="none">
+      {Array.from({ length: n }).map((_, k) => (
+        <path key={k} d={`M ${x + k * 4.5 - 2.5} ${y - (k % 2) * 2} q -0.6 -5 2.5 -6 q 3.1 1 2.5 6 z`} fill="#d9ccaa" stroke="#7d6e50" strokeWidth="0.5" />
+      ))}
+    </g>
+  );
+}
+// Animated forge sparks.
+function Sparks({ x, y }) {
+  return (
+    <g pointerEvents="none">
+      {[0, 1, 2, 3].map((k) => (
+        <circle key={k} cx={x} cy={y} r="0.7" fill="#ffd76a">
+          <animate attributeName="cx" values={`${x};${x + (k - 1.5) * 5}`} dur={`${0.7 + k * 0.13}s`} begin={`${k * 0.21}s`} repeatCount="indefinite" />
+          <animate attributeName="cy" values={`${y};${y - 7 - k};${y - 3}`} dur={`${0.7 + k * 0.13}s`} begin={`${k * 0.21}s`} repeatCount="indefinite" />
+          <animate attributeName="opacity" values="1;0.8;0" dur={`${0.7 + k * 0.13}s`} begin={`${k * 0.21}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+    </g>
+  );
+}
+function Anvil({ x, y }) {
+  return (
+    <g pointerEvents="none" transform={`translate(${x},${y})`}>
+      <ellipse cx="0" cy="0.5" rx="7" ry="2.4" fill={SHADOW_FILL} />
+      <rect x="-1.8" y="-4.6" width="3.6" height="4.6" fill="#4a3220" />
+      <path d="M -5.5 -7.6 L 5 -7.6 L 7.6 -6.2 L 3 -4.6 L -4 -4.6 Z" fill="#4f555c" stroke="#1f2328" strokeWidth="0.6" />
+      <line x1="-4.6" y1="-7.4" x2="4.6" y2="-7.4" stroke="#9aa2aa" strokeWidth="0.6" />
+    </g>
+  );
+}
+
+function AmenityBody({ i, j, kind, level }) {
+  const L = Math.max(1, Math.min(AMENITY_MAX_LEVEL, level || 1));
+  const half = amenityHalf(kind);
+  const info = AMENITY_TYPES[kind];
+  const seed = i * 11.3 + j * 3.7;
+  const H = amenityWallHeight(kind, L);
+  const corners = sq(i, j, half);
+  const quads = computeFaceQuads(corners, 0, H);
+  const P = (a, b, e = 0) => gridToScreen(a, b, e);
+  const els = [];
+  let top = H;
+  switch (kind) {
+    case 'kemenate': {
+      const h1 = 15;
+      const upper = sq(i, j, half + 0.03);
+      const uq = computeFaceQuads(upper, h1, H);
+      const lq = computeFaceQuads(corners, 0, h1);
+      els.push(<Block key="lo" corners={corners} baseElev={0} topElev={h1} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 15} />);
+      els.push(<ArchOpening key="door" face={lq.faceB} u={0.5} v0={0.3} dv={0.7} du={0.16} fill="#4a3220" />);
+      els.push(<ArchOpening key="lw" face={lq.faceA} u={0.5} v0={0.3} dv={0.35} du={0.08} fill="#241c14" />);
+      els.push(<Block key="up" corners={upper} baseElev={h1} topElev={H} topFill={PLASTER_PAL.top} faceLeft={PLASTER_PAL.left} faceRight={PLASTER_PAL.right} shadowHeight={0} />);
+      els.push(<TimberFrameDecor key="tf" corners={upper} baseElev={h1} topElev={H} />);
+      [[uq.faceA, 0.28], [uq.faceA, 0.72], [uq.faceB, 0.28], [uq.faceB, 0.72]].forEach(([f, u], k) => {
+        els.push(<ArchOpening key={`w${k}`} face={f} u={u} v0={0.22} dv={0.42} du={0.1} fill="#2a2016" glow={k % 2 === 0 || L >= 2} />);
+        if (L >= 2) els.push(<FlowerBox key={`fb${k}`} face={f} u={u} v={0.66} />);
+      });
+      els.push(<GableRoof key="roof" i={i} j={j} half={half + 0.03} baseElev={H} roofH={15} color="#55606c" wallPal={PLASTER_PAL} axis="i" overhang={0.07} />);
+      els.push(<ChimneyDecor key="ch" i={i} j={j} smokeColor="#8a8074" elev={H + 9} />);
+      const pb = P(i - 0.3, j, H + 14), pt = P(i - 0.3, j, H + 32);
+      els.push(<g key="flag" pointerEvents="none"><line x1={pb.x} y1={pb.y} x2={pt.x} y2={pt.y} stroke="#2b2118" strokeWidth="1.3" /><path d={`M ${pt.x} ${pt.y} l 13 4 l -13 4 z`} fill="#7a2f5c" stroke="#2b2118" strokeWidth="0.8" /></g>);
+      top = H + 15;
+      if (L >= 3) {
+        // A round corner turret with a slate cone.
+        const ti = i + half, tj = j - half;
+        els.push(<Cylinder key="tur" i={ti} j={tj} r={0.15} base={0} h={H + 9} side="#968f80" top="#7d7566" courses />);
+        const w = P(ti, tj, H - 2);
+        els.push(<rect key="tw" x={w.x - 1.6} y={w.y - 6} width="3.2" height="6" rx="1.6" fill="url(#cbWindowGlow)" stroke="#2a2016" strokeWidth="0.6" pointerEvents="none" />);
+        els.push(<ConeRoof key="tc" i={ti} j={tj} r={0.19} base={H + 9} h={20} color="#55606c" />);
+        top = H + 29;
+      }
+      break;
+    }
+    case 'stallungen': {
+      const pal = info;
+      if (L >= 3) els.push(<Block key="plinth" corners={sq(i, j, half + 0.01)} baseElev={0} topElev={5} topFill={STONE_PAL.top} faceLeft={STONE_PAL.left} faceRight={STONE_PAL.right} texture="stone" seed={seed} shadowHeight={H + 12} />);
+      els.push(<Block key="b" corners={corners} baseElev={L >= 3 ? 5 : 0} topElev={H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="wood" seed={seed} shadowHeight={L >= 3 ? 0 : H + 12} />);
+      const sq2 = computeFaceQuads(corners, L >= 3 ? 5 : 0, H);
+      [0.27, 0.73].forEach((u, k) => {
+        els.push(<ArchOpening key={`st${k}`} face={sq2.faceA} u={u} v0={0.35} dv={0.65} du={0.3} fill="#2a1f14" />);
+        const hp = facePt(sq2.faceA, u, 0.52);
+        els.push(
+          <g key={`horse${k}`} pointerEvents="none">
+            <path d={`M ${hp.x - 1} ${hp.y + 3} q 1 -5 4 -5.5 q 2.6 0 2.4 2 l -1.6 0.8 q -1 2.6 -2 3.4 z`} fill={k ? '#3a2a1c' : '#7a5232'} stroke="#1c120a" strokeWidth="0.4" />
+            <rect x={hp.x - 3.5} y={hp.y + 2.4} width="7" height="1.4" fill="#6b4a28" />
+          </g>,
+        );
+      });
+      if (L >= 2) els.push(<ArchOpening key="loft" face={sq2.faceB} u={0.5} v0={0.05} dv={0.3} du={0.24} fill="#3a2a1a" />);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={12} color="#b39550" wallPal={pal} axis="j" overhang={0.08} />);
+      if (L >= 3) {
+        const r1 = P(i, j, H + 12), r2 = P(i, j, H + 22);
+        els.push(<g key="vane" pointerEvents="none"><line x1={r1.x} y1={r1.y} x2={r2.x} y2={r2.y} stroke="#2b2118" strokeWidth="1" /><path d={`M ${r2.x - 4} ${r2.y + 2} q 2 -4 5 -3 l 2 -1 l -1 3 q -2 2 -6 1 z`} fill="#2b2118" /></g>);
+      }
+      els.push(<HorseYardDecor key="yard" i={i} j={j} />);
+      const hb = P(i + half + 0.05, j + 0.15);
+      els.push(<HayBales key="hay" x={hb.x} y={hb.y} n={L >= 2 ? 3 : 1} />);
+      top = H + 12;
+      break;
+    }
+    case 'schmied': {
+      // An open smithy: stone floor, hearth with chimney, anvil, quench barrel. From level 2
+      // a roof on posts shelters the work floor.
+      const floorPal = { top: '#8f8676', left: '#756d5f', right: '#5a5449' };
+      els.push(<Block key="floor" corners={corners} baseElev={0} topElev={3} topFill={floorPal.top} faceLeft={floorPal.left} faceRight={floorPal.right} texture="stone" seed={seed} shadowHeight={L >= 2 ? 24 : 12} />);
+      const postH = 21;
+      const postAt = (a, b) => <line key={`post${a}${b}`} x1={P(i + a, j + b, 3).x} y1={P(i + a, j + b, 3).y} x2={P(i + a, j + b, postH).x} y2={P(i + a, j + b, postH).y} stroke="#5a3d22" strokeWidth="2.2" strokeLinecap="round" />;
+      if (L >= 2) { els.push(postAt(-half + 0.03, -half + 0.03)); els.push(postAt(half - 0.03, -half + 0.03)); els.push(postAt(-half + 0.03, half - 0.03)); }
+      const hi = i - 0.13, hj = j - 0.13;
+      els.push(<Block key="hearth" corners={sq(hi, hj, 0.14)} baseElev={3} topElev={11} topFill="#6b6155" faceLeft="#7d7566" faceRight="#5f584a" texture="stone" seed={seed + 2} shadowHeight={0} />);
+      const glow = P(hi, hj, 11);
+      els.push(<g key="glow" pointerEvents="none"><ellipse cx={glow.x} cy={glow.y} rx="10" ry="5.5" fill="url(#cbFireGlow)" className="cb-window-glow" /><ellipse cx={glow.x} cy={glow.y} rx="4.5" ry="2.2" fill="#ffb15a" /></g>);
+      const chH = L >= 3 ? 40 : 30;
+      els.push(<Block key="chim" corners={sq(hi - 0.08, hj - 0.08, 0.07)} baseElev={11} topElev={chH} topFill="#5a5348" faceLeft="#7d7566" faceRight="#5f584a" texture="stone" seed={seed + 3} shadowHeight={0} />);
+      els.push(<ChimneyDecor key="smoke" i={hi - 0.24} j={hj - 0.16} smokeColor="#5a5044" elev={chH - 8} />);
+      if (L >= 3) {
+        els.push(<Block key="hearth2" corners={sq(i + 0.18, j - 0.16, 0.1)} baseElev={3} topElev={9} topFill="#6b6155" faceLeft="#7d7566" faceRight="#5f584a" texture="stone" seed={seed + 4} shadowHeight={0} />);
+        const g2 = P(i + 0.18, j - 0.16, 9);
+        els.push(<ellipse key="g2" cx={g2.x} cy={g2.y} rx="5" ry="2.6" fill="url(#cbFireGlow)" className="cb-window-glow" pointerEvents="none" />);
+      }
+      const an = P(i + 0.12, j + 0.12, 3);
+      els.push(<Anvil key="anvil" x={an.x} y={an.y} />);
+      els.push(<Sparks key="sparks" x={an.x} y={an.y - 8} />);
+      els.push(<Barrel key="quench" i={i - 0.2} j={j + 0.22} base={3} />);
+      if (L >= 2) {
+        // Weapon rack and grindstone.
+        const wr = P(i + 0.28, j - 0.05, 3);
+        els.push(<g key="rack" pointerEvents="none">{[-3, 0, 3].map((dx) => <line key={dx} x1={wr.x + dx} y1={wr.y} x2={wr.x + dx + 1} y2={wr.y - 15} stroke="#6b4d2e" strokeWidth="0.9" />)}<path d={`M ${wr.x - 4} ${wr.y - 16} l 1 -3 l 1 3 M ${wr.x - 1} ${wr.y - 16} l 1 -3 l 1 3 M ${wr.x + 2} ${wr.y - 16} l 1 -3 l 1 3`} fill="#aab0b6" stroke="#3a3f45" strokeWidth="0.4" /><line x1={wr.x - 5} y1={wr.y - 9} x2={wr.x + 5} y2={wr.y - 8} stroke="#4a3018" strokeWidth="1" /></g>);
+        els.push(postAt(half - 0.03, half - 0.03));
+        els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={postH} roofH={9} color="#6e5136" wallPal={floorPal} axis="i" overhang={0.06} />);
+        top = postH + 9;
+      } else top = 18;
+      break;
+    }
+    case 'baeckerei': {
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={PLASTER_PAL.top} faceLeft={PLASTER_PAL.left} faceRight={PLASTER_PAL.right} shadowHeight={H + 12} />);
+      els.push(<TimberFrameDecor key="tf" corners={corners} baseElev={0} topElev={H} />);
+      if (L >= 2) els.push(<TimberFrameDecor key="tf2" corners={corners} baseElev={H * 0.5} topElev={H} />);
+      els.push(<ArchOpening key="door" face={quads.faceB} u={0.5} v0={L >= 2 ? 0.62 : 0.4} dv={L >= 2 ? 0.38 : 0.6} du={0.2} fill="#4a3220" />);
+      els.push(<ArchOpening key="win" face={quads.faceA} u={0.5} v0={L >= 2 ? 0.6 : 0.3} dv={0.25} du={0.16} fill="#2a2016" glow />);
+      if (L >= 2) els.push(<ArchOpening key="win2" face={quads.faceA} u={0.5} v0={0.15} dv={0.22} du={0.14} fill="#2a2016" glow />);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={12} color="#9c4a32" wallPal={PLASTER_PAL} axis="i" overhang={0.07} />);
+      els.push(<ChimneyDecor key="ch" i={i} j={j} smokeColor="#d9c9a0" elev={H + 7} />);
+      // Domed bread oven on the side with a glowing mouth.
+      const ov = P(i + half + 0.02, j + 0.12, 0);
+      const r = L >= 2 ? 10 : 8;
+      els.push(
+        <g key="oven" pointerEvents="none">
+          <ellipse cx={ov.x - 2} cy={ov.y + 1} rx={r + 2} ry={r * 0.4} fill={SHADOW_FILL} />
+          <path d={`M ${ov.x - r} ${ov.y} A ${r} ${r * 0.95} 0 0 1 ${ov.x + r} ${ov.y} Z`} fill="#a0583a" stroke="#4a2414" strokeWidth="0.7" />
+          <path d={`M ${ov.x - r * 0.6} ${ov.y - r * 0.55} Q ${ov.x} ${ov.y - r} ${ov.x + r * 0.6} ${ov.y - r * 0.55}`} stroke="#c47a52" strokeWidth="0.8" fill="none" />
+          <path d={`M ${ov.x - 2.6} ${ov.y} q 0 -4.4 2.6 -4.4 q 2.6 0 2.6 4.4 z`} fill="#ffb15a" className="cb-window-glow" />
+        </g>,
+      );
+      const sg = P(i - 0.05, j + half, H * 0.7);
+      els.push(<HangingSign key="sign" x={sg.x} y={sg.y} icon="🥨" flip />);
+      if (L >= 2) { const sk = P(i - 0.24, j + half + 0.07); els.push(<Sacks key="sacks" x={sk.x} y={sk.y} />); }
+      top = H + 12;
+      if (L >= 3) {
+        // A small post windmill behind the bakery, its sails turning.
+        const wb = P(i + half + 0.04, j - half + 0.02, 0), wt = P(i + half + 0.04, j - half + 0.02, H + 20);
+        els.push(
+          <g key="mill" pointerEvents="none">
+            <line x1={wb.x} y1={wb.y} x2={wt.x} y2={wt.y + 6} stroke="#5a3d22" strokeWidth="2.4" />
+            <rect x={wt.x - 6} y={wt.y - 2} width="12" height="12" fill="#c9a46a" stroke="#5a3d22" strokeWidth="0.8" />
+            <path d={`M ${wt.x - 7} ${wt.y - 2} L ${wt.x} ${wt.y - 8} L ${wt.x + 7} ${wt.y - 2} Z`} fill="#8c4632" stroke="#5a2a1c" strokeWidth="0.7" />
+            <g>
+              <animateTransform attributeName="transform" type="rotate" from={`0 ${wt.x} ${wt.y + 3}`} to={`360 ${wt.x} ${wt.y + 3}`} dur="7s" repeatCount="indefinite" />
+              {[0, 90, 180, 270].map((a) => (
+                <g key={a} transform={`rotate(${a} ${wt.x} ${wt.y + 3})`}>
+                  <line x1={wt.x} y1={wt.y + 3} x2={wt.x} y2={wt.y - 17} stroke="#5a3d22" strokeWidth="1" />
+                  <rect x={wt.x + 0.5} y={wt.y - 17} width="4" height="14" fill="rgba(240,232,210,0.9)" stroke="#7d6e50" strokeWidth="0.5" />
+                </g>
+              ))}
+            </g>
+            <circle cx={wt.x} cy={wt.y + 3} r="1.2" fill="#3a2a18" />
+          </g>,
+        );
+        top = H + 30;
+      }
+      break;
+    }
+    case 'lagerhaus': {
+      const pal = info;
+      if (L >= 3) els.push(<Block key="lo" corners={corners} baseElev={0} topElev={9} topFill={STONE_PAL.top} faceLeft={STONE_PAL.left} faceRight={STONE_PAL.right} texture="stone" seed={seed} shadowHeight={H + 12} />);
+      els.push(<Block key="b" corners={corners} baseElev={L >= 3 ? 9 : 0} topElev={H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="wood" seed={seed} shadowHeight={L >= 3 ? 0 : H + 12} />);
+      const fq = computeFaceQuads(corners, 0, H);
+      els.push(<ArchOpening key="door" face={fq.faceB} u={0.5} v0={L >= 2 ? 0.45 : 0.3} dv={L >= 2 ? 0.55 : 0.7} du={0.36} fill="#3a2a1a" />);
+      els.push(<ArchOpening key="doorA" face={fq.faceA} u={0.5} v0={0.5} dv={0.5} du={0.3} fill="#3a2a1a" />);
+      if (L >= 2) {
+        els.push(<ArchOpening key="loft" face={fq.faceB} u={0.5} v0={0.06} dv={0.28} du={0.2} fill="#2a1d12" />);
+        // Hoist beam with a sack on the rope.
+        const hb = P(i, j + half, H + 4), he = P(i, j + half + 0.2, H + 4);
+        els.push(<g key="hoist" pointerEvents="none"><line x1={hb.x} y1={hb.y} x2={he.x} y2={he.y} stroke="#4a3018" strokeWidth="1.8" /><line x1={he.x} y1={he.y} x2={he.x} y2={he.y + 14} stroke="#3a2a18" strokeWidth="0.6" /><path d={`M ${he.x - 3} ${he.y + 20} q -0.6 -6 3 -6.4 q 3.6 0.4 3 6.4 z`} fill="#d9ccaa" stroke="#7d6e50" strokeWidth="0.5" /></g>);
+      }
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={12} color="#6e5136" wallPal={pal} axis="j" overhang={0.08} />);
+      els.push(<CrateStackDecor key="crates" i={i} j={j} />);
+      if (L >= 2) { els.push(<Barrel key="b1" i={i + half + 0.07} j={j - 0.12} />); els.push(<Barrel key="b2" i={i + half + 0.07} j={j + 0.02} />); }
+      if (L >= 3) { const sk = P(i + half + 0.04, j + 0.25); els.push(<Sacks key="sacks" x={sk.x} y={sk.y} n={4} />); }
+      top = H + 12;
+      break;
+    }
+    case 'brunnen': {
+      if (L >= 3) {
+        // A fountain: wide stone basin, column, bowl and splashing jets.
+        els.push(<Cylinder key="basin" i={i} j={j} r={0.3} base={0} h={5} side="#9a9384" top="#3d6f86" courses={false} />);
+        const w = P(i, j, 5);
+        els.push(<ellipse key="glint" cx={w.x} cy={w.y} rx="14" ry="5" fill="rgba(200,230,240,0.3)" className="cb-glint" pointerEvents="none" />);
+        els.push(<Cylinder key="col" i={i} j={j} r={0.05} base={5} h={12} side="#b0a898" top="#c4bcac" />);
+        els.push(<Cylinder key="bowl" i={i} j={j} r={0.12} base={15} h={2.5} side="#a8a090" top="#4b7f96" />);
+        const jt = P(i, j, 20);
+        els.push(
+          <g key="jets" pointerEvents="none">
+            <circle cx={jt.x} cy={jt.y} r="1.6" fill="#c4bcac" />
+            {[-1, 1].map((d) => <path key={d} d={`M ${jt.x} ${jt.y} q ${d * 9} -6 ${d * 13} 10`} stroke="rgba(200,232,245,0.85)" strokeWidth="1.2" fill="none" strokeDasharray="2,2" className="cb-wall-preview-line" />)}
+          </g>,
+        );
+        top = 22;
+      } else {
+        els.push(<Cylinder key="well" i={i} j={j} r={0.2} base={0} h={H} side="#938c7c" top="#3d6f86" courses />);
+        const w = P(i, j, H);
+        els.push(<ellipse key="glint" cx={w.x} cy={w.y} rx="8" ry="3" fill="rgba(200,230,240,0.35)" className="cb-glint" pointerEvents="none" />);
+        els.push(<WellDecor key="winch" i={i} j={j} wellTop={H} />);
+        top = H + 23;
+        if (L >= 2) {
+          els.push(<GableRoof key="roof" i={i} j={j} half={0.2} baseElev={H + 17} roofH={8} color="#9c4a32" wallPal={STONE_PAL} axis="i" overhang={0.05} />);
+          // Water trough beside the well.
+          els.push(<Block key="trough" corners={orientedRect(i + 0.04, j + 0.33, 1, 0, 0.16, 0.05)} baseElev={0} topElev={3.5} topFill="#4b7f96" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed} />);
+          top = H + 25;
+        }
+      }
+      break;
+    }
+    case 'kapelle': {
+      const pal = info;
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={H + 16} />);
+      // Buttresses along the nave.
+      [0.25, 0.75].forEach((t, k) => {
+        const bi = i + half + 0.03, bj = j - half + 2 * half * t;
+        els.push(<Block key={`bt${k}`} corners={orientedRect(bi, bj, 1, 0, 0.04, 0.035)} baseElev={0} topElev={H * 0.7} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} shadowHeight={0} />);
+      });
+      const glass = L >= 3 ? '#7fb2e0' : '#2a2016';
+      els.push(<ArchOpening key="w1" face={quads.faceA} u={0.5} v0={0.18} dv={0.45} du={0.09} fill={glass} glow={L >= 2} />);
+      els.push(<ArchOpening key="door" face={quads.faceB} u={0.5} v0={0.35} dv={0.65} du={0.2} fill="#4a3220" />);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={16} color="#56606b" wallPal={pal} axis="j" overhang={0.07} />);
+      const rose = P(i, j + half, H + 16 * 0.38);
+      els.push(<circle key="rose" cx={rose.x} cy={rose.y} r={L >= 3 ? 3.6 : 2.8} fill="url(#cbWindowGlow)" stroke="#2a2016" strokeWidth="0.8" pointerEvents="none" />);
+      const crossCol = L >= 3 ? '#e2b95a' : '#C9A24B';
+      if (L >= 2) {
+        // Proper bell tower at the entrance end.
+        const ti = i + 0.17, tj = j + half - 0.02;
+        const th = H + 22;
+        els.push(<Block key="tower" corners={sq(ti, tj, 0.12)} baseElev={0} topElev={th} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed + 7} shadowHeight={th + 18} />);
+        const tq = computeFaceQuads(sq(ti, tj, 0.12), 0, th);
+        els.push(<ArchOpening key="belfry" face={tq.faceB} u={0.5} v0={0.05} dv={0.18} du={0.45} fill="#1e1710" />);
+        const bell = facePt(tq.faceB, 0.5, 0.15);
+        els.push(<path key="bell" d={`M ${bell.x - 2.4} ${bell.y + 2} q 0 -4.6 2.4 -4.6 q 2.4 0 2.4 4.6 z`} fill="#c9a24b" stroke="#6b5420" strokeWidth="0.5" pointerEvents="none" />);
+        const spire = L >= 3 ? 30 : 18;
+        els.push(<PyramidRoof key="sp" corners={sq(ti, tj, 0.145)} baseElev={th} apexElev={th + spire} color="#56606b" />);
+        const cb = P(ti, tj, th + spire), ct = P(ti, tj, th + spire + 9);
+        els.push(<g key="cross" pointerEvents="none"><line x1={cb.x} y1={cb.y} x2={ct.x} y2={ct.y} stroke={crossCol} strokeWidth="1.4" strokeLinecap="round" /><line x1={ct.x - 3.5} y1={ct.y + 3} x2={ct.x + 3.5} y2={ct.y + 3} stroke={crossCol} strokeWidth="1.4" strokeLinecap="round" /></g>);
+        top = th + spire + 9;
+      } else {
+        const ti = i, tj = j + half * 0.45, base = H + 12;
+        const cb = P(ti, tj, base + 22), ct = P(ti, tj, base + 31);
+        els.push(<Block key="tur" corners={sq(ti, tj, 0.07)} baseElev={base} topElev={base + 10} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} shadowHeight={0} />);
+        els.push(<PyramidRoof key="tr" corners={sq(ti, tj, 0.09)} baseElev={base + 10} apexElev={base + 21} color="#56606b" />);
+        els.push(<g key="cross" pointerEvents="none"><line x1={cb.x} y1={cb.y} x2={ct.x} y2={ct.y} stroke={crossCol} strokeWidth="1.4" strokeLinecap="round" /><line x1={ct.x - 3.5} y1={ct.y + 3} x2={ct.x + 3.5} y2={ct.y + 3} stroke={crossCol} strokeWidth="1.4" strokeLinecap="round" /></g>);
+        top = H + 16 + 18;
+      }
+      // A couple of grave crosses beside the chapel.
+      const g1 = P(i + half + 0.1, j + 0.28);
+      els.push(<g key="graves" pointerEvents="none">{[0, 7].map((dx) => <g key={dx}><line x1={g1.x + dx} y1={g1.y - dx * 0.4} x2={g1.x + dx} y2={g1.y - dx * 0.4 - 6} stroke="#6b665c" strokeWidth="1.2" /><line x1={g1.x + dx - 2} y1={g1.y - dx * 0.4 - 4.4} x2={g1.x + dx + 2} y2={g1.y - dx * 0.4 - 4.4} stroke="#6b665c" strokeWidth="1.2" /></g>)}</g>);
+      break;
+    }
+    case 'brauhaus': {
+      const pal = info;
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="wood" seed={seed} shadowHeight={H + 12} />);
+      els.push(<ArchOpening key="door" face={quads.faceB} u={0.5} v0={0.3} dv={0.7} du={0.3} fill="#4a3220" />);
+      els.push(<ArchOpening key="w" face={quads.faceA} u={0.5} v0={0.25} dv={0.3} du={0.14} fill="#2a2016" glow />);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={12} color="#8f3f2a" wallPal={pal} axis="i" overhang={0.07} />);
+      els.push(<ChimneyDecor key="ch" i={i} j={j} smokeColor="#bfb4a0" elev={H + 7} />);
+      const sg = P(i - 0.05, j + half, H * 0.72);
+      els.push(<HangingSign key="sign" x={sg.x} y={sg.y} icon="🍺" flip />);
+      els.push(<Barrel key="b1" i={i + half + 0.07} j={j + 0.05} />);
+      els.push(<Barrel key="b2" i={i + half + 0.07} j={j + 0.2} />);
+      els.push(<Barrel key="b3" i={i + half + 0.07} j={j + 0.12} base={6} />);
+      if (L >= 2) {
+        // Copper brew kettle with its own little flue.
+        els.unshift(<Cylinder key="kettle" i={i + 0.2} j={j - half - 0.04} r={0.11} base={0} h={9} side="#b0643a" top="#d48a5a" stroke="#5a2a14" />);
+        const kt = P(i + 0.2, j - half - 0.04, 9);
+        els.splice(1, 0, <path key="dome" d={`M ${kt.x - 7.5} ${kt.y} Q ${kt.x} ${kt.y - 9} ${kt.x + 7.5} ${kt.y} Z`} fill="#c87a4a" stroke="#5a2a14" strokeWidth="0.6" pointerEvents="none" />);
+      }
+      if (L >= 3) {
+        // Hop garden: poles with climbing vines.
+        const hp = [[-0.3, 0.42], [-0.12, 0.44], [0.06, 0.46]];
+        hp.forEach(([di, dj], k) => {
+          const b = P(i + di, j + dj), t = P(i + di, j + dj, 22);
+          els.push(<g key={`hop${k}`} pointerEvents="none"><line x1={b.x} y1={b.y} x2={t.x} y2={t.y} stroke="#6b4d2e" strokeWidth="1" />{[4, 8, 12, 16, 20].map((h) => { const p = P(i + di, j + dj, h); return <circle key={h} cx={p.x + (h % 8 ? 1.5 : -1.5)} cy={p.y} r="2" fill="#5f8a3a" />; })}</g>);
+        });
+      }
+      top = H + 12;
+      break;
+    }
+    default:
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} />);
+  }
+  return { node: <g>{els}</g>, top };
+}
+
+const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false, level = 1, upgrading = false }) {
+  const half = amenityHalf(kind);
+  const finalHeight = amenityWallHeight(kind, level);
   const corners = sq(i, j, half);
   const info = AMENITY_TYPES[kind];
-  const style = AMENITY_STYLE[kind] || { texture: 'stone', roof: null };
   const seed = i * 11.3 + j * 3.7;
   const finalPal = ghost ? (ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost) : info;
   const v = stageVisual(stage, progress, finalHeight, finalPal, ghost, ghostBlocked, ruined);
   if (ghost) return <GhostBlock corners={corners} height={finalHeight} pal={v.pal} blocked={ghostBlocked} />;
+  if (upgrading && stage !== 'done' && !ruined) {
+    // An expansion in progress: the existing building keeps standing, wrapped in scaffolding
+    // up to its new height.
+    const prev = AmenityBody({ i, j, kind, level: Math.max(1, level - 1) });
+    const scaffoldH = Math.max(finalHeight, prev.top - 6) * (stage === 'scaffold' ? 0.4 + 0.6 * progress : 1);
+    return (
+      <g>
+        <ScaffoldRig corners={corners} height={scaffoldH} part="back" seed={seed} />
+        {prev.node}
+        <ScaffoldRig corners={corners} height={scaffoldH} part="front" seed={seed} />
+        <SiteMaterials corners={corners} stage={stage} seed={seed} />
+        <ProgressLabel i={i} j={j} height={Math.max(prev.top, scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
   if (stage === 'foundation') {
     return (
       <g>
@@ -2390,77 +2983,22 @@ const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBl
   if (stage !== 'done') {
     return (
       <g>
-        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} texture={style.texture === 'wood' ? 'wood' : 'stone'} crane={!!style.crane} />
+        <BuildingSite corners={corners} v={v} stage={stage} seed={seed} texture={AMENITY_TEXTURE[kind] === 'wood' ? 'wood' : 'stone'} crane={kind === 'kemenate'} />
         <ProgressLabel i={i} j={j} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
       </g>
     );
   }
-  const roofH = style.roof ? style.roofH : 0;
-  const quads = computeFaceQuads(corners, 0, finalHeight);
-  const labelP = gridToScreen(i, j, finalHeight + roofH + (kind === 'brunnen' || kind === 'schmied' ? 20 : kind === 'kapelle' ? 26 : 10));
-  const labelW = Math.max(60, info.label.length * 6.2 + 16);
+  const body = AmenityBody({ i, j, kind, level });
+  const labelP = gridToScreen(i, j, body.top + 10);
+  const stars = level > 1 ? ` ${'★'.repeat(level)}` : '';
+  const label = info.label + stars;
+  const labelW = Math.max(60, label.length * 6.2 + 16);
   return (
     <g>
-      <Block corners={corners} baseElev={0} topElev={finalHeight} topFill={kind === 'brunnen' ? '#3d6f86' : info.top} faceLeft={info.left} faceRight={info.right} texture={style.texture} seed={seed} shadowHeight={finalHeight + roofH * 0.7} />
-      {kind === 'brunnen' && <ellipse cx={gridToScreen(i, j, finalHeight).x} cy={gridToScreen(i, j, finalHeight).y} rx="6" ry="3" fill="rgba(200,230,240,0.35)" className="cb-glint" pointerEvents="none" />}
-      {kind === 'baeckerei' && <TimberFrameDecor corners={corners} baseElev={0} topElev={finalHeight} />}
-      {(kind === 'kemenate' || kind === 'kapelle') && (
-        <>
-          <ArchOpening face={quads.faceA} u={0.3} v0={0.2} dv={0.4} du={0.1} fill="#2a2016" glow={kind === 'kemenate'} />
-          <ArchOpening face={quads.faceA} u={0.7} v0={0.2} dv={0.4} du={0.1} fill="#2a2016" glow={kind === 'kapelle'} />
-          <ArchOpening face={quads.faceB} u={0.5} v0={kind === 'kapelle' ? 0.35 : 0.45} dv={kind === 'kapelle' ? 0.65 : 0.55} du={0.18} fill="#4a3220" />
-        </>
-      )}
-      {kind === 'baeckerei' && <ArchOpening face={quads.faceB} u={0.5} v0={0.4} dv={0.6} du={0.2} fill="#4a3220" />}
-      {(kind === 'brauhaus' || kind === 'lagerhaus') && (
-        <ArchOpening face={quads.faceB} u={0.5} v0={0.3} dv={0.7} du={0.34} fill={kind === 'lagerhaus' ? '#3a2a1a' : '#4a3220'} />
-      )}
-      {kind === 'stallungen' && (
-        <>
-          <ArchOpening face={quads.faceA} u={0.3} v0={0.35} dv={0.65} du={0.24} fill="#2a1f14" />
-          <ArchOpening face={quads.faceA} u={0.7} v0={0.35} dv={0.65} du={0.24} fill="#2a1f14" />
-        </>
-      )}
-      {style.roof && <GableRoof i={i} j={j} half={half} baseElev={finalHeight} roofH={roofH} color={style.roof} wallPal={info} axis={style.axis} overhang={0.07} />}
-      {kind === 'stallungen' && <HorseYardDecor i={i} j={j} />}
-      {kind === 'schmied' && <ForgeDecor i={i} j={j} topHeight={finalHeight} />}
-      {kind === 'schmied' && <ChimneyDecor i={i} j={j} smokeColor="#5a5044" elev={finalHeight + 4} />}
-      {kind === 'baeckerei' && <ChimneyDecor i={i} j={j} smokeColor="#d9c9a0" elev={finalHeight + roofH * 0.55} />}
-      {kind === 'brauhaus' && <ChimneyDecor i={i} j={j} smokeColor="#bfb4a0" elev={finalHeight + roofH * 0.55} />}
-      {kind === 'lagerhaus' && <CrateStackDecor i={i} j={j} />}
-      {kind === 'brunnen' && <WellDecor i={i} j={j} wellTop={finalHeight} />}
-      {kind === 'kemenate' && <ChimneyDecor i={i} j={j} smokeColor="#8a8074" elev={finalHeight + roofH * 0.6} />}
-      {kind === 'kemenate' && (() => {
-        const poleBase = gridToScreen(i - 0.3, j, finalHeight + roofH * 0.95);
-        const poleTop = gridToScreen(i - 0.3, j, finalHeight + roofH + 18);
-        return (
-          <g pointerEvents="none">
-            <line x1={poleBase.x} y1={poleBase.y} x2={poleTop.x} y2={poleTop.y} stroke="#2b2118" strokeWidth="1.3" />
-            <path d={`M ${poleTop.x} ${poleTop.y} l 13 4 l -13 4 z`} fill="#7a2f5c" stroke="#2b2118" strokeWidth="0.8" />
-          </g>
-        );
-      })()}
-      {kind === 'kapelle' && (() => {
-        // A little bell turret astride the ridge, topped with a cross, plus a round rose
-        // window in the gable — so the chapel reads as a chapel from across the map.
-        const ti = i, tj = j + half * 0.45;
-        const base = finalHeight + roofH - 4;
-        const rose = gridToScreen(i, j + half, finalHeight + roofH * 0.38);
-        const crossBase = gridToScreen(ti, tj, base + 22);
-        const crossTop = gridToScreen(ti, tj, base + 31);
-        return (
-          <g pointerEvents="none">
-            <circle cx={rose.x} cy={rose.y} r="2.8" fill="url(#cbWindowGlow)" stroke="#2a2016" strokeWidth="0.8" />
-            <Block corners={sq(ti, tj, 0.07)} baseElev={base} topElev={base + 10} topFill={info.top} faceLeft={info.left} faceRight={info.right} shadowHeight={0} />
-            <PyramidRoof corners={sq(ti, tj, 0.09)} baseElev={base + 10} apexElev={base + 21} color={style.roof} />
-            <line x1={crossBase.x} y1={crossBase.y} x2={crossTop.x} y2={crossTop.y} stroke="#C9A24B" strokeWidth="1.4" strokeLinecap="round" />
-            <line x1={crossTop.x - 3.5} y1={crossTop.y + 3} x2={crossTop.x + 3.5} y2={crossTop.y + 3} stroke="#C9A24B" strokeWidth="1.4" strokeLinecap="round" />
-          </g>
-        );
-      })()}
+      {body.node}
       <g pointerEvents="none">
-        <rect x={labelP.x - labelW / 2} y={labelP.y - 10} width={labelW} height="14" rx="7" fill="rgba(20,16,10,0.75)" stroke="rgba(201,162,75,0.5)" strokeWidth="0.7" />
-        <text x={labelP.x} y={labelP.y + 1} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{info.label}</text>
+        <rect x={labelP.x - labelW / 2} y={labelP.y - 10} width={labelW} height="14" rx="7" fill="rgba(20,16,10,0.75)" stroke={level > 1 ? 'rgba(226,185,90,0.9)' : 'rgba(201,162,75,0.5)'} strokeWidth={level > 1 ? 1 : 0.7} />
+        <text x={labelP.x} y={labelP.y + 1} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{label}</text>
       </g>
     </g>
   );
@@ -2854,13 +3392,15 @@ function CarryIndicator({ resource }) {
     );
 }
 
-function WorkerSprite({ i, j, type, mode, carrying, haulResource }) {
+function WorkerSprite({ i, j, type, mode, carrying, haulResource, faceLeft = false }) {
   const p = gridToScreen(i, j, 0);
   return (
     <g transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`} opacity={mode === 'idle' ? 0.72 : 1} pointerEvents="none">
       <ellipse cx="0" cy="1.5" rx="6.5" ry="2.3" fill="rgba(0,0,0,0.28)" />
-      <PersonFigure type={type} mode={mode} />
-      {carrying > 0 && <CarryIndicator resource={haulResource} />}
+      <g transform={faceLeft ? 'scale(-1,1)' : undefined}>
+        <PersonFigure type={type} mode={mode} />
+        {carrying > 0 && <CarryIndicator resource={haulResource} />}
+      </g>
     </g>
   );
 }
@@ -3369,7 +3909,8 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
         if (neededKey && cost && avail[neededKey] >= cost[neededKey]) {
           avail[neededKey] -= cost[neededKey];
           const idx = STAGE_ORDER.indexOf(site.stage);
-          structures[key] = { ...site, stage: STAGE_ORDER[idx + 1] || 'done', progress: 0, blocked: false };
+          const nextStage = STAGE_ORDER[idx + 1] || 'done';
+          structures[key] = { ...site, stage: nextStage, progress: 0, blocked: false, upgrading: nextStage === 'done' ? false : site.upgrading };
         }
       }
     });
@@ -3550,8 +4091,18 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     }
     const atTarget = distance({ i: newI, j: newJ }, targetPos) < ARRIVE_EPS;
     const madeProgress = Math.abs(newI - w.curI) + Math.abs(newJ - w.curJ) > 0.004;
+    // Facing: sprites are drawn looking right; mirror them when the step (or, once on site,
+    // the spot they're working on) lies to the left on screen.
+    let faceLeft = !!w.faceLeft;
+    const screenDx = (newI - w.curI) - (newJ - w.curJ);
+    if (Math.abs(screenDx) > 0.002) faceLeft = screenDx < 0;
+    else if (atTarget && w.siteKey && structures[w.siteKey]) {
+      const an = siteAnchor(structures[w.siteKey]);
+      const lookDx = (an.i - newI) - (an.j - newJ);
+      if (Math.abs(lookDx) > 0.02) faceLeft = lookDx < 0;
+    }
     const stuckTicks = atTarget || madeProgress ? 0 : ((w.stuckTicks || 0) >= 12 ? 0 : (w.stuckTicks || 0) + 1);
-    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: forceReplan ? null : cacheKey, stuckTicks };
+    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: forceReplan ? null : cacheKey, stuckTicks, faceLeft };
 
     if (fleeMode) return next;
 
@@ -3632,7 +4183,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
         const cost = getBuildCost(site);
         if (avail.stone >= cost.stone) {
           avail.stone -= cost.stone;
-          structures[key] = { ...site, stage: 'done', progress: 0, crew, blocked: false, ruined: false };
+          structures[key] = { ...site, stage: 'done', progress: 0, crew, blocked: false, ruined: false, upgrading: false };
         } else {
           structures[key] = { ...site, progress: 0.99, crew, blocked: true, ruined: false };
         }
@@ -3656,7 +4207,7 @@ function structureLabel(site) {
   if (site.type === 'tower') return 'Turm';
   if (site.type === 'graben') return 'Graben';
   if (site.type === 'keep') return 'Burgfried';
-  if (site.type === 'amenity') return AMENITY_TYPES[site.kind].label;
+  if (site.type === 'amenity') return AMENITY_TYPES[site.kind].label + ((site.level || 1) > 1 ? ` (Stufe ${site.level})` : '');
   return site.type;
 }
 
@@ -3873,7 +4424,7 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
   const anchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
   computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds).forEach((p) => {
     const isChampion = p.type === 'champion';
-    const maxHp = isChampion ? CHAMPION_MAX_HP : UNIT_MAX_HP;
+    const maxHp = isChampion ? Math.round(CHAMPION_MAX_HP * stallKnightHpMult(structures)) : UNIT_MAX_HP;
     units.push({ id: battleUnitIdSeq++, side: 'defender', type: p.type, knightId: p.knightId || null, i: p.i, j: p.j, hp: maxHp, maxHp, elev: p.elev || 0, targetId: null });
   });
   const obstacles = buildBattleObstacles(structures);
@@ -4282,7 +4833,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
           u.reloadTicks = reloadLeft;
         } else {
           let dmg = ARCHER_SHOT_DAMAGE * smithDamageMult;
-          if (kapelleBonus) dmg *= 1.15;
+          if (kapelleBonus) dmg *= kapelleBonus;
           if (moorishBonus) dmg *= MOORISH_COMBAT_BONUS;
           if (crossbowMult) dmg *= crossbowMult;
           if (moraleDebuffActive) dmg *= 0.75;
@@ -4298,7 +4849,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         }
       } else {
         let dmg = SOLDIER_DAMAGE_PER_TICK * smithDamageMult;
-        if (kapelleBonus) dmg *= 1.15;
+        if (kapelleBonus) dmg *= kapelleBonus;
         if (isChampion) dmg *= CHAMPION_DAMAGE_MULT * (knightRaiseMult || 1);
         else if (moorishBonus) dmg *= MOORISH_COMBAT_BONUS;
         if (moraleDebuffActive) dmg *= 0.75;
@@ -4328,6 +4879,30 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         u.j += (target.j - u.j) * step;
       }
     }
+  });
+
+  // Bookkeeping for the battle effects and for facing: who got hit this tick, which
+  // obstacle took damage or just collapsed, and which way everyone is looking (along their
+  // movement, or at whoever they're fighting).
+  const prevById = new Map(unitsIn.map((p) => [p.id, p]));
+  const byId = new Map(units.map((p) => [p.id, p]));
+  units.forEach((u) => {
+    const p = prevById.get(u.id);
+    if (!p) return;
+    if (u.hp < p.hp) u.hitTick = tickCount || 0;
+    const sdx = (u.i - p.i) - (u.j - p.j);
+    if (Math.abs(sdx) > 0.002) u.faceLeft = sdx < 0;
+    else if (u.targetId != null && byId.get(u.targetId)) {
+      const t = byId.get(u.targetId);
+      const ldx = (t.i - u.i) - (t.j - u.j);
+      if (Math.abs(ldx) > 0.02) u.faceLeft = ldx < 0;
+    }
+  });
+  obstacles.forEach((o, idx) => {
+    const p = obstaclesIn[idx];
+    if (!p) return;
+    if (o.hp < p.hp) o.hitTick = tickCount || 0;
+    if (o.breached && !p.breached) o.breachTick = tickCount || 0;
   });
 
   return { units, shots, obstacles, attackerMorale };
@@ -4571,6 +5146,9 @@ export default function CastleBuilder() {
   const battleKeepPosRef = useRef(battleKeepPos);
   useEffect(() => { battleKeepPosRef.current = battleKeepPos; }, [battleKeepPos]);
   const [arrows, setArrows] = useState([]);
+  // Where arrows and boulders came down, for the impact puffs (see the arrow loop).
+  const [impacts, setImpacts] = useState([]);
+  const impactQueueRef = useRef([]);
   const [selectedUnitId, setSelectedUnitId] = useState(null);
   const [pendingBattleYear, setPendingBattleYear] = useState(null);
   // Which threat this battle actually is — 'sachsen' (the regular annual raid) or one of the
@@ -5558,10 +6136,10 @@ export default function CastleBuilder() {
       if (hasGarrison) {
         const onStrikeForecast = happinessRef.current < STRIKE_THRESHOLD;
         const farmersForecast = Math.max(0, villagePopRef.current - frohndienstRef.current);
-        const baeckereiMultForecast = hasDoneAmenity(structuresRef.current, 'baeckerei') ? (bakeryUpgradedRef.current ? 1.85 : 1.5) : 1;
-        const brunnenBonusForecast = hasDoneAmenity(structuresRef.current, 'brunnen') ? 2 : 0;
+        const baeckereiMultForecast = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
+        const brunnenBonusForecast = brunnenFoodPerMonth(structuresRef.current);
         const brauhausBuiltForecast = hasDoneAmenity(structuresRef.current, 'brauhaus');
-        const brauhausBonusForecast = (brauhausBuiltForecast ? 4 : 0) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+        const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
         const farmFoodPerDayForecast = onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH;
         const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100)) / MONTH_LENGTH;
 
@@ -5593,10 +6171,10 @@ export default function CastleBuilder() {
         const onStrikeNow = happinessRef.current < STRIKE_THRESHOLD;
         setResources((prev) => {
           const farmers = Math.max(0, villagePopRef.current - frohndienstRef.current);
-          const baeckereiMult = hasDoneAmenity(structuresRef.current, 'baeckerei') ? (bakeryUpgradedRef.current ? 1.85 : 1.5) : 1;
-          const brunnenBonusPerMonth = hasDoneAmenity(structuresRef.current, 'brunnen') ? 2 : 0;
+          const baeckereiMult = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
+          const brunnenBonusPerMonth = brunnenFoodPerMonth(structuresRef.current);
           const brauhausBuiltNow = hasDoneAmenity(structuresRef.current, 'brauhaus');
-          const brauhausBonusPerMonth = (brauhausBuiltNow ? 4 : 0) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+          const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
           const farmFoodPerDay = onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH;
           const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100)) / MONTH_LENGTH;
           const foodCap = storageCapacity(structuresRef.current);
@@ -5614,8 +6192,8 @@ export default function CastleBuilder() {
           const unrestPenalty = (unhappinessPenaltyUntilYear && currentYearNow < unhappinessPenaltyUntilYear) ? 2.5 : 0;
           const churchUnrestPenalty = (churchUnrestUntilYear && currentYearNow < churchUnrestUntilYear) ? 2 : 0;
           const churchBonus = (churchBlessingUntilYear && currentYearNow < churchBlessingUntilYear) ? 1.5 : 0;
-          const kapelleBonus = hasDoneAmenity(structuresRef.current, 'kapelle') ? 1 : 0;
-          const brauhausBonus = hasDoneAmenity(structuresRef.current, 'brauhaus') ? 1.2 : 0;
+          const kapelleBonus = kapelleHappiness(structuresRef.current);
+          const brauhausBonus = brauhausHappiness(structuresRef.current);
           const monkBonus = (monkHiredRef.current && !capturedCourtiersRef.current.monk) ? MONK_HAPPINESS_BONUS : 0;
           const delta = (HAPPINESS_RECOVERY_PER_MONTH + churchBonus + kapelleBonus + brauhausBonus + monkBonus - taxPenalty - frohndienstPenalty - unrestPenalty - churchUnrestPenalty) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, h + delta));
@@ -5641,7 +6219,7 @@ export default function CastleBuilder() {
           const strikePenalty = onStrikeNow ? 2.5 : 0;
           const currentYearNow2 = getCalendarDate(newDay).year;
           const churchUnrestPenalty2 = (churchUnrestUntilYear && currentYearNow2 < churchUnrestUntilYear) ? 2.5 : 0;
-          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + hofnarrBonus + foodSurplusBonus - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
+          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, m + delta));
         });
 
@@ -5735,7 +6313,7 @@ export default function CastleBuilder() {
           setSortieUsed(false);
           setSortieResultMsg(null);
           setBattleKeepPos(spawned.keepPos);
-          setArrows([]);
+          setArrows([]); setImpacts([]);
           setSelectedUnitId(null);
           setWorkerUnits((prev) => prev.map((w) => ({ ...w, siteKey: null, haulPhase: null, haulResource: null, carrying: 0, arrived: false, atTarget: false })));
           setBattlePhase('fleeing');
@@ -5759,7 +6337,7 @@ export default function CastleBuilder() {
             setSortieUsed(false);
             setSortieResultMsg(null);
             setBattleKeepPos(spawned.keepPos);
-            setArrows([]);
+            setArrows([]); setImpacts([]);
             setSelectedUnitId(null);
             setWorkerUnits((prev) => prev.map((w) => ({ ...w, siteKey: null, haulPhase: null, haulResource: null, carrying: 0, arrived: false, atTarget: false })));
             setBattlePhase('fleeing');
@@ -5790,8 +6368,9 @@ export default function CastleBuilder() {
     if (battlePhase !== 'fighting') return;
     const id = setInterval(() => {
       if (isPausedRef.current) return; // Pause now genuinely freezes combat too.
-      const smithDamageMult = SMITH_DAMAGE_MULT[smithTierRef.current] || 1;
-      const kapelleBonus = hasDoneAmenity(structuresRef.current, 'kapelle');
+      const smithDamageMult = (SMITH_DAMAGE_MULT[smithTierRef.current] || 1) * smithyLevelDamageMult(structuresRef.current);
+      // The chapel's blessing as a damage multiplier (0 = no chapel).
+      const kapelleBonus = kapelleCombatMult(structuresRef.current);
       const moraleDebuffActive = soldierMoraleDebuffUntilYearRef.current != null && getCalendarDate(dayRef.current).year < soldierMoraleDebuffUntilYearRef.current;
       // The crossbow bonus only holds up while the Armbrustmacher himself is actually at
       // court — he's the one making fresh bolts and maintaining the mechanisms, so once he's
@@ -5821,9 +6400,23 @@ export default function CastleBuilder() {
     if (battlePhase !== 'fighting') return;
     const id = setInterval(() => {
       if (isPausedRef.current) return;
+      const now = performance.now();
+      const queued = impactQueueRef.current;
+      impactQueueRef.current = [];
+      setImpacts((prev) => {
+        const keep = prev.filter((x) => now - x.t < 900);
+        if (!queued.length && keep.length === prev.length) return prev;
+        return [...keep, ...queued.map((q) => ({ ...q, t: now }))];
+      });
       setArrows((prev) => {
         if (prev.length === 0) return prev;
-        return prev.map((a) => ({ ...a, progress: a.progress + ARROW_STEP * gameSpeed })).filter((a) => a.progress < 1);
+        const next = [];
+        prev.forEach((a) => {
+          const progress = a.progress + ARROW_STEP * gameSpeed;
+          if (progress < 1) next.push({ ...a, progress });
+          else impactQueueRef.current.push({ id: a.id, i: a.toI, j: a.toJ, elev: a.toElev || 0, heavy: !!a.heavy });
+        });
+        return next;
       });
     }, ARROW_ANIM_MS);
     return () => clearInterval(id);
@@ -5987,7 +6580,7 @@ export default function CastleBuilder() {
     setBattlePhase(null);
     setBattleUnits([]);
     setBattleObstacles([]);
-    setArrows([]);
+    setArrows([]); setImpacts([]);
     setSelectedUnitId(null);
   }, [battleUnits, battlePhase, pendingBattleYear, pendingBattleSource, battleTickCount, battleObstacles]);
 
@@ -6026,7 +6619,7 @@ export default function CastleBuilder() {
       setBattlePhase(null);
       setBattleUnits([]);
       setBattleObstacles([]);
-      setArrows([]);
+      setArrows([]); setImpacts([]);
       setSelectedUnitId(null);
       setRaidEvent(null);
     }, remaining);
@@ -6354,7 +6947,7 @@ export default function CastleBuilder() {
   const battleDamageByKey = useMemo(() => {
     const map = {};
     if (battlePhase === 'fighting') {
-      battleObstacles.forEach((o) => { if (!o.breached) map[o.structureKey] = 1 - o.hp / o.maxHp; });
+      battleObstacles.forEach((o) => { map[o.structureKey] = o.breached ? 1 : 1 - o.hp / o.maxHp; });
     }
     return map;
   }, [battleObstacles, battlePhase]);
@@ -6455,7 +7048,7 @@ export default function CastleBuilder() {
       } else if (s.type === 'keep') {
         list.push({ depth: s.i + s.j + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
       } else if (s.type === 'amenity') {
-        list.push({ depth: s.i + s.j + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
+        list.push({ depth: s.i + s.j + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       }
     });
 
@@ -6470,7 +7063,7 @@ export default function CastleBuilder() {
       else if (w.haulPhase) wMode = 'walk';
       else if (w.siteKey) wMode = w.arrived ? 'work' : 'walk';
       else wMode = 'idle';
-      list.push({ depth: w.curI + w.curJ + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI} j={w.curJ} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} /> });
+      list.push({ depth: w.curI + w.curJ + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI} j={w.curJ} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
     });
 
     const keepDone = structures.keep && structures.keep.stage === 'done';
@@ -6671,7 +7264,9 @@ export default function CastleBuilder() {
   const farmersCount = Math.max(0, villagePop - frohndienstCount);
   const baeckereiActive = hasDoneAmenity(structures, 'baeckerei');
   const brunnenActive = hasDoneAmenity(structures, 'brunnen');
-  const farmFoodPerMonth = onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * (baeckereiActive ? 1.5 : 1) + (brunnenActive ? 2 : 0);
+  const bakeryMultNow = bakeryFoodMult(structures, bakeryUpgraded);
+  const brunnenFoodNow = brunnenFoodPerMonth(structures);
+  const farmFoodPerMonth = onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * bakeryMultNow + brunnenFoodNow;
 
   const yearNum = calDate.year - START_YEAR + 1;
   const daysUntilAttack = daysUntilYearEnd(day);
@@ -6749,6 +7344,9 @@ export default function CastleBuilder() {
         @keyframes cb-hoof-a { 0%, 100% { transform: rotate(22deg); } 50% { transform: rotate(-22deg); } }
         @keyframes cb-hoof-b { 0%, 100% { transform: rotate(-22deg); } 50% { transform: rotate(22deg); } }
         .cb-game-paused .cb-hoof-walk { animation-play-state: paused; }
+        .cb-clash { animation: cb-clash 0.5s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+        @keyframes cb-clash { 0% { opacity: 1; transform: scale(0.6); } 40% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0; transform: scale(1.3); } }
+        .cb-game-paused .cb-clash { animation-play-state: paused; }
         .cb-glint { animation: cb-glint 3.4s ease-in-out infinite; }
         @keyframes cb-glint { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
         .cb-window-glow { animation: cb-window-flicker 2.8s ease-in-out infinite; }
@@ -7280,6 +7878,60 @@ export default function CastleBuilder() {
                   {infoTarget.data.priority ? '⭐ Priorität aktiv — zuerst versorgt' : '☆ Priorität setzen'}
                 </button>
               )}
+              {infoTarget.data.type === 'amenity' && (() => {
+                // Ausbau: show what this building does now, what the next level adds, and
+                // offer the expansion if it's finished and not yet at the top level.
+                const st = infoTarget.data;
+                const lvl = st.level || 1;
+                const texts = AMENITY_LEVEL_TEXT[st.kind] || [];
+                const nextLvl = lvl + 1;
+                const goldCost = AMENITY_UPGRADE_GOLD[nextLvl];
+                const matCost = getBuildCost({ type: 'amenity', kind: st.kind, level: nextLvl });
+                const canUpgrade = st.stage === 'done' && lvl < AMENITY_MAX_LEVEL && infoTarget.structKey;
+                const affordable = canUpgrade && resources.gold >= goldCost;
+                return (
+                  <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>
+                      🏗️ Ausbaustufe {'★'.repeat(lvl)}{'☆'.repeat(AMENITY_MAX_LEVEL - lvl)}
+                    </div>
+                    {st.upgrading && st.stage !== 'done' && (
+                      <div style={{ fontSize: '0.82rem', color: '#7a5a20', marginBottom: 6 }}>Wird auf Stufe {lvl} ausgebaut — die Wirkung ruht, bis der Ausbau fertig ist.</div>
+                    )}
+                    {texts.map((t, idx) => (
+                      <div key={idx} style={{ fontSize: '0.8rem', color: idx < lvl ? '#2B2420' : '#8a8070', lineHeight: 1.5 }}>
+                        {idx < lvl ? '✔' : '·'} Stufe {idx + 1}: {t}
+                      </div>
+                    ))}
+                    {canUpgrade && (
+                      <button
+                        onClick={() => {
+                          if (!affordable) return;
+                          const k = infoTarget.structKey;
+                          setResources((r) => ({ ...r, gold: r.gold - goldCost }));
+                          setStructures((prev) => {
+                            if (!prev[k] || prev[k].stage !== 'done') return prev;
+                            return { ...prev, [k]: { ...prev[k], level: nextLvl, stage: 'scaffold', progress: 0, blocked: false, upgrading: true } };
+                          });
+                          setInfoTarget(null);
+                        }}
+                        disabled={!affordable}
+                        style={{
+                          marginTop: 8, width: '100%', padding: '8px 0', borderRadius: 3,
+                          border: '2px solid #C9A24B', background: affordable ? 'rgba(201,162,75,0.18)' : 'rgba(0,0,0,0.06)',
+                          color: '#2B2420', fontFamily: "'EB Garamond', serif", fontSize: '0.92rem',
+                          cursor: affordable ? 'pointer' : 'not-allowed', opacity: affordable ? 1 : 0.55,
+                        }}>
+                        Auf Stufe {nextLvl} ausbauen — {goldCost} 🪙 + {matCost.wood} 🪵, {matCost.stone} 🪨
+                      </button>
+                    )}
+                    {canUpgrade && (
+                      <div style={{ fontSize: '0.74rem', color: '#5A5044', marginTop: 4, fontStyle: 'italic' }}>
+                        Zimmerleute und Maurer führen den Ausbau aus; Holz und Stein werden wie beim Bau verbraucht.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {infoTarget.structKey && (
                 <button
                   onClick={() => {
@@ -7436,8 +8088,8 @@ export default function CastleBuilder() {
           <div style={{ fontSize: '0.8rem', color: '#5A5044', marginTop: 2 }}>davon tragen gerade Vorräte zur Burg: {haulingCount}</div>
           {(baeckereiActive || brunnenActive) && (
             <div style={{ fontSize: '0.78rem', color: '#3d5a2c', marginTop: 4 }}>
-              {baeckereiActive && '🍞 Bäckerei aktiv: ×1,5 auf die Hof-Ernte. '}
-              {brunnenActive && '💧 Brunnen aktiv: +2 Nahrung/Monat.'}
+              {baeckereiActive && `🍞 Bäckerei aktiv: ×${bakeryMultNow.toFixed(2).replace('.', ',')} auf die Hof-Ernte. `}
+              {brunnenActive && `💧 Brunnen aktiv: +${brunnenFoodNow} Nahrung/Monat.`}
             </div>
           )}
           <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
@@ -7535,7 +8187,7 @@ export default function CastleBuilder() {
               },
               {
                 label: 'Kapelle', active: kapelleActive,
-                detail: kapelleActive ? '+15% Kampfschaden für Soldaten & Bogenschützen' : 'Noch nicht gebaut — segnet Soldaten & Bogenschützen im Kampf.',
+                detail: kapelleActive ? `+${Math.round((kapelleCombatMult(structures) - 1) * 100)}% Kampfschaden für Soldaten & Bogenschützen` : 'Noch nicht gebaut — segnet Soldaten & Bogenschützen im Kampf.',
               },
               {
                 label: 'Maurischer Kämpfer', active: moorishHired,
@@ -8010,8 +8662,11 @@ export default function CastleBuilder() {
                         <ellipse cx="0" cy="1.5" rx="6.5" ry="2.3" fill="rgba(0,0,0,0.3)" />
                         {isSelected && !dead && <circle cx="0" cy="-10" r="15" fill="none" stroke="#C9A24B" strokeWidth="1.6" />}
                         <g transform={dead ? `rotate(${fallAngle})` : undefined} style={{ transformOrigin: '0px 2px' }} opacity={bodyOpacity}>
-                          <PersonFigure type={u.type} mode={u.side === 'attacker' && battlePhase === 'fighting' ? 'walk' : 'idle'} />
+                          <g transform={u.faceLeft ? 'scale(-1,1)' : undefined}>
+                            <PersonFigure type={u.type} mode={u.side === 'attacker' && battlePhase === 'fighting' ? 'walk' : 'idle'} />
+                          </g>
                         </g>
+                        {!dead && u.hitTick != null && battleTickCount - u.hitTick <= 1 && <HitFlash />}
                         {dead && skullT > 0 && (
                           <text x="0" y={(-24 - skullT * 14).toFixed(1)} textAnchor="middle" fontSize="10" opacity={Math.max(0, 1 - skullT)}>💀</text>
                         )}
@@ -8046,19 +8701,41 @@ export default function CastleBuilder() {
                       ? <BoulderSprite key={`arrow-${a.id}`} fromI={a.fromI} fromJ={a.fromJ} fromElev={a.fromElev} toI={a.toI} toJ={a.toJ} toElev={a.toElev} progress={a.progress} />
                       : <ArrowSprite key={`arrow-${a.id}`} fromI={a.fromI} fromJ={a.fromJ} fromElev={a.fromElev} toI={a.toI} toJ={a.toJ} toElev={a.toElev} progress={a.progress} />
                   ))}
+                  {battlePhase === 'fighting' && impacts.map((im) => {
+                    const p = gridToScreen(im.i, im.j, im.heavy ? 0 : im.elev);
+                    const age = (performance.now() - im.t) / (im.heavy ? 800 : 420);
+                    return im.heavy
+                      ? <g key={`imp-${im.id}`}><DustBurst x={p.x} y={p.y} age={age} size={1.1} /><DebrisBurst x={p.x} y={p.y} age={age} /></g>
+                      : <DustBurst key={`imp-${im.id}`} x={p.x} y={p.y} age={age} size={0.35} />;
+                  })}
+                  {battlePhase === 'fighting' && battleObstacles.map((o) => {
+                    // Dust where a wall is being battered, and a big collapse cloud (with flying
+                    // stone) the moment it gives way.
+                    const mid = obstacleMidpoint(o);
+                    const hEl = o.type === 'graben' ? 0 : o.type === 'tower' ? TOWER_H * 0.5 : o.type === 'keep' ? KEEP_H * 0.4 : WALL_H * 0.45;
+                    const p = gridToScreen(mid.i, mid.j, hEl);
+                    const out = [];
+                    if (o.breachTick != null && battleTickCount - o.breachTick < 16) {
+                      const age = (battleTickCount - o.breachTick) / 16;
+                      out.push(<DustBurst key="b" x={p.x} y={p.y + 6} age={age} size={1.6} />);
+                      out.push(<DebrisBurst key="d" x={p.x} y={p.y} age={age} size={1.2} />);
+                    } else if (!o.breached && o.hitTick != null && battleTickCount - o.hitTick <= 2) {
+                      out.push(<DustBurst key="h" x={p.x} y={p.y + 4} age={0.25 + (battleTickCount - o.hitTick) * 0.25} size={0.55} color={o.type === 'graben' ? '#7a5f3e' : '#bcae92'} />);
+                    }
+                    return out.length ? <g key={`ofx-${o.key}`}>{out}</g> : null;
+                  })}
+                  {battlePhase === 'fighting' && battleUnits.filter((u) => u.side === 'attacker' && u.hp > 0 && u.targetId != null && isMeleeUnit(u)).map((u) => {
+                    const t = battleUnits.find((o) => o.id === u.targetId);
+                    if (!t || t.hp <= 0 || distance2(u, t) > MELEE_RANGE + 0.05) return null;
+                    const p = gridToScreen((u.i + t.i) / 2, (u.j + t.j) / 2, ((u.elev || 0) + (t.elev || 0)) / 2 + 12);
+                    return <ClashSpark key={`clash-${u.id}`} x={p.x} y={p.y} seed={u.id} />;
+                  })}
                   {battlePhase === 'raiding' && raidEvent && raidEvent.burnTargets.map((bt) => {
                     const gp = gridToScreen(bt.i, bt.j, 0);
                     return (
                       <g key={`burn-${bt.key}`} pointerEvents="none" transform={`translate(${gp.x.toFixed(1)},${gp.y.toFixed(1)})`}>
                         <ellipse cx="0" cy="4" rx="20" ry="7" fill="rgba(20,16,10,0.35)" />
-                        <g className="cb-fire-flicker">
-                          <path d="M -3 4 Q -9 -6 -2 -16 Q 0 -10 3 -13 Q 8 -4 3 4 Z" fill="#e8641f" />
-                          <path d="M -2 4 Q -5 -3 -1 -10 Q 1 -6 2.5 -8 Q 5 -2 1.5 4 Z" fill="#f7b23a" />
-                        </g>
-                        <g className="cb-smoke-rise">
-                          <circle cx="0" cy="-18" r="5" fill="rgba(60,55,50,0.5)" />
-                          <circle cx="3" cy="-26" r="6.5" fill="rgba(60,55,50,0.35)" />
-                        </g>
+                        <FireFx x={0} y={0} scale={1.1} />
                         <rect x="-20" y="10" width="40" height="13" rx="2" fill="rgba(20,16,10,0.72)" />
                         <text x="0" y="19.5" textAnchor="middle" fontSize="8.5" fill="#EAE0C4" fontFamily="'EB Garamond', serif">🔥 {bt.label} brennt</text>
                       </g>
