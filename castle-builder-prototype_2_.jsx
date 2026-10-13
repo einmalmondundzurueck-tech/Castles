@@ -4476,7 +4476,10 @@ function attackersForYear(year) {
   // From year 5 on the warband grows by roughly a fifth each year: steady pressure that a
   // castle growing along with it (more towers, upgrades, a bigger garrison) can keep up
   // with for a long reign, rather than an exponential wall that ends every game by year 13.
-  return Math.round(8 * Math.pow(1.22, year - 4));
+  // After the first act the growth slows to a steady few percent a year — the reign now
+  // spans four acts (forty years and more), and each act ends with its own great siege.
+  if (year <= 12) return Math.round(8 * Math.pow(1.22, year - 4));
+  return Math.round(8 * Math.pow(1.22, 8) * Math.pow(1.07, year - 12));
 }
 function saxonArcherCountForYear(year, total) {
   if (year < 2) return 0;
@@ -4605,6 +4608,7 @@ const BATTLE_SOURCE_LABEL = {
   sachsen: 'Die Sachsen',
   waldlaeufer: 'Die Bogenschützen des Waldläufers',
   delegation: 'Die Streitmacht des fremden Königs',
+  finale: 'Die Feinde des Reiches',
 };
 // A Fehde attack is a wholly separate assault from that year's Sachsen raid — different
 // attackers, its own trigger date — never a bonus tacked onto the regular wave. The
@@ -5176,9 +5180,10 @@ const UI_CSS = `
   .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
   @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
   @media (max-width: 2100px) { .cb-nav-label { display: none; } }
-  @media (max-width: 1400px) { .cb-navbtn { padding: 5px 6px !important; } }
+  @media (max-width: 1500px) { .cb-navbtn { padding: 5px 6px !important; } .cb-date { min-width: 0 !important; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
-  @media (max-width: 1280px) { .cb-chip .cb-cap { display: none; } .cb-date-sub { display: none; } }
+  @media (max-width: 1400px) { .cb-chip .cb-cap { display: none; } }
+  @media (max-width: 1300px) { .cb-date-sub { display: none; } .cb-topbar { gap: 4px !important; } }
 `;
 
 // Hotkeys for the most-used tools (shown on the tool cards).
@@ -5231,6 +5236,94 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
       </svg>
     </div>
   );
+}
+
+// ------------------------------------------------------------------------------- Akte --
+// The reign is told in four acts of ten years each, from a border king's first tower to the
+// coronation as High King. Every act sets goals for the realm (Reichsziele); each one met
+// pays out at once and also weakens the great host that comes at the end of the act — the
+// Akt-Finale, a siege far beyond the yearly raids. Hold it and the next act begins; lose it
+// and the enemy regroups and returns two years later. After the fourth act the story ends
+// with an epilogue, and the reign can go on without end if the player wishes.
+const ACT_YEARS = 10;
+const ACT_FINALE_BASE_MULT = 1.7;
+const ACT_FINALE_GOAL_RELIEF = 0.07; // each goal met shrinks the final host by this share
+const ACT_FAIL_DELAY_YEARS = 2;
+const ACT_DEFS = {
+  1: {
+    numeral: 'I', title: 'Die Grenzburg', icon: '🏰',
+    intro: 'Am Rand Eures jungen Reiches beginnt alles mit einem einzigen Turm. Jenseits des Waldes sammeln sich die Sachsen, Jahr um Jahr ein wenig zahlreicher. Baut eine Burg, die ihnen standhält — denn in zehn Wintern wird ihr Fürst selbst kommen, um Euch das Land zu nehmen.',
+    foe: 'Der Sachsenfürst', foeText: 'Der Sachsenfürst führt seine ganze Gefolgschaft gegen Eure Mauern.',
+    complete: 'Der Sachsenfürst ist geschlagen und zieht sich hinter den Wald zurück. Aus der Grenzburg ist eine Festung geworden, von der man in den Nachbartälern spricht.',
+    reward: { gold: 150, rep: 8 },
+    goals: [
+      { id: 'keep', icon: '🏰', label: 'Den Burgfried vollenden', target: 1, value: (s) => (s.keepDone ? 1 : 0), reward: { gold: 40 } },
+      { id: 'walls', icon: '🧱', label: 'Mauerstücke errichten', target: 8, value: (s) => s.walls, reward: { gold: 50 } },
+      { id: 'gate', icon: '🚪', label: 'Ein Torhaus bauen', target: 1, value: (s) => s.gates, reward: { gold: 30 } },
+      { id: 'towers', icon: '🗼', label: 'Türme errichten', target: 3, value: (s) => s.towers, reward: { gold: 60 } },
+      { id: 'pop', icon: '👥', label: 'Bewohner im Dorf', target: 8, value: (s) => s.pop, reward: { rep: 5 } },
+      { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 10, value: (s) => s.defenders, reward: { gold: 50 } },
+    ],
+  },
+  2: {
+    numeral: 'II', title: 'Das Flusstal', icon: '🌊',
+    intro: 'Euer Name wird jenseits der Grenze genannt — nicht nur mit Achtung. Ein rivalisierender König neidet Euch das fruchtbare Flusstal. Schließt die Burg zu einem Ring, sichert Eure Erbfolge und sammelt Ruhm, ehe er seine Heerscharen gegen Euch führt.',
+    foe: 'Das Heer des Rivalen', foeText: 'Der rivalisierende König zieht mit seinem ganzen Heer gegen Euch.',
+    complete: 'Das Heer des Rivalen ist an Euren Mauern zerschellt. Das Flusstal gehört Euch, und manch ein Fürst überlegt, auf wessen Seite er künftig stehen will.',
+    reward: { gold: 250, rep: 10 },
+    goals: [
+      { id: 'ring', icon: '⭕', label: 'Einen geschlossenen Mauerring bauen', target: 1, value: (s) => (s.enclosed ? 1 : 0), reward: { gold: 80 } },
+      { id: 'moat', icon: '🕳️', label: 'Grabenstücke ausheben', target: 8, value: (s) => s.graben, reward: { gold: 60 } },
+      { id: 'buildings', icon: '🏛️', label: 'Gebäude in der Burg', target: 4, value: (s) => s.amenities, reward: { gold: 60 } },
+      { id: 'tower2', icon: '🗼', label: 'Türme auf Stufe 2', target: 2, value: (s) => s.towersAtLeast(2), reward: { gold: 70 } },
+      { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 60, value: (s) => s.reputation, reward: { gold: 60 } },
+      { id: 'heir', icon: '👶', label: 'Einen Erben haben', target: 1, value: (s) => s.children, reward: { rep: 6 } },
+    ],
+  },
+  3: {
+    numeral: 'III', title: 'Der Pass', icon: '⛰️',
+    intro: 'Über den Pass im Norden kommen Kunde und Gefahr zugleich. Ein Heer, wie es das Land noch nicht gesehen hat, rüstet sich — mit Belagerungsgerät, Reitern und Geduld. Es wird kommen, wenn der Winter am härtesten ist. Füllt Kammern und Kasernen, und haltet Eure besten Ritter bereit.',
+    foe: 'Die Belagerer des langen Winters', foeText: 'Mitten im Winter schließt ein gewaltiges Heer die Burg ein.',
+    complete: 'Der lange Winter ist vorüber, und die Burg steht noch. Die Belagerer sind abgezogen, der Pass ist Euer. Von nun an kommen die Fürsten zu Euch, nicht umgekehrt.',
+    reward: { gold: 350, rep: 10 },
+    goals: [
+      { id: 'tower3', icon: '🗼', label: 'Türme auf Stufe 3', target: 2, value: (s) => s.towersAtLeast(3), reward: { gold: 100 } },
+      { id: 'buildings', icon: '🏛️', label: 'Gebäude in der Burg', target: 7, value: (s) => s.amenities, reward: { gold: 80 } },
+      { id: 'amenity2', icon: '⬆️', label: 'Gebäude auf Stufe 2 oder höher', target: 3, value: (s) => s.amenitiesAtLeast(2), reward: { gold: 80 } },
+      { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 24, value: (s) => s.defenders, reward: { gold: 100 } },
+      { id: 'knights', icon: '🐎', label: 'Ritter in Euren Diensten', target: 2, value: (s) => s.knights, reward: { rep: 6 } },
+      { id: 'treasury', icon: '🪙', label: 'Gold in der Schatzkammer', target: 400, value: (s) => s.gold, reward: { rep: 6 } },
+    ],
+  },
+  4: {
+    numeral: 'IV', title: 'Die Krone', icon: '👑',
+    intro: 'Die Fürsten des Landes sind uneins, wer sie führen soll — und viele blicken auf Euch. Doch alle Feinde, die Ihr je geschlagen habt, haben sich verbündet, um Euren Aufstieg zu verhindern. Übersteht den großen Sturm, und man wird Euch zum Hochkönig krönen.',
+    foe: 'Der große Sturm', foeText: 'Alle Feinde des Reiches stürmen gemeinsam gegen die Burg.',
+    complete: 'Der große Sturm ist gebrochen. Als der Rauch sich verzieht, knien die Fürsten des Landes vor Euch nieder.',
+    reward: { gold: 500, rep: 15 },
+    goals: [
+      { id: 'towers', icon: '🗼', label: 'Türme errichten', target: 8, value: (s) => s.towers, reward: { gold: 100 } },
+      { id: 'amenity3', icon: '⬆️', label: 'Gebäude auf Stufe 3', target: 3, value: (s) => s.amenitiesAtLeast(3), reward: { gold: 120 } },
+      { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 30, value: (s) => s.defenders, reward: { gold: 120 } },
+      { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 80, value: (s) => s.reputation, reward: { gold: 100 } },
+      { id: 'pop', icon: '👥', label: 'Bewohner im Dorf', target: 15, value: (s) => s.pop, reward: { gold: 80 } },
+      { id: 'dynasty', icon: '🌳', label: 'Herrscher der Dynastie', target: 2, value: (s) => s.generations, reward: { rep: 8 } },
+    ],
+  },
+};
+const ACT_COUNT = 4;
+function actFinaleMult(goalsDone) {
+  return Math.max(1, ACT_FINALE_BASE_MULT * (1 - ACT_FINALE_GOAL_RELIEF * goalsDone));
+}
+// Older saves predate the acts: place them in the act their year falls into.
+function actForYear(year) {
+  return Math.min(ACT_COUNT, Math.floor((year - START_YEAR) / ACT_YEARS) + 1);
+}
+function rewardText(r) {
+  const parts = [];
+  if (r.gold) parts.push(`+${r.gold} 🪙`);
+  if (r.rep) parts.push(`Ruf +${r.rep}`);
+  return parts.join(' · ');
 }
 
 // ---------------------------------------------------------------------------------- Klang --
@@ -6320,6 +6413,20 @@ export default function CastleBuilder() {
   // Which threat this battle actually is — 'sachsen' (the regular annual raid) or one of the
   // Fehde attackers — so the aftermath report names the right attacker.
   const [pendingBattleSource, setPendingBattleSource] = useState('sachsen');
+  // ---- Akte --------------------------------------------------------------------------------
+  const [act, setAct] = useState(1);
+  const [actFinaleYear, setActFinaleYear] = useState(START_YEAR + ACT_YEARS - 1);
+  const [actGoalsDone, setActGoalsDone] = useState({});
+  const [campaignDone, setCampaignDone] = useState(false);
+  const [realmStats, setRealmStats] = useState({ won: 0, lost: 0, goals: 0 });
+  const [actEvent, setActEvent] = useState(null); // { type: 'intro' | 'complete' | 'failed' | 'epilog', act }
+  const actFinaleYearRef = useRef(actFinaleYear);
+  useEffect(() => { actFinaleYearRef.current = actFinaleYear; }, [actFinaleYear]);
+  const actGoalsDoneRef = useRef(actGoalsDone);
+  useEffect(() => { actGoalsDoneRef.current = actGoalsDone; }, [actGoalsDone]);
+  const campaignDoneRef = useRef(campaignDone);
+  useEffect(() => { campaignDoneRef.current = campaignDone; }, [campaignDone]);
+  const actIntroShownRef = useRef(false);
   const [battleTickCount, setBattleTickCount] = useState(0);
   const battleTickCountRef = useRef(0);
   useEffect(() => { battleTickCountRef.current = battleTickCount; }, [battleTickCount]);
@@ -6419,7 +6526,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm };
+    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -6480,8 +6587,16 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm };
+    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
+    if (!('act' in st)) {
+      const y = getCalendarDate(st.day).year;
+      const a = actForYear(y);
+      setAct(a);
+      setActFinaleYear(Math.max(y, START_YEAR + a * ACT_YEARS - 1));
+    }
+    setActEvent(null);
+    actIntroShownRef.current = true;
     const maxWorkerId = (st.workerUnits || []).reduce((m, w) => Math.max(m, w.id || 0), 0);
     workerIdSeq = Math.max(workerIdSeq, maxWorkerId + 1);
     setIsPaused(true);
@@ -6490,7 +6605,7 @@ export default function CastleBuilder() {
     soundQuietUntilRef.current = Date.now() + 1500;
     return true;
   };
-  const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome;
+  const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome && !actEvent;
   const saveToSlot = async (slot) => {
     setSaveBusy(true);
     const data = buildSaveData();
@@ -7646,8 +7761,10 @@ export default function CastleBuilder() {
   // already running the instant they've typed a name in. So auto-resume watches only the
   // *other* popups (petitions, dynasty events, etc.) — !kingName still forces isPaused back
   // to true above, it just isn't one of the things that un-pauses it again on its own.
-  const blockingEventActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName);
-  const autoResumeWatchActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent);
+  const blockingEventActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || actEvent || !kingName);
+  // (The very first act introduction right after the coronation is left out on purpose, for
+  // the same reason as the coronation itself.)
+  const autoResumeWatchActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || (actEvent && !actEvent.first));
   const prevAutoResumeWatchActiveRef = useRef(autoResumeWatchActive);
   useEffect(() => {
     if (prevAutoResumeWatchActiveRef.current && !autoResumeWatchActive) setIsPaused(false);
@@ -8147,11 +8264,15 @@ export default function CastleBuilder() {
 
           const yearIdx = newDate.year - START_YEAR;
           // Spies, traitors and rumours from the petitions scale this one attack.
-          const attackerCount = Math.max(1, Math.round(attackersForYear(yearIdx) * nextAttackMultRef.current));
+          // At the end of an act's last year the yearly raid becomes the Akt-Finale: a far
+          // larger host, weakened by every Reichsziel the player has met.
+          const finale = !campaignDoneRef.current && newDate.year - 1 >= actFinaleYearRef.current;
+          const finaleMult = finale ? actFinaleMult(Object.keys(actGoalsDoneRef.current).length) : 1;
+          const attackerCount = Math.max(1, Math.round(attackersForYear(yearIdx) * nextAttackMultRef.current * finaleMult));
           setNextAttackMult(1);
           setPreBattleSoldiers({ ...soldiersRef.current });
           setPendingBattleYear(newDate.year - 1);
-          setPendingBattleSource('sachsen');
+          setPendingBattleSource(finale ? 'finale' : 'sachsen');
           const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
           markMercenaries(spawned.units, mercenaryCountRef.current);
           setBattleUnits(spawned.units);
@@ -8477,7 +8598,7 @@ export default function CastleBuilder() {
       setMercenaryCount(0);
       setReputation((r) => Math.max(0, r - 8));
       setBattleEvent({
-        raided: true, year: pendingBattleYear, attackerCount: raidEvent.totalAttackers,
+        raided: true, year: pendingBattleYear, source: pendingBattleSource, attackerCount: raidEvent.totalAttackers,
         burnTargets: raidEvent.burnTargets, capturedNames: raidEvent.capturedNames, deadNames: raidEvent.deadNames,
       });
       setBattlePhase(null);
@@ -8488,7 +8609,7 @@ export default function CastleBuilder() {
       setRaidEvent(null);
     }, remaining);
     return () => clearTimeout(timer);
-  }, [battlePhase, raidEvent, pendingBattleYear]);
+  }, [battlePhase, raidEvent, pendingBattleYear, pendingBattleSource]);
 
   const vertices = useMemo(() => {
     const list = [];
@@ -9114,6 +9235,7 @@ export default function CastleBuilder() {
   const inProgress = values.filter((s) => s.stage && s.stage !== 'done').length;
   const blockedCount = values.filter((s) => s.blocked).length;
 
+
   const hired = { laborer: 0, arbeiter: 0, carpenter: 0, mason: 0, quarrier: 0, lumberjack: 0 };
   const working = { laborer: 0, arbeiter: 0, carpenter: 0, mason: 0, quarrier: 0, lumberjack: 0 };
   let haulingCount = 0;
@@ -9143,6 +9265,86 @@ export default function CastleBuilder() {
   const nextAttackerCount = attackersForYear(yearNum);
   const warningActive = daysUntilAttack <= 30;
   const currentDefense = computeDefense(structures, soldiers);
+
+  // ---- Akte: Reichsziele, Finale, Epilog -----------------------------------------------
+  const enclosedNow = useMemo(() => (structures.keep ? isCastleEnclosed(structures) : false), [structures]);
+  const realm = {
+    keepDone: !!keepDone, walls: doneWalls, gates: doneGates, towers: doneTowers, graben: doneGraben, amenities: doneAmenities,
+    pop: villagePop, defenders: soldiers.soldier + soldiers.archer, knights: recruitedKnightIds.length,
+    reputation: Math.round(reputation), gold: Math.floor(resources.gold), enclosed: enclosedNow,
+    children: royalFamily.children.length, generations: dynastyAncestors.length + 1,
+    towersAtLeast: (l) => values.filter((x) => x.type === 'tower' && x.stage === 'done' && (x.level || 1) >= l).length,
+    amenitiesAtLeast: (l) => values.filter((x) => x.type === 'amenity' && x.stage === 'done' && (x.level || 1) >= l).length,
+  };
+  const actDef = ACT_DEFS[act];
+  const actGoalsCount = actDef ? actDef.goals.filter((g) => actGoalsDone[g.id]).length : 0;
+  const finaleMultNow = actFinaleMult(actGoalsCount);
+  const finaleThisYear = !campaignDone && calDate.year >= actFinaleYear;
+  const expectedAttackers = Math.round(nextAttackerCount * nextAttackMult * (finaleThisYear ? finaleMultNow : 1));
+  const addReward = useCallback((r) => {
+    if (r.gold) setResources((res) => ({ ...res, gold: res.gold + r.gold }));
+    if (r.rep) setReputation((v) => Math.max(0, Math.min(100, v + r.rep)));
+  }, []);
+  // A goal, once met, stays met — even if a wall falls again later.
+  useEffect(() => {
+    if (!kingName || campaignDone || !actDef || actEvent) return;
+    // Checked against the ref, which is updated right here, so a goal can never pay out
+    // twice even if this runs again before the state update has landed.
+    const doneNow = actGoalsDoneRef.current;
+    const newly = actDef.goals.filter((g) => !doneNow[g.id] && g.value(realm) >= g.target);
+    if (!newly.length) return;
+    const next = { ...doneNow };
+    newly.forEach((g) => { next[g.id] = true; });
+    actGoalsDoneRef.current = next;
+    setActGoalsDone(next);
+    setRealmStats((rs) => ({ ...rs, goals: rs.goals + newly.length }));
+    newly.forEach((g) => {
+      addReward(g.reward);
+      logEvent('🎯', `Reichsziel erreicht: ${g.label} (${rewardText(g.reward)})`, 'good');
+    });
+  });
+  // The opening of the first act, right after the coronation.
+  useEffect(() => {
+    if (kingName && !actIntroShownRef.current && Date.now() > soundQuietUntilRef.current) {
+      actIntroShownRef.current = true;
+      setActEvent({ type: 'intro', act, first: true });
+    }
+  }, [kingName]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Battles feed the realm's record; the outcome of a finale is resolved once its report
+  // has been read.
+  const actResultRef = useRef(null);
+  useEffect(() => {
+    if (battleEvent) {
+      const won = !!battleEvent.won && !battleEvent.raided;
+      setRealmStats((rs) => ({ ...rs, won: rs.won + (won ? 1 : 0), lost: rs.lost + (won ? 0 : 1) }));
+      if (battleEvent.source === 'finale') actResultRef.current = { won, year: battleEvent.year };
+      return;
+    }
+    const r = actResultRef.current;
+    if (!r) return;
+    actResultRef.current = null;
+    if (r.won) {
+      const def = ACT_DEFS[act];
+      addReward(def.reward);
+      logEvent(def.icon, `Akt ${def.numeral} abgeschlossen: ${def.title}`, 'good');
+      if (act >= ACT_COUNT) {
+        setCampaignDone(true);
+        setActEvent({ type: 'epilog', act });
+        SOUND.play('coronation');
+      } else {
+        setAct(act + 1);
+        setActFinaleYear(r.year + ACT_YEARS);
+        actGoalsDoneRef.current = {};
+        setActGoalsDone({});
+        setActEvent({ type: 'complete', act, next: act + 1 });
+      }
+    } else {
+      setActFinaleYear(r.year + ACT_FAIL_DELAY_YEARS);
+      setReputation((v) => Math.max(0, v - 8));
+      logEvent('🏴', `Das Akt-Finale ist verloren — ${ACT_DEFS[act].foe} kehrt in ${ACT_FAIL_DELAY_YEARS} Jahren zurück`, 'bad');
+      setActEvent({ type: 'failed', act });
+    }
+  }, [battleEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Autosave ----------------------------------------------------------------------------
   // Once a year (as soon as the new year's attack and its report are over) and once before
@@ -9811,7 +10013,7 @@ export default function CastleBuilder() {
             ⚔️ <strong>{daysUntilAttack}</strong><span className="cb-cap">Tage</span>
             <div className="cb-tip">
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Nächster Sachsenangriff</div>
-              <div>In {daysUntilAttack} Tagen mit etwa {Math.round(nextAttackerCount * nextAttackMult)} Angreifern{nextAttackMult !== 1 ? ' (durch Spione/Gerüchte verändert)' : ''}.</div>
+              <div>In {daysUntilAttack} Tagen mit etwa {expectedAttackers} Angreifern{nextAttackMult !== 1 ? ' (durch Spione/Gerüchte verändert)' : ''}.</div>
               <div style={{ marginTop: 4 }}>Verteidigungswert: {currentDefense}</div>
               <div className="cb-meter" style={{ marginTop: 6 }}><div style={{ width: `${Math.max(3, Math.min(100, (1 - daysUntilAttack / 360) * 100))}%`, background: warningActive ? '#a8402c' : '#c9a24b' }} /></div>
             </div>
@@ -10160,6 +10362,108 @@ export default function CastleBuilder() {
           })()}
         </Modal>
       )}
+
+      {actEvent && actDef && (() => {
+        const close = () => setActEvent(null);
+        const shownAct = actEvent.type === 'complete' ? actEvent.next : actEvent.act;
+        const def = ACT_DEFS[shownAct];
+        const prevDef = ACT_DEFS[actEvent.act];
+        const goalList = (d) => (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 14px', margin: '10px 0 4px', fontSize: '0.86rem' }}>
+            {d.goals.map((g) => <div key={g.id}>{actGoalsDone[g.id] && shownAct === act ? '✅' : g.icon} {g.label}{g.target > 1 ? `: ${g.target}` : ''}</div>)}
+          </div>
+        );
+        if (actEvent.type === 'epilog') {
+          const reignYears = calDate.year - START_YEAR;
+          const rulers = [...dynastyAncestors.map((a) => `${a.name} ${regnalNumeral(a.ordinal)}.`), `${kingName} ${regnalNumeral(kingOrdinal)}.`];
+          const score = realmStats.won * 10 - realmStats.lost * 8 + realmStats.goals * 15 + doneTowers * 5 + doneAmenities * 8 + Math.round(reputation) + villagePop * 3 + rulers.length * 20;
+          const verdict = score >= 520 ? 'Eine Legende, besungen bis ans Ende der Zeit' : score >= 380 ? 'Ein großer Herrscher, dessen Name die Chroniken füllt' : score >= 250 ? 'Ein standhafter König, an den man sich erinnern wird' : 'Ein König, der sich gegen alle Widrigkeiten behauptet hat';
+          return (
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.88)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 66, padding: '40px 16px', overflowY: 'auto' }}>
+              <div className="cb-parch cb-modal-in" style={{ maxWidth: 600, width: '100%', overflow: 'hidden' }}>
+                <div style={{ padding: '22px 24px 14px', textAlign: 'center', background: 'linear-gradient(180deg, #4b3925, #2e2216)', borderBottom: '3px solid #c9a24b' }}>
+                  <div style={{ fontSize: '2.4rem', lineHeight: 1 }}>👑</div>
+                  <div className="cb-title" style={{ fontSize: '1.5rem', color: '#f5e6b0', marginTop: 6, letterSpacing: '0.06em' }}>Krönung zum Hochkönig</div>
+                  <div style={{ color: '#d8c79a', fontStyle: 'italic', marginTop: 4 }}>Anno {calDate.year}</div>
+                </div>
+                <div style={{ padding: '18px 24px 22px' }}>
+                  <p style={{ fontSize: '0.98rem', lineHeight: 1.7, marginTop: 0 }}>
+                    {prevDef.complete} Im Dom wird <strong>{kingName} {regnalNumeral(kingOrdinal)}.</strong> zum Hochkönig gekrönt — {reignYears === 1 ? 'ein Jahr' : `${reignYears} Jahre`}, nachdem {rulers.length > 1 ? 'der erste Eurer Ahnen' : 'Ihr'} an der Grenze den ersten Stein gesetzt {rulers.length > 1 ? 'hat' : 'habt'}.
+                  </p>
+                  <div className="cb-section-title">Chronik des Reiches</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', fontSize: '0.88rem' }}>
+                    <span>📅 Jahre des Reiches: <strong>{reignYears}</strong></span>
+                    <span>👑 Herrscher: <strong>{rulers.length}</strong></span>
+                    <span>⚔️ Schlachten gewonnen: <strong>{realmStats.won}</strong></span>
+                    <span>🏴 Schlachten verloren: <strong>{realmStats.lost}</strong></span>
+                    <span>🎯 Reichsziele: <strong>{realmStats.goals}</strong></span>
+                    <span>⚜️ Ruf: <strong>{Math.round(reputation)}</strong></span>
+                    <span>🗼 Türme: <strong>{doneTowers}</strong> · 🧱 Mauern: <strong>{doneWalls}</strong></span>
+                    <span>🏛️ Gebäude: <strong>{doneAmenities}</strong> · 👥 Dorf: <strong>{villagePop}</strong></span>
+                  </div>
+                  <div style={{ fontSize: '0.84rem', marginTop: 8, color: '#5A5044' }}>Die Dynastie: {rulers.join(' → ')}</div>
+                  <div style={{ textAlign: 'center', margin: '16px 0 6px' }}>
+                    <div className="cb-title" style={{ fontSize: '1.8rem', color: '#7a5f2f' }}>{score} Ruhmespunkte</div>
+                    <div style={{ fontStyle: 'italic', fontSize: '0.95rem' }}>„{verdict}“</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
+                    <button className="cb-btn is-active" onClick={close} style={{ padding: '8px 18px', fontSize: '0.95rem' }}>Weiterregieren</button>
+                    <button className="cb-btn" onClick={() => window.location.reload()} style={{ padding: '8px 18px', fontSize: '0.95rem' }}>Neues Spiel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.78)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 66, padding: '48px 16px', overflowY: 'auto' }}>
+            <div className="cb-parch cb-modal-in" style={{ maxWidth: 560, width: '100%', overflow: 'hidden' }}>
+              {actEvent.type === 'failed' ? (
+                <>
+                  <div style={{ padding: '18px 22px 12px', textAlign: 'center', background: 'linear-gradient(180deg, #5a2218, #2e1410)', borderBottom: '3px solid #a8402c' }}>
+                    <div style={{ fontSize: '2rem', lineHeight: 1 }}>🏴</div>
+                    <div className="cb-title" style={{ fontSize: '1.25rem', color: '#f1e6c8', marginTop: 6 }}>Das Finale ist verloren</div>
+                  </div>
+                  <div style={{ padding: '16px 22px 20px' }}>
+                    <p style={{ fontSize: '0.95rem', lineHeight: 1.65, marginTop: 0 }}>
+                      {prevDef.foe} hat Eure Verteidigung gebrochen. Doch das Reich steht noch — und der Feind wird wiederkommen: in <strong>{ACT_FAIL_DELAY_YEARS} Jahren</strong>, im Winter {actFinaleYear}. Nutzt die Zeit, um die Breschen zu schließen und die noch offenen Reichsziele zu erfüllen. Der Ruf des Reiches hat gelitten (−8).
+                    </p>
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 12 }}>
+                      <button className="cb-btn is-active" onClick={close} style={{ padding: '7px 18px' }}>Weiter</button>
+                      {autoSlots.schlacht && <button className="cb-btn" onClick={() => { close(); setOpenPanel('speicher'); }} style={{ padding: '7px 18px' }}>Vor der Schlacht laden</button>}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {actEvent.type === 'complete' && (
+                    <div style={{ padding: '14px 22px', background: 'rgba(93,138,60,0.18)', borderBottom: '1px solid rgba(59,46,31,0.3)' }}>
+                      <div className="cb-title" style={{ fontSize: '1rem', color: '#3d5a2c' }}>✅ Akt {prevDef.numeral} abgeschlossen: {prevDef.title}</div>
+                      <p style={{ fontSize: '0.9rem', lineHeight: 1.6, margin: '6px 0 0' }}>{prevDef.complete} <strong>Belohnung: {rewardText(prevDef.reward)}</strong></p>
+                    </div>
+                  )}
+                  <div style={{ padding: '20px 22px 12px', textAlign: 'center', background: 'linear-gradient(180deg, #4b3925, #2e2216)', borderBottom: '3px solid #c9a24b' }}>
+                    <div style={{ fontSize: '2rem', lineHeight: 1 }}>{def.icon}</div>
+                    <div style={{ color: '#d8c79a', fontFamily: "'Cinzel', serif", letterSpacing: '0.2em', fontSize: '0.8rem', marginTop: 6 }}>AKT {def.numeral} VON {ACT_COUNT}</div>
+                    <div className="cb-title" style={{ fontSize: '1.45rem', color: '#f5e6b0', letterSpacing: '0.05em' }}>{def.title}</div>
+                  </div>
+                  <div style={{ padding: '16px 22px 20px' }}>
+                    <p style={{ fontSize: '0.96rem', lineHeight: 1.7, marginTop: 0 }}>{def.intro}</p>
+                    <div className="cb-section-title">Reichsziele</div>
+                    {goalList(def)}
+                    <div style={{ fontSize: '0.82rem', color: '#5A5044', lineHeight: 1.5, marginTop: 8 }}>
+                      Jedes erreichte Ziel bringt sofort eine Belohnung und schwächt das Finale. Im Winter <strong>{shownAct === act ? actFinaleYear : '—'}</strong> kommt <strong>{def.foe}</strong>: {def.foeText}
+                    </div>
+                    <div style={{ textAlign: 'center', marginTop: 14 }}>
+                      <button className="cb-btn is-active" onClick={close} style={{ padding: '8px 22px', fontSize: '0.95rem' }}>{actEvent.type === 'intro' && actEvent.first ? 'Die Herrschaft beginnt' : 'Weiter'}</button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {openPanel === 'einstellungen' && (
         <Modal title="⚙️ Klang & Einstellungen" onClose={() => setOpenPanel(null)} maxWidth={440}>
@@ -10969,7 +11273,9 @@ export default function CastleBuilder() {
           </div>
           {/* Alerts */}
           <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, zIndex: 10, pointerEvents: 'none' }}>
-            {warningActive && <div className="cb-pill is-bad">⚔️ Sachsenangriff in {daysUntilAttack} Tagen — etwa {Math.round(nextAttackerCount * nextAttackMult)} Angreifer, Verteidigung {currentDefense}</div>}
+            {warningActive && (finaleThisYear
+              ? <div className="cb-pill is-bad">{actDef.icon} Akt-Finale: {actDef.foe} — in {daysUntilAttack} Tagen, etwa {expectedAttackers} Angreifer, Verteidigung {currentDefense}</div>
+              : <div className="cb-pill is-bad">⚔️ Sachsenangriff in {daysUntilAttack} Tagen — etwa {expectedAttackers} Angreifer, Verteidigung {currentDefense}</div>)}
             {onStrike && <div className="cb-pill is-bad">😠 Die Bauern streiken — nur Lohnarbeiter arbeiten noch</div>}
             {desertionAlarm && <div className="cb-pill is-bad">⚠️ Kein Gold oder keine Nahrung — Verteidiger desertieren!</div>}
             {blockedCount > 0 && <div className="cb-pill">🚫 {blockedCount} Baustelle{blockedCount > 1 ? 'n warten' : ' wartet'} auf Material</div>}
@@ -10994,6 +11300,44 @@ export default function CastleBuilder() {
         </div>
 
         <div className="cb-sidebar" style={{ width: 290, flexShrink: 0, overflowY: 'auto', paddingRight: 2, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {kingName && actDef && (
+            <div className="cb-parch" style={{ padding: 12 }}>
+              <button className="cb-section-title" onClick={() => setActEvent({ type: 'intro', act })} title="Akt-Übersicht öffnen"
+                style={{ background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer', textAlign: 'left' }}>
+                {campaignDone ? '👑 Hochkönig' : `Akt ${actDef.numeral} · ${actDef.title}`}
+              </button>
+              {campaignDone ? (
+                <div style={{ fontSize: '0.84rem', lineHeight: 1.45, fontStyle: 'italic', color: '#5A5044' }}>Die Geschichte ist erzählt — doch das Reich besteht fort, und die Sachsen kommen weiterhin jeden Winter.</div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.84rem', marginBottom: 6 }}>
+                    <span>{actDef.icon} <strong>{actDef.foe}</strong></span>
+                    <span style={{ color: finaleThisYear ? '#8a2d20' : '#5A5044', fontWeight: finaleThisYear ? 700 : 400 }}>
+                      {finaleThisYear ? 'diesen Winter!' : `in ${actFinaleYear - calDate.year + 1} Wintern`}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {actDef.goals.map((g) => {
+                      const done = !!actGoalsDone[g.id];
+                      const v = Math.min(g.target, g.value(realm));
+                      return (
+                        <div key={g.id} className="cb-has-tip" style={{ position: 'relative', display: 'grid', gridTemplateColumns: '18px 1fr auto', gap: 6, alignItems: 'center', fontSize: '0.8rem', opacity: done ? 0.75 : 1 }}>
+                          <span>{done ? '✅' : g.icon}</span>
+                          <span style={{ textDecoration: done ? 'line-through' : 'none', lineHeight: 1.2 }}>{g.label}</span>
+                          <span style={{ fontSize: '0.74rem', color: done ? '#3d5a2c' : '#6b5536', whiteSpace: 'nowrap' }}>{done ? rewardText(g.reward) : (g.target > 1 ? `${v}/${g.target}` : '—')}</span>
+                          {!done && g.target > 1 && <div className="cb-meter" style={{ gridColumn: '2 / 4', height: 3 }}><div style={{ width: `${(v / g.target) * 100}%`, background: '#a8822e' }} /></div>}
+                          {!done && <div className="cb-tip">Belohnung: {rewardText(g.reward)} — und das Akt-Finale wird schwächer.</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: '#5A5044', marginTop: 8, lineHeight: 1.4 }}>
+                    {actGoalsCount}/{actDef.goals.length} Ziele erreicht · Stärke des Finales <strong>×{finaleMultNow.toFixed(2)}</strong>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div className="cb-parch" style={{ padding: 12 }}>
             {(() => {
               // Tool cards grouped by purpose, each with its material cost (red when the store
@@ -11100,7 +11444,7 @@ export default function CastleBuilder() {
             )}
             <div className="cb-section-title" style={{ marginTop: 12 }}>Verteidigung</div>
             {(() => {
-              const expected = Math.max(1, Math.round(nextAttackerCount * nextAttackMult)) * ATTACKER_STRENGTH;
+              const expected = Math.max(1, expectedAttackers) * ATTACKER_STRENGTH;
               const ratio = Math.min(1.5, currentDefense / expected);
               return (
                 <>
@@ -11111,7 +11455,7 @@ export default function CastleBuilder() {
                     <div style={{ width: `${(ratio / 1.5) * 100}%`, background: ratio >= 1.1 ? '#5d8a3c' : ratio >= 0.8 ? '#c9a24b' : '#a8402c' }} />
                   </div>
                   <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4, lineHeight: 1.4 }}>
-                    Verteidigung {currentDefense} gegen etwa {Math.round(nextAttackerCount * nextAttackMult)} Sachsen in {daysUntilAttack} Tagen — {ratio >= 1.1 ? 'gut gerüstet' : ratio >= 0.8 ? 'knapp' : 'zu schwach!'} (grobe Schätzung)
+                    Verteidigung {currentDefense} gegen etwa {expectedAttackers} Sachsen in {daysUntilAttack} Tagen — {ratio >= 1.1 ? 'gut gerüstet' : ratio >= 0.8 ? 'knapp' : 'zu schwach!'} (grobe Schätzung)
                   </div>
                 </>
               );
