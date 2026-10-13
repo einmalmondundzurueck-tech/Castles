@@ -8,9 +8,8 @@
 4. Schick mir die Bilder. Ich trage sie im Spiel ein und verkleinere sie bei Bedarf.
 
 **Stand:** eingebaut sind `alchemist`, `gilde`, `turnier`, `fluechtlinge`, `baumeister`, `spion`,
-`wilderer`, `wilderer_folge`.
-Es fehlen noch: `soeldner`, `verraeter`, `silberfund`, `unwetter`, `seuche`, `brand`
-(dazu die vier optionalen).
+`wilderer`, `wilderer_folge`, `verraeter`, `unwetter`, `seuche`.
+Es fehlen noch: `soeldner`, `silberfund`, `brand` (dazu die vier optionalen).
 
 Tipp: Mach alle Bilder im selben Gemini-Chat und lade die Vorlage immer wieder mit hoch. Dann bleiben König, Saal und Stil am einheitlichsten. Wenn ein Bild stilistisch abweicht, hilft: „Halte dich genauer an den Stil und den Bildaufbau der Vorlage.“
 
