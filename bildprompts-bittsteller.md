@@ -7,6 +7,10 @@
 3. Wenn ein Bild passt, lade es als JPG herunter und benenne es nach dem **Schlüssel**, zum Beispiel `alchemist.jpg`.
 4. Schick mir die Bilder. Ich trage sie im Spiel ein und verkleinere sie bei Bedarf.
 
+**Stand:** eingebaut sind `alchemist`, `gilde`, `turnier`, `fluechtlinge`.
+Es fehlen noch: `wilderer`, `wilderer_folge`, `baumeister`, `soeldner`, `spion`, `verraeter`,
+`silberfund`, `unwetter`, `seuche`, `brand` (dazu die vier optionalen).
+
 Tipp: Mach alle Bilder im selben Gemini-Chat und lade die Vorlage immer wieder mit hoch. Dann bleiben König, Saal und Stil am einheitlichsten. Wenn ein Bild stilistisch abweicht, hilft: „Halte dich genauer an den Stil und den Bildaufbau der Vorlage.“
 
 ---
