@@ -5297,9 +5297,26 @@ const PEACE_TUNES = [
     ],
     chords: ['Dm', 'F', 'G', 'Am', 'F', 'Em', 'C', 'Dm'],
   },
+  {
+    // A slow air.
+    melody: [
+      [69, 3], [67, 1], [65, 2],
+      [64, 2], [62, 2], [64, 2],
+      [65, 3], [67, 1], [69, 2],
+      [67, 6],
+      [69, 3], [72, 1], [71, 2],
+      [69, 2], [67, 2], [65, 2],
+      [64, 2], [62, 1], [64, 1], [60, 2],
+      [62, 6],
+    ],
+    chords: ['Dm', 'C', 'F', 'C', 'Am', 'Dm', 'C', 'Dm'],
+  },
 ];
+// Eigene Musik: MP3/OGG-Dateien (als Adresse oder data:-URI) hier eintragen, dann spielen sie
+// statt der erzeugten Musik — im Frieden bzw. in der Schlacht, zufällig nacheinander.
+const MUSIC_FILES = { peace: [], battle: [] };
 // Sections of the peaceful score, played in this order and then round again.
-const PEACE_PLAN = ['intro', 'A', 'B', 'A2', 'interlude', 'B2', 'A', 'rest'];
+const PEACE_PLAN = ['intro', 'A', 'B', 'A2', 'interlude', 'C', 'B2', 'A', 'rest', 'C2'];
 
 class SoundEngine {
   constructor() {
@@ -5338,13 +5355,23 @@ class SoundEngine {
     for (let k = 0; k < len; k++) d[k] = Math.random() * 2 - 1;
     this.applyVolumes();
   }
+  // A stone hall: a few early reflections, then a diffuse tail that darkens as it decays.
   makeImpulse(seconds, decay) {
     const ctx = this.ctx;
-    const len = Math.floor(ctx.sampleRate * seconds);
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    const sr = ctx.sampleRate;
+    const len = Math.floor(sr * seconds);
+    const buf = ctx.createBuffer(2, len, sr);
+    const pre = Math.floor(sr * 0.012);
     for (let ch = 0; ch < 2; ch++) {
       const d = buf.getChannelData(ch);
-      for (let k = 0; k < len; k++) d[k] = (Math.random() * 2 - 1) * Math.pow(1 - k / len, decay);
+      let lp = 0;
+      for (let k = pre; k < len; k++) {
+        const x = (k - pre) / (len - pre);
+        const cut = 0.85 - 0.75 * x; // one-pole coefficient: bright early, dark late
+        lp += ((Math.random() * 2 - 1) - lp) * cut;
+        d[k] = lp * Math.pow(1 - x, decay) * 0.9;
+      }
+      [0.019, 0.027, 0.041, 0.053, 0.067].forEach((tt, k) => { const idx = Math.floor(sr * (tt + ch * 0.003 + k * 0.001)); if (idx < len) d[idx] += (k % 2 ? -0.5 : 0.6) * (1 - k * 0.12); });
     }
     return buf;
   }
@@ -5414,89 +5441,195 @@ class SoundEngine {
   send(node, bus, amount) { const g = this.gain(bus, amount); node.connect(g); }
 
   // ---- instruments ---------------------------------------------------------------------
-  pluck(t, midi, dur, vel, dest, verbBus, bright = 1) {
+  // Plucked strings are physically modelled (Karplus-Strong): a burst of noise circulates in
+  // a tuned delay line and loses its brightness on every pass, the way a real string does.
+  // Each pitch is rendered once into a buffer and then reused.
+  stringBuffer(midi, bright) {
+    const key = `${midi}:${bright.toFixed(2)}`;
+    if (!this.strings) this.strings = {};
+    if (this.strings[key]) return this.strings[key];
+    const sr = 24000; // plenty for a gut string, and keeps the cached buffers small
     const hz = midiHz(midi);
-    const g = this.gain(dest, 0);
-    const decay = Math.min(2.4, dur + 0.9);
-    this.perc(g, t, vel * 0.26, decay, 0.004);
-    const f = this.filter('lowpass', 600, 1.2, g);
-    f.frequency.setValueAtTime(Math.min(9000, hz * 9 * bright), t);
-    f.frequency.exponentialRampToValueAtTime(Math.max(200, hz * 1.6), t + 0.45);
-    this.osc('triangle', hz, t, decay, f);
-    const sg = this.gain(f, 0.35); this.osc('sawtooth', hz, t, decay, sg, 4);
-    if (verbBus) this.send(g, verbBus, 0.3);
+    const t60 = Math.max(1.6, 4 - (midi - 40) * 0.05);
+    const len = Math.floor(sr * Math.min(3.2, t60 + 0.3));
+    const period = sr / hz;
+    const n = Math.max(2, Math.floor(period - 0.6));
+    // Loop filter weight: a plain two-point average dulls high strings far too quickly, so
+    // higher notes average less.
+    const w = Math.max(0.1, Math.min(0.5, 0.5 - (midi - 48) * 0.013));
+    const frac = period - n - w;
+    const c = (1 - frac) / (1 + frac); // all-pass for the fractional part of the period
+    const loss = Math.pow(0.001, 1 / (hz * t60)); // applied once per trip round the string
+    // Excitation: smoothed noise (softer for a thumb, brighter for a plectrum), with a comb
+    // for the plucking point a fifth of the way along the string.
+    const ring = new Float32Array(n);
+    let lp = 0;
+    const smooth = 0.15 + (1 - Math.min(1, bright)) * 0.6;
+    // A plucked string starts as a triangle (pulled aside at the plucking point near the
+    // bridge), roughened with a little noise from the finger or plectrum.
+    const pick = Math.max(1, Math.round(n * 0.14));
+    for (let k = 0; k < n; k++) {
+      lp += (Math.random() * 2 - 1 - lp) * (1 - smooth);
+      const tri = k < pick ? k / pick : (n - k) / (n - pick);
+      ring[k] = tri + lp * 0.9 * bright;
+    }
+    let mean = 0; for (let k = 0; k < n; k++) mean += ring[k]; mean /= n;
+    let peak = 0; for (let k = 0; k < n; k++) { ring[k] -= mean; peak = Math.max(peak, Math.abs(ring[k])); }
+    for (let k = 0; k < n; k++) ring[k] /= peak || 1;
+    const buf = this.ctx.createBuffer(1, len, sr);
+    const out = buf.getChannelData(0);
+    let idx = 0, last = 0, apX = 0, apY = 0;
+    for (let s = 0; s < len; s++) {
+      const x = ring[idx];
+      out[s] = x;
+      const avg = (x * (1 - w) + last * w) * loss; last = x;
+      const ap = c * avg + apX - c * apY; apX = avg; apY = ap;
+      ring[idx] = ap;
+      idx = idx + 1 === n ? 0 : idx + 1;
+    }
+    // A short fade so the end of the buffer never clicks.
+    const fade = Math.floor(sr * 0.05);
+    for (let s = 0; s < fade; s++) out[len - 1 - s] *= s / fade;
+    this.strings[key] = buf;
+    return buf;
   }
-  flute(t, midi, dur, vel, dest, verbBus) {
-    const hz = midiHz(midi);
+  // The body of a lute: a warm low resonance, a hollow mid and softened top.
+  luteBody(dest) {
+    const hs = this.ctx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 3500; hs.gain.value = -7; hs.connect(dest);
+    const p2 = this.ctx.createBiquadFilter(); p2.type = 'peaking'; p2.frequency.value = 420; p2.Q.value = 1.4; p2.gain.value = 3; p2.connect(hs);
+    const p1 = this.ctx.createBiquadFilter(); p1.type = 'peaking'; p1.frequency.value = 130; p1.Q.value = 1.1; p1.gain.value = 5; p1.connect(p2);
+    return p1;
+  }
+  pan(dest, value) {
+    if (!this.ctx.createStereoPanner) return dest;
+    const p = this.ctx.createStereoPanner(); p.pan.value = value; p.connect(dest); return p;
+  }
+  pluck(t, midi, dur, vel, dest, verbBus, bright = 1) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.stringBuffer(midi, Math.max(0.6, Math.min(1.2, Math.round(bright * (0.8 + vel * 0.3) / 0.3) * 0.3)));
+    src.detune.value = (Math.random() - 0.5) * 6;
+    const g = this.gain(dest, 0);
+    g.gain.setValueAtTime(vel * 0.42, t);
+    const ring = Math.min(src.buffer.duration - 0.05, dur + 1.2);
+    g.gain.setValueAtTime(vel * 0.42, t + ring - 0.25);
+    g.gain.linearRampToValueAtTime(0.0001, t + ring);
+    src.connect(g);
+    src.start(t); src.stop(t + ring + 0.02);
+    if (verbBus) this.send(g, verbBus, 0.28);
+  }
+  // A recorder: nearly a pure tone with a little breath noise, a soft "chiff" when a note
+  // is tongued, the pitch settling in from slightly flat, and vibrato only on long notes.
+  recorderWave() {
+    if (!this.recWave) {
+      const real = new Float32Array([0, 1, 0.12, 0.09, 0.025, 0.02, 0.006]);
+      this.recWave = this.ctx.createPeriodicWave(real, new Float32Array(real.length));
+    }
+    return this.recWave;
+  }
+  flute(t, midi, dur, vel, dest, verbBus, slur = false) {
+    const hz = midiHz(midi) * (1 + (Math.random() - 0.5) * 0.003);
     const end = t + dur;
     const g = this.gain(dest, 0);
+    const level = vel * 0.16;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(vel * 0.15, t + 0.06);
-    g.gain.setValueAtTime(vel * 0.13, Math.max(t + 0.07, end - 0.06));
-    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.14);
-    const lp = this.filter('lowpass', hz * 5, 0.5, g);
-    const o1 = this.osc('sine', hz, t, dur + 0.2, lp);
-    const g2 = this.gain(lp, 0.22); const o2 = this.osc('triangle', hz * 2, t, dur + 0.2, g2);
-    // Delayed vibrato, as a player would.
-    const lfo = this.ctx.createOscillator(); lfo.frequency.value = 5.3;
-    const lg = this.ctx.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(hz * 0.007, t + Math.min(0.5, dur));
-    lfo.connect(lg); lg.connect(o1.frequency); lg.connect(o2.frequency);
-    lfo.start(t); lfo.stop(end + 0.2);
-    // A breath of air at the attack.
-    const bg = this.gain(g, 0); this.perc(bg, t, vel * 0.5, 0.12, 0.02);
-    this.noiseSrc(t, 0.2, this.filter('bandpass', hz * 2, 3, bg));
-    if (verbBus) this.send(g, verbBus, 0.45);
+    g.gain.linearRampToValueAtTime(level, t + (slur ? 0.025 : 0.05));
+    if (dur > 0.5) g.gain.linearRampToValueAtTime(level * 1.08, t + dur * 0.6);
+    g.gain.setValueAtTime(level * (dur > 0.5 ? 1.08 : 1), Math.max(t + 0.06, end - 0.04));
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.09);
+    const lp = this.filter('lowpass', Math.min(9000, hz * 6), 0.4, g);
+    const o = this.ctx.createOscillator();
+    o.setPeriodicWave(this.recorderWave());
+    o.frequency.setValueAtTime(slur ? hz : hz * 0.982, t);
+    o.frequency.setTargetAtTime(hz, t, 0.025);
+    o.connect(lp); o.start(t); o.stop(end + 0.15);
+    if (dur > 0.45) {
+      const lfo = this.ctx.createOscillator(); lfo.frequency.value = 4.6 + Math.random() * 0.9;
+      const lg = this.ctx.createGain();
+      lg.gain.setValueAtTime(0, t); lg.gain.setValueAtTime(0, t + 0.22); lg.gain.linearRampToValueAtTime(hz * 0.0045, t + Math.min(dur, 0.7));
+      lfo.connect(lg); lg.connect(o.frequency); lfo.start(t); lfo.stop(end + 0.15);
+    }
+    // Breath under the tone, following its envelope.
+    const bg = this.gain(g, 0.09);
+    this.noiseSrc(t, dur + 0.12, this.filter('bandpass', Math.min(8000, hz * 3), 0.9, bg));
+    if (!slur) {
+      const cg = this.gain(dest, 0); this.perc(cg, t, vel * 0.03, 0.035, 0.004);
+      this.noiseSrc(t, 0.06, this.filter('bandpass', hz * 4, 2, cg));
+    }
+    if (verbBus) this.send(g, verbBus, 0.42);
   }
+  // A hurdy-gurdy-like drone: bowed, slightly uneven, breathing slowly.
   drone(t, notes, dur, vel, dest) {
     const g = this.gain(dest, 0);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(vel * 0.03, t + 1.2);
-    g.gain.setValueAtTime(vel * 0.03, t + dur - 0.2);
-    g.gain.linearRampToValueAtTime(0.0001, t + dur + 1.2);
-    const lp = this.filter('lowpass', 520, 0.6, g);
-    notes.forEach((m) => { this.osc('sawtooth', midiHz(m), t, dur + 1.3, lp, -3); this.osc('sawtooth', midiHz(m), t, dur + 1.3, lp, 4); });
+    g.gain.linearRampToValueAtTime(vel * 0.022, t + 1.5);
+    g.gain.setValueAtTime(vel * 0.022, t + dur - 0.3);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur + 1.4);
+    const wob = this.ctx.createOscillator(); wob.frequency.value = 0.17 + Math.random() * 0.1;
+    const wg = this.ctx.createGain(); wg.gain.value = vel * 0.005; wob.connect(wg); wg.connect(g.gain);
+    wob.start(t); wob.stop(t + dur + 1.5);
+    const lp = this.filter('lowpass', 1100, 0.5, g);
+    const bp = this.filter('peaking', 700, 1.2, lp); bp.gain.value = 5;
+    notes.forEach((m, k) => {
+      [-7, 5].forEach((cents) => this.osc('sawtooth', midiHz(m), t, dur + 1.5, bp, cents + k * 2));
+    });
   }
   frameDrum(t, vel, dest, pitch = 1) {
-    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.55, 0.32);
-    const o = this.osc('sine', 120 * pitch, t, 0.4, g);
-    o.frequency.exponentialRampToValueAtTime(52 * pitch, t + 0.16);
-    const ng = this.gain(dest, 0); this.perc(ng, t, vel * 0.12, 0.06);
-    this.noiseSrc(t, 0.1, this.filter('lowpass', 900, 0.7, ng));
+    // The skin: a pitched thump that sags as it is struck, and the slap of the hand.
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.5, 0.28 + Math.random() * 0.06, 0.002);
+    const o = this.osc('sine', 150 * pitch, t, 0.4, g);
+    o.frequency.exponentialRampToValueAtTime(62 * pitch, t + 0.12);
+    const sg = this.gain(dest, 0); this.perc(sg, t, vel * 0.16, 0.12, 0.001);
+    this.noiseSrc(t, 0.15, this.filter('bandpass', 260 * pitch, 2.5, sg));
+    const hg = this.gain(dest, 0); this.perc(hg, t, vel * 0.05, 0.03, 0.001);
+    this.noiseSrc(t, 0.05, this.filter('highpass', 2500, 0.7, hg));
   }
   tambourine(t, vel, dest) {
-    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.09, 0.14);
-    this.noiseSrc(t, 0.2, this.filter('highpass', 7000, 0.8, g));
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.06, 0.16 + Math.random() * 0.05, 0.002);
+    this.noiseSrc(t, 0.25, this.filter('bandpass', 8500, 1.5, g));
+    [5200, 6900].forEach((f) => { const jg = this.gain(dest, 0); this.perc(jg, t + Math.random() * 0.01, vel * 0.012, 0.12); this.osc('sine', f * (0.97 + Math.random() * 0.06), t, 0.16, jg); });
   }
   timpani(t, midi, vel, dest, verbBus) {
     const hz = midiHz(midi);
-    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.6, 1.3);
-    const o = this.osc('sine', hz * 1.06, t, 1.5, g); o.frequency.exponentialRampToValueAtTime(hz, t + 0.08);
-    const g2 = this.gain(g, 0.35); this.osc('sine', hz * 1.5, t, 1.0, g2);
-    const ng = this.gain(dest, 0); this.perc(ng, t, vel * 0.25, 0.1);
-    this.noiseSrc(t, 0.15, this.filter('lowpass', 500, 0.8, ng));
-    if (verbBus) this.send(g, verbBus, 0.25);
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.55, 1.4 + Math.random() * 0.3, 0.003);
+    const o = this.osc('sine', hz * 1.08, t, 1.8, g); o.frequency.exponentialRampToValueAtTime(hz, t + 0.1);
+    [1.5, 1.98, 2.44].forEach((r, k) => { const pg = this.gain(g, 0.25 / (k + 1)); this.osc('sine', hz * r, t, 0.9, pg); });
+    const ng = this.gain(dest, 0); this.perc(ng, t, vel * 0.3, 0.18, 0.002);
+    this.noiseSrc(t, 0.25, this.filter('bandpass', 180, 1.2, ng));
+    if (verbBus) this.send(g, verbBus, 0.35);
   }
   snare(t, vel, dest) {
-    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.22, 0.16);
-    this.noiseSrc(t, 0.2, this.filter('bandpass', 1900, 0.7, g));
-    const tg = this.gain(dest, 0); this.perc(tg, t, vel * 0.15, 0.07);
-    this.osc('triangle', 190, t, 0.1, tg);
+    // A medieval side drum: rope tension and a gut snare — dull rather than crisp.
+    const g = this.gain(dest, 0); this.perc(g, t, vel * 0.16, 0.13, 0.002);
+    this.noiseSrc(t, 0.2, this.filter('bandpass', 1200, 0.9, g));
+    const tg = this.gain(dest, 0); this.perc(tg, t, vel * 0.18, 0.09, 0.002);
+    const o = this.osc('sine', 230, t, 0.12, tg); o.frequency.exponentialRampToValueAtTime(150, t + 0.06);
   }
+  // A natural horn / cornett: a rough lip buzz shaped by the bell, scooping up into pitch
+  // with a breath of air and a little vibrato on held notes.
   brass(t, midi, dur, vel, dest, verbBus) {
-    const hz = midiHz(midi);
+    const hz = midiHz(midi) * (1 + (Math.random() - 0.5) * 0.004);
     const end = t + dur;
     const g = this.gain(dest, 0);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(vel * 0.16, t + 0.06);
-    g.gain.setValueAtTime(vel * 0.14, Math.max(t + 0.07, end - 0.05));
-    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18);
-    const f = this.filter('lowpass', 300, 1.5, g);
-    f.frequency.setValueAtTime(300, t);
-    f.frequency.linearRampToValueAtTime(400 + 2400 * vel, t + 0.09);
-    f.frequency.exponentialRampToValueAtTime(900 + 700 * vel, t + 0.4);
-    this.osc('sawtooth', hz, t, dur + 0.25, f, -6);
-    this.osc('sawtooth', hz, t, dur + 0.25, f, 6);
-    if (verbBus) this.send(g, verbBus, 0.4);
+    g.gain.linearRampToValueAtTime(vel * 0.14, t + 0.07);
+    g.gain.setValueAtTime(vel * 0.12, Math.max(t + 0.08, end - 0.06));
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.22);
+    const shelf = this.ctx.createBiquadFilter(); shelf.type = 'highshelf'; shelf.frequency.value = 2500; shelf.gain.value = -12; shelf.connect(g);
+    const formant = this.filter('peaking', 600 + midi * 6, 1.2, shelf); formant.gain.value = 6;
+    const f = this.filter('lowpass', 300, 0.7, formant);
+    f.frequency.setValueAtTime(250, t);
+    f.frequency.linearRampToValueAtTime(500 + 1800 * vel, t + 0.08);
+    f.frequency.setTargetAtTime(700 + 900 * vel, t + 0.1, 0.25);
+    const oscs = [-5, 4].map((d) => this.osc('sawtooth', hz, t, dur + 0.3, f, d));
+    oscs.forEach((o) => { o.frequency.setValueAtTime(hz * 0.95, t); o.frequency.setTargetAtTime(hz, t, 0.035); });
+    if (dur > 0.5) {
+      const lfo = this.ctx.createOscillator(); lfo.frequency.value = 5 + Math.random();
+      const lg = this.ctx.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(hz * 0.005, t + Math.min(dur, 0.8));
+      lfo.connect(lg); oscs.forEach((o) => lg.connect(o.frequency)); lfo.start(t); lfo.stop(end + 0.3);
+    }
+    const bg = this.gain(g, 0.12);
+    this.noiseSrc(t, dur + 0.2, this.filter('bandpass', hz * 2.5, 1, bg));
+    if (verbBus) this.send(g, verbBus, 0.45);
   }
   bell(t, midi, vel, dest, verbBus) {
     const hz = midiHz(midi);
@@ -5508,6 +5641,22 @@ class SoundEngine {
   }
 
   // ---- music ---------------------------------------------------------------------------
+  // Players don't keep a metronome's time: each phrase has its own tempo, leans forward a
+  // little in the middle and broadens into its cadence, and every onset is a touch early or
+  // late. This builds the onset times of a passage in eighths.
+  timeline(t0, eighths, base, phraseLen) {
+    const on = [t0];
+    let tempo = 1 + (Math.random() - 0.5) * 0.05;
+    for (let k = 0; k < eighths; k++) {
+      const pos = (k % phraseLen) / phraseLen;
+      if (k % phraseLen === 0 && k > 0) tempo = 1 + (Math.random() - 0.5) * 0.05;
+      const push = -0.035 * Math.sin(Math.PI * Math.min(1, pos * 1.3));
+      const rit = pos > 0.8 ? 0.22 * Math.pow((pos - 0.8) / 0.2, 2) : 0;
+      on.push(on[k] + base * tempo * (1 + push + rit));
+    }
+    return on;
+  }
+
   setMusicMode(mode) {
     if (mode === this.mode) return;
     this.mode = mode;
@@ -5516,13 +5665,38 @@ class SoundEngine {
     const now = this.ctx.currentTime;
     this.sections.forEach((s) => { s.bus.gain.setTargetAtTime(0, now, 0.5); s.end = Math.min(s.end, now + 4); });
     this.nextSectionAt = now + (mode === 'battle' ? 0.4 : 3.5);
+    this.stopTrack();
+  }
+  // Recorded music, when files are given in MUSIC_FILES.
+  playTrack(mode) {
+    const list = MUSIC_FILES[mode] || [];
+    const src = list[Math.floor(Math.random() * list.length)];
+    const el = new Audio();
+    el.crossOrigin = 'anonymous';
+    el.src = src;
+    const node = this.ctx.createMediaElementSource(el);
+    const g = this.gain(this.musicBus, 0);
+    node.connect(g);
+    g.gain.setTargetAtTime(1, this.ctx.currentTime, 0.6);
+    el.onended = () => { if (this.track && this.track.el === el) { this.track = null; this.nextSectionAt = this.ctx.currentTime + 2; g.disconnect(); } };
+    el.play().catch(() => {});
+    this.track = { el, g, mode };
+  }
+  stopTrack() {
+    if (!this.track) return;
+    const { el, g } = this.track;
+    this.track = null;
+    g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.5);
+    setTimeout(() => { el.pause(); g.disconnect(); }, 2500);
   }
   pump() {
     if (!this.live) return;
     const now = this.ctx.currentTime;
     // Old section buses are dropped once everything in them has rung out.
     this.sections = this.sections.filter((s) => { if (s.end < now) { s.bus.disconnect(); return false; } return true; });
-    if (this.mode !== 'off') {
+    if (this.mode !== 'off' && (MUSIC_FILES[this.mode] || []).length) {
+      if (!this.track && now >= this.nextSectionAt) this.playTrack(this.mode);
+    } else if (this.mode !== 'off') {
       if (this.nextSectionAt < now) this.nextSectionAt = now + 0.1;
       if (this.nextSectionAt - now < 1.2) {
         const bus = this.gain(this.musicBus, 1);
@@ -5542,88 +5716,108 @@ class SoundEngine {
     const kind = PEACE_PLAN[this.planIdx % PEACE_PLAN.length];
     this.planIdx += 1;
     const winter = this.season <= 1 || this.season === 11;
-    const e = winter ? 0.34 : 0.3; // seconds per eighth
-    const bar = e * 6;
-    const hum = () => (Math.random() - 0.5) * 0.016;
-    const vel = (v) => v * (0.88 + Math.random() * 0.2);
-    const lute = (chords, startBar, busy) => {
+    const base = winter ? 0.36 : 0.31; // seconds per eighth, before the players' rubato
+    // Each instrument sits in its own place: lute right through its body, recorder left.
+    const luteOut = this.luteBody(this.pan(bus, 0.3));
+    const fluteOut = this.pan(bus, -0.25);
+    const droneOut = this.pan(bus, 0);
+    const drumOut = this.pan(bus, 0.12);
+    const jit = () => (Math.random() - 0.5) * 0.022;
+    const tuneIdx = kind.startsWith('B') ? 1 : kind.startsWith('C') ? 2 : 0;
+    const tune = PEACE_TUNES[tuneIdx];
+    const chords = kind === 'intro' ? ['Dm', 'Dm'] : kind === 'rest' ? ['Dm', 'C', 'Am', 'Dm'] : tune.chords;
+    const bars = chords.length;
+    const on = this.timeline(t0, bars * 6, base, 24);
+    const at = (k) => on[Math.min(k, on.length - 1)];
+    const len = on[bars * 6] - t0;
+    // Loudness follows the shape of each four-bar phrase.
+    const arc = (k) => 0.8 + 0.2 * Math.sin(Math.PI * ((k % 24) / 24));
+    const strum = (t, tones, vel, up = true) => (up ? tones : [...tones].reverse()).forEach((m, k) => this.pluck(t + k * (0.014 + Math.random() * 0.01), m, 0.6, vel * (1 - k * 0.07), luteOut, verb, 0.8));
+    const lute = (busy) => {
       chords.forEach((name, b) => {
-        const c = MUSIC_CHORDS[name], tb = t0 + (startBar + b) * bar;
-        this.pluck(tb + hum(), c.bass, bar, vel(0.75), bus, verb, 0.7);
-        const pat = busy ? [[2, c.tones[0]], [3, c.tones[1]], [4, c.tones[2]], [5, c.tones[1]]] : [[2, c.tones[1]], [4, c.tones[2]]];
-        pat.forEach(([s, m]) => this.pluck(tb + s * e + hum(), m, e * 2, vel(0.45), bus, verb, 0.8));
+        const c = MUSIC_CHORDS[name], s = b * 6;
+        this.pluck(at(s) + jit(), c.bass, at(s + 6) - at(s), 0.72 * arc(s), luteOut, verb, 0.6);
+        if (!busy) { strum(at(s + 3) + jit(), c.tones, 0.3 * arc(s)); return; }
+        const pattern = Math.floor(Math.random() * 3);
+        if (pattern === 0) { strum(at(s + 2) + jit(), c.tones, 0.36 * arc(s)); strum(at(s + 4) + jit(), c.tones, 0.3 * arc(s), false); }
+        else if (pattern === 1) [[2, 0], [3, 1], [4, 2], [5, 1]].forEach(([e, k]) => this.pluck(at(s + e) + jit(), c.tones[k], at(s + e + 1) - at(s + e), 0.38 * arc(s), luteOut, verb, 0.85));
+        else { strum(at(s + 2) + jit(), c.tones, 0.34 * arc(s)); this.pluck(at(s + 4) + jit(), c.tones[2], 0.3, 0.32, luteOut, verb, 0.85); this.pluck(at(s + 5) + jit(), c.tones[1], 0.3, 0.28, luteOut, verb, 0.85); }
       });
     };
-    const percussion = (bars, startBar) => {
+    const percussion = () => {
       for (let b = 0; b < bars; b++) {
-        const tb = t0 + (startBar + b) * bar;
-        this.frameDrum(tb + hum(), vel(0.5), bus);
-        this.frameDrum(tb + 3 * e + hum(), vel(0.28), bus, 1.3);
-        if (!winter) { this.tambourine(tb + 2 * e, vel(0.6), bus); this.tambourine(tb + 4 * e, vel(0.6), bus); this.tambourine(tb + 5 * e, vel(0.4), bus); }
+        const s = b * 6;
+        this.frameDrum(at(s) + jit(), 0.5 * arc(s), drumOut);
+        this.frameDrum(at(s + 3) + jit(), 0.22, drumOut, 1.35);
+        if (Math.random() < 0.4) this.frameDrum(at(s + 5) + jit(), 0.16, drumOut, 1.35);
+        if (!winter) [2, 4].forEach((e) => this.tambourine(at(s + e) + jit(), 0.5 + Math.random() * 0.3, drumOut));
       }
     };
-    // Each pass varies a few notes: a long note becomes a note plus a neighbour.
+    // Each pass varies a few notes: a long note becomes a note and a slurred neighbour.
     const ornament = (mel, amount) => {
       const out = [];
       mel.forEach(([m, l]) => {
-        if (l === 2 && Math.random() < amount) { out.push([m, 1], [dorianStep(m, Math.random() < 0.5 ? 1 : -1), 1]); }
-        else out.push([m, l]);
+        if (l === 2 && Math.random() < amount) out.push([m, 1, false], [dorianStep(m, Math.random() < 0.5 ? 1 : -1), 1, true]);
+        else out.push([m, l, false]);
       });
       return out;
     };
-    const melody = (mel, startBar, voice, transpose = 0) => {
+    const melody = (mel, voice, transpose = 0) => {
       let s = 0;
-      mel.forEach(([m, l]) => {
-        const t = t0 + startBar * bar + s * e + hum();
-        if (voice === 'flute') this.flute(t, m + transpose, l * e * 0.95, vel(0.85), bus, verb);
-        else this.pluck(t, m + transpose, l * e, vel(0.75), bus, verb, 1.1);
+      mel.forEach(([m, l, slur]) => {
+        const t = at(s) + (slur ? 0 : jit());
+        const d = at(s + l) - at(s);
+        const v = 0.85 * arc(s) * (s % 6 === 0 ? 1.06 : 1);
+        if (voice === 'flute') this.flute(t, m + transpose, d * (slur ? 1.02 : 0.96), v, fluteOut, verb, slur);
+        else this.pluck(t, m + transpose, d, v * 0.9, luteOut, verb, 1.1);
         s += l;
       });
     };
+    this.drone(t0, [38, 45], len, kind === 'interlude' ? 0.6 : 0.85, droneOut);
     if (kind === 'intro' || kind === 'rest') {
-      const chords = kind === 'intro' ? ['Dm', 'Dm'] : ['Dm', 'C', 'Am', 'Dm'];
-      this.drone(t0, [38, 45], chords.length * bar, 0.8, bus);
-      lute(chords, 0, false);
-      return chords.length * bar + (kind === 'rest' ? bar : 0);
+      lute(false);
+      return len + (kind === 'rest' ? base * 6 : 0);
     }
-    const tune = PEACE_TUNES[kind.startsWith('A') ? 0 : 1];
-    const bars = tune.chords.length;
-    this.drone(t0, [38, 45], bars * bar, 0.75, bus);
     if (kind === 'interlude') {
       // The lute alone takes the tune an octave down.
-      lute(tune.chords, 0, false);
-      melody(ornament(tune.melody, 0.15), 0, 'lute', -12);
-      return bars * bar;
+      lute(false);
+      melody(ornament(tune.melody, 0.15), 'lute', -12);
+      return len;
     }
-    lute(tune.chords, 0, true);
     const second = kind.endsWith('2');
-    melody(ornament(tune.melody, second ? 0.35 : 0.1), 0, second && kind === 'A2' ? 'lute' : 'flute');
-    if (second) percussion(bars, 0);
-    return bars * bar;
+    lute(true);
+    melody(ornament(tune.melody, second ? 0.35 : 0.12), kind === 'A2' ? 'lute' : 'flute');
+    if (second) percussion();
+    return len;
   }
   battleSection(t0, bus, verb) {
-    const e = 0.235, bar = e * 8;
     const n = this.planIdx;
     this.planIdx += 1;
-    const vel = (v) => v * (0.9 + Math.random() * 0.15);
-    // A phrygian ostinato in the low brass, timpani and snare under it.
-    const ost = [[38, 0, 1.5], [38, 2, 1], [38, 3, 1], [41, 4, 1.5], [39, 6, 1], [38, 7, 1]];
-    const ostEnd = [[38, 0, 1.5], [36, 2, 1], [34, 3, 1], [36, 4, 1.5], [37, 6, 1], [38, 7, 1]];
+    const base = 0.235;
+    const on = this.timeline(t0, 32, base, 32).map((t, k) => t0 + (t - t0) * 0.985 + (k ? (Math.random() - 0.5) * 0.012 : 0));
+    const at = (k) => on[Math.min(k, on.length - 1)];
+    const len = on[32] - t0;
+    const drums = this.pan(bus, 0.08), drums2 = this.pan(bus, -0.18), hornOut = this.pan(bus, -0.1), droneOut = this.pan(bus, 0);
+    const v = (x) => x * (0.88 + Math.random() * 0.2);
+    this.drone(t0, [38, 45], len, 1.1, droneOut);
     for (let b = 0; b < 4; b++) {
-      const tb = t0 + b * bar;
-      (b === 3 ? ostEnd : ost).forEach(([m, s, l]) => this.brass(tb + s * e, m, l * e * 0.9, vel(0.55), bus, verb));
-      this.timpani(tb, 38, vel(0.9), bus, verb);
-      this.timpani(tb + 4 * e, 33, vel(0.7), bus, verb);
-      if (n > 0) { this.snare(tb + 2 * e, vel(0.8), bus); this.snare(tb + 6 * e, vel(0.8), bus); }
-      for (let s = 0; s < 8; s++) this.frameDrum(tb + s * e, vel(s % 2 ? 0.18 : 0.3), bus, 1.6);
-      if (b === 3 && n > 0) [6, 6.5, 7, 7.5].forEach((s, k) => this.snare(tb + s * e, vel(0.4 + k * 0.15), bus));
+      const s = b * 8;
+      // A 3+3+2 war-drum rhythm with the big drums under it.
+      this.timpani(at(s), 38, v(0.95), drums, verb);
+      this.timpani(at(s + 3), 38, v(0.55), drums, verb);
+      this.timpani(at(s + 6), 33, v(0.7), drums, verb);
+      for (let e = 0; e < 8; e++) this.frameDrum(at(s + e), v([0, 3, 6].includes(e) ? 0.42 : 0.16), drums2, 1.25);
+      if (n > 0) { this.snare(at(s + 2), v(0.7), drums2); this.snare(at(s + 6) + 0.005, v(0.6), drums2); }
+      if (b === 3 && n > 0) [5, 5.5, 6, 6.5, 7, 7.5].forEach((e, k) => this.snare(at(s + Math.floor(e)) + (e % 1) * base, v(0.3 + k * 0.1), drums2));
     }
-    // Every other pass, the horns call over it.
     if (n % 2 === 1) {
+      // The horns call across the field.
       const call = [[57, 0, 3], [62, 3, 1], [65, 4, 2], [64, 6, 2], [63, 8, 4], [62, 12, 4], [57, 16, 3], [60, 19, 1], [62, 20, 2], [65, 22, 2], [63, 24, 2], [62, 26, 6]];
-      call.forEach(([m, s, l]) => this.brass(t0 + s * e, m, l * e * 0.95, vel(0.85), bus, verb));
+      call.forEach(([m, s, l]) => this.brass(at(s), m, (at(s + l) - at(s)) * 0.94, v(0.8), hornOut, verb));
+    } else {
+      [[50, 0, 6], [50, 16, 6]].forEach(([m, s, l]) => { this.brass(at(s), m, at(s + l) - at(s), v(0.55), hornOut, verb); this.brass(at(s), m - 12, at(s + l) - at(s), v(0.45), hornOut, verb); });
     }
-    return 4 * bar;
+    return len;
   }
 
   // ---- ambience ------------------------------------------------------------------------
