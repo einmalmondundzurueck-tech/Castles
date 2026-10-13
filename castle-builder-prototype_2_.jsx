@@ -5138,7 +5138,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
                 u.reloadTicks = reloadLeft;
               } else {
                 const wasAlive = target.hp > 0;
-                const shield = target.type === 'champion' ? 1 : wallShieldMult;
+                const shield = target.type === 'champion' ? (target.armor || 1) : wallShieldMult;
                 target.hp = Math.max(0, target.hp - ARCHER_SHOT_DAMAGE * moraleDmgMult * (u.strengthMult || 1) * elevationDefenseMult(target.elev) * shield);
                 if (wasAlive && target.hp <= 0) target.diedAtTick = tickCount || 0;
                 shots.push({ fromI: u.i, fromJ: u.j, fromElev: u.elev || 0, toI: target.i, toJ: target.j, toElev: target.elev || 0 });
@@ -5146,7 +5146,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
               }
             } else {
               const wasAlive = target.hp > 0;
-              const shield = target.type === 'champion' ? 1 : wallShieldMult;
+              const shield = target.type === 'champion' ? (target.armor || 1) : wallShieldMult;
               target.hp = Math.max(0, target.hp - SOLDIER_DAMAGE_PER_TICK * moraleDmgMult * (u.strengthMult || 1) * elevationDefenseMult(target.elev) * shield);
               if (wasAlive && target.hp <= 0) target.diedAtTick = tickCount || 0;
             }
@@ -5241,7 +5241,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
           u.reloadTicks = ARCHER_RELOAD_TICKS;
         }
       } else {
-        let dmg = SOLDIER_DAMAGE_PER_TICK * smithDamageMult;
+        let dmg = SOLDIER_DAMAGE_PER_TICK * smithDamageMult * (u.dmgMult || 1);
         if (kapelleBonus) dmg *= kapelleBonus;
         if (isChampion) dmg *= CHAMPION_DAMAGE_MULT * (knightRaiseMult || 1);
         else if (moorishBonus) dmg *= MOORISH_COMBAT_BONUS;
@@ -5506,6 +5506,120 @@ function rewardText(r) {
   if (r.gold) parts.push(`+${r.gold} 🪙`);
   if (r.rep) parts.push(`Ruf +${r.rep}`);
   return parts.join(' · ');
+}
+
+// --------------------------------------------------------------------------- Herrscher --
+// Every ruler is born with one trait (Eigenschaft) — shaped by the education they received
+// as a child, or left to chance — and grows into new abilities (Fähigkeiten) with the
+// experience of their reign: years on the throne, battles won, goals reached, land gained.
+// At each new rank the player picks one of three abilities. When a ruler dies, the heir
+// keeps the last ability as the parent's legacy (Vermächtnis); everything else is learned
+// anew.
+const RULER_TRAITS = {
+  baumeister: { name: 'Baumeister', icon: '📐', text: 'Bauarbeiten gehen 15 % schneller voran.' },
+  feldherr: { name: 'Feldherr', icon: '⚔️', text: 'Alle Verteidiger richten 10 % mehr Schaden an.' },
+  fromm: { name: 'Fromm', icon: '✝️', text: 'Zufriedenheit +1,5 im Monat.' },
+  kaufmann: { name: 'Kaufmannsseele', icon: '⚖️', text: 'Steuereinnahmen +12 %.' },
+  diplomat: { name: 'Diplomat', icon: '🕊️', text: 'Lehnseide kosten 25 % weniger Gold und brauchen 5 Ruf weniger.' },
+  jaeger: { name: 'Jäger', icon: '🏹', text: 'Die Jagd bringt +20 🌾 im Monat.' },
+  verschwender: { name: 'Verschwender', icon: '🍷', negative: true, text: 'Alle Löhne +10 %.' },
+  zaghaft: { name: 'Zaghaft', icon: '🫣', negative: true, text: 'Feldzüge kämpfen mit 20 % weniger Kraft.' },
+};
+const POSITIVE_TRAITS = Object.keys(RULER_TRAITS).filter((k) => !RULER_TRAITS[k].negative);
+const NEGATIVE_TRAITS = Object.keys(RULER_TRAITS).filter((k) => RULER_TRAITS[k].negative);
+const RULER_SKILLS = {
+  bauherr: { name: 'Bauherr', icon: '🏗️', text: 'Bauarbeiten +10 % schneller.' },
+  zucht: { name: 'Strenge Zucht', icon: '🪖', text: 'Sold für Soldaten und Bogenschützen −15 %.' },
+  bogen: { name: 'Bogenmeister', icon: '🎯', text: 'Bogenschützen +15 % Schaden.' },
+  klinge: { name: 'Klingenkunst', icon: '🗡️', text: 'Fußsoldaten und Ritter +12 % Schaden.' },
+  mauern: { name: 'Mauerkunde', icon: '🧱', text: 'Mauern, Tore und Türme halten in der Schlacht 20 % mehr aus.' },
+  feldzug: { name: 'Feldzugserfahrung', icon: '🚩', text: 'Feldzüge kämpfen mit 25 % mehr Kraft.' },
+  korn: { name: 'Kornkammer', icon: '🌾', text: 'Ernte +12 %.' },
+  steuer: { name: 'Steuerverwalter', icon: '📜', text: 'Steuereinnahmen +10 %.' },
+  redner: { name: 'Volksredner', icon: '📣', text: 'Zufriedenheit +1 im Monat.' },
+  hof: { name: 'Hofhaltung', icon: '🎭', text: 'Stimmung bei Hofe +1,5 im Monat.' },
+  diplomatie: { name: 'Gesandtschaften', icon: '🕊️', text: 'Lehnseide kosten 20 % weniger Gold.' },
+  heilkunde: { name: 'Gesunde Lebensart', icon: '🌿', text: 'Der Herrscher altert gesünder: Gesundheit sinkt langsamer.' },
+};
+const RULER_SKILL_IDS = Object.keys(RULER_SKILLS);
+// Experience needed for each rank: Rang 1 at 4 XP, Rang 2 at 9, …
+const RULER_RANK_XP = [4, 9, 15, 22, 30, 39, 49, 60];
+const RULER_RANK_NAMES = ['Junger Herrscher', 'Erfahrener Herrscher', 'Weiser Herrscher', 'Gefestigter Herrscher', 'Großer Herrscher', 'Ruhmreicher Herrscher', 'Legendärer Herrscher', 'Vater des Reiches', 'Unsterblicher Name'];
+const RULER_XP = { year: 1, battle: 2, finale: 3, goal: 1, region: 2 };
+function rulerRank(xp) {
+  let r = 0;
+  while (r < RULER_RANK_XP.length && xp >= RULER_RANK_XP[r]) r++;
+  return r;
+}
+function randomTrait(negativeChance = 0.25) {
+  const pool = Math.random() < negativeChance ? NEGATIVE_TRAITS : POSITIVE_TRAITS;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function newRuler(trait, legacySkill = null) {
+  return { trait: trait || randomTrait(0.2), skills: legacySkill ? [legacySkill] : [], legacy: legacySkill || null, xp: 0, rank: 0 };
+}
+function skillChoices(ruler) {
+  const free = RULER_SKILL_IDS.filter((id) => !ruler.skills.includes(id));
+  for (let k = free.length - 1; k > 0; k--) { const r = Math.floor(Math.random() * (k + 1)); [free[k], free[r]] = [free[r], free[k]]; }
+  return free.slice(0, 3);
+}
+// All of a ruler's effects in one place.
+function rulerFx(ruler) {
+  const has = (k) => !!ruler && (ruler.trait === k || ruler.skills.includes(k));
+  return {
+    buildMult: (has('baumeister') ? 1.15 : 1) * (has('bauherr') ? 1.1 : 1),
+    meleeMult: (has('feldherr') ? 1.1 : 1) * (has('klinge') ? 1.12 : 1),
+    archerMult: (has('feldherr') ? 1.1 : 1) * (has('bogen') ? 1.15 : 1),
+    wallHpMult: has('mauern') ? 1.2 : 1,
+    expeditionMult: (has('feldzug') ? 1.25 : 1) * (has('zaghaft') ? 0.8 : 1),
+    farmMult: has('korn') ? 1.12 : 1,
+    foodPerMonth: has('jaeger') ? 20 : 0,
+    taxMult: (has('kaufmann') ? 1.12 : 1) * (has('steuer') ? 1.1 : 1),
+    soldierWageMult: has('zucht') ? 0.85 : 1,
+    wageMult: has('verschwender') ? 1.1 : 1,
+    happinessPerMonth: (has('fromm') ? 1.5 : 0) + (has('redner') ? 1 : 0),
+    courtPerMonth: has('hof') ? 1.5 : 0,
+    oathGoldMult: (has('diplomat') ? 0.75 : 1) * (has('diplomatie') ? 0.8 : 1),
+    oathRepLess: has('diplomat') ? 5 : 0,
+    healthLossMult: has('heilkunde') ? 0.6 : 1,
+  };
+}
+
+// ---- Erziehung: what a child becomes depends on who teaches them --------------------------
+const TUTORS = {
+  waffenmeister: { name: 'Waffenmeister', icon: '⚔️', trait: 'feldherr', text: 'lernt Schwert, Lanze und Heerführung' },
+  baumeister: { name: 'Dombaumeister', icon: '📐', trait: 'baumeister', text: 'lernt Rechnen, Zeichnen und Bauen' },
+  moench: { name: 'Klosterschule', icon: '✝️', trait: 'fromm', text: 'lernt Lesen, Schreiben und Demut' },
+  kaufmann: { name: 'Hansekaufmann', icon: '⚖️', trait: 'kaufmann', text: 'lernt Handel, Zahlen und Verhandeln' },
+  gesandter: { name: 'Gesandter', icon: '🕊️', trait: 'diplomat', text: 'lernt Sprachen, Sitte und Diplomatie' },
+  jaegermeister: { name: 'Jägermeister', icon: '🏹', trait: 'jaeger', text: 'lernt Jagd, Wald und Wild' },
+};
+const TUTOR_GOLD_PER_MONTH = 6;
+const EDUCATION_START_AGE = 6;
+const EDUCATION_YEARS = 6;
+
+// ---- Ritter: experience from battle --------------------------------------------------------
+const KNIGHT_RANKS = ['Ritter', 'Bannerritter', 'Hauptmann', 'Feldmarschall', 'Held des Reiches'];
+const KNIGHT_RANK_XP = [3, 7, 12, 18]; // battles' worth of experience to reach rank 2, 3, 4, 5
+const KNIGHT_TALENTS = {
+  schildwall: { name: 'Schildwall', icon: '🛡️', text: 'nimmt 25 % weniger Schaden' },
+  sturm: { name: 'Sturmangriff', icon: '🐎', text: '+25 % Schaden' },
+  zaeh: { name: 'Zäh wie Leder', icon: '💪', text: '+30 % Lebenskraft' },
+};
+function knightRank(xp) {
+  let r = 1;
+  while (r <= KNIGHT_RANK_XP.length && xp >= KNIGHT_RANK_XP[r - 1]) r++;
+  return r; // 1..5
+}
+function knightBattleStats(prog) {
+  const rank = knightRank((prog && prog.xp) || 0);
+  const t = prog && prog.talent;
+  return {
+    rank,
+    hpMult: (1 + 0.12 * (rank - 1)) * (t === 'zaeh' ? 1.3 : 1),
+    dmgMult: (1 + 0.1 * (rank - 1)) * (t === 'sturm' ? 1.25 : 1),
+    armor: t === 'schildwall' ? 0.75 : 1,
+  };
 }
 
 // ---------------------------------------------------------------------------------- Klang --
@@ -6580,6 +6694,48 @@ export default function CastleBuilder() {
   const dynastyAncestorsRef = useRef([]);
   useEffect(() => { dynastyAncestorsRef.current = dynastyAncestors; }, [dynastyAncestors]);
   const [kingNameDraft, setKingNameDraft] = useState(BOY_NAMES[Math.floor(Math.random() * BOY_NAMES.length)]);
+  // ---- Herrscher, Ritter-Erfahrung ---------------------------------------------------------
+  const [ruler, setRuler] = useState(null);
+  const rulerRef = useRef(ruler);
+  useEffect(() => { rulerRef.current = ruler; }, [ruler]);
+  const [traitOffer] = useState(() => { const pool = [...POSITIVE_TRAITS]; for (let k = pool.length - 1; k > 0; k--) { const r = Math.floor(Math.random() * (k + 1)); [pool[k], pool[r]] = [pool[r], pool[k]]; } return pool.slice(0, 3); });
+  const [traitPick, setTraitPick] = useState(null);
+  const [skillOffer, setSkillOffer] = useState(null);
+  const [knightProgress, setKnightProgress] = useState({}); // id -> { xp, talent }
+  const knightProgressRef = useRef(knightProgress);
+  useEffect(() => { knightProgressRef.current = knightProgress; }, [knightProgress]);
+  const addRulerXp = useCallback((n) => {
+    setRuler((r) => {
+      if (!r) return r;
+      const xp = r.xp + n;
+      const rank = rulerRank(xp);
+      return { ...r, xp, rank, picks: (r.picks || 0) + Math.max(0, rank - (r.rank || 0)) };
+    });
+  }, []);
+  const fx = rulerFx(ruler);
+  // At the start of a battle: the ruler's arts of war, the walls' strength, and each knight's
+  // rank and talent go into the spawned units and obstacles.
+  const empowerSpawnRef = useRef(null);
+  empowerSpawnRef.current = (spawned) => {
+    const f = rulerFx(rulerRef.current);
+    spawned.units.forEach((u) => {
+      if (u.side !== 'defender') return;
+      if (u.type === 'archer') u.dmgMult = (u.dmgMult || 1) * f.archerMult;
+      else u.dmgMult = (u.dmgMult || 1) * f.meleeMult;
+      if (u.type === 'champion' && u.knightId) {
+        const k = knightBattleStats(knightProgressRef.current[u.knightId]);
+        u.maxHp = Math.round(u.maxHp * k.hpMult);
+        u.hp = u.maxHp;
+        u.dmgMult *= k.dmgMult;
+        u.armor = k.armor;
+      }
+    });
+    if (f.wallHpMult !== 1) {
+      spawned.obstacles.forEach((o) => {
+        if (o.type === 'wall' || o.type === 'gate' || o.type === 'tower') { o.maxHp = (o.maxHp || o.hp) * f.wallHpMult; o.hp *= f.wallHpMult; }
+      });
+    }
+  };
   const [abdicateConfirm, setAbdicateConfirm] = useState(false);
   const [dynastyEvent, setDynastyEvent] = useState(null);
   const [birthNameDraft, setBirthNameDraft] = useState('');
@@ -6656,6 +6812,9 @@ export default function CastleBuilder() {
       setDynastyAncestors(nextAncestors);
       setKingName(heir.name);
       setKingOrdinal(newOrdinal);
+      const prev = rulerRef.current;
+      const legacy = prev && prev.skills.length ? prev.skills[prev.skills.length - 1] : null;
+      setRuler(newRuler(heir.trait || randomTrait(0.3), legacy));
       setRoyalFamily({ married: false, spouseName: null, marriedOnDay: null, children: kids.filter((c) => c !== heir) });
       setKingAge(Math.max(1, dyingYear - heir.bornYear));
       // The new king starts fresh — his predecessor's ailing health (or illness) doesn't
@@ -6721,7 +6880,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition };
+    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -6782,7 +6941,7 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition };
+    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
     if (!('act' in st)) {
       const y = getCalendarDate(st.day).year;
@@ -6791,6 +6950,8 @@ export default function CastleBuilder() {
       setActFinaleYear(Math.max(y, START_YEAR + a * ACT_YEARS - 1));
     }
     setActEvent(null);
+    setSkillOffer(null);
+    if (!st.ruler && st.kingName) setRuler(newRuler(randomTrait(0)));
     actIntroShownRef.current = true;
     // Saves from before the larger map: add the outer regions' trees and rocks, and look at
     // the castle again (the board itself has moved on screen).
@@ -6805,7 +6966,7 @@ export default function CastleBuilder() {
     soundQuietUntilRef.current = Date.now() + 1500;
     return true;
   };
-  const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome && !actEvent;
+  const canSaveNow = !!kingName && !battlePhase && !petitionEvent && !gameOverEvent && !dynastyEvent && !courtRivalryEvent && !eventOutcome && !actEvent && !skillOffer;
   const saveToSlot = async (slot) => {
     setSaveBusy(true);
     const data = buildSaveData();
@@ -6877,6 +7038,7 @@ export default function CastleBuilder() {
   // ---- Landgewinn ----------------------------------------------------------------------------
   const claimRegion = (id, how) => {
     const def = REGION_DEFS[id];
+    addRulerXp(RULER_XP.region);
     setOwnedRegions((list) => (list.includes(id) ? list : [...list, id]));
     if (id === 'strasse') setReputation((r) => Math.min(100, r + 5));
     logEvent(def.icon, `${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich (${how})`, 'good');
@@ -6905,17 +7067,22 @@ export default function CastleBuilder() {
   const startExpedition = (id, soldier, archer) => {
     const year = getCalendarDate(dayRef.current).year;
     const strength = regionStrength(id, year);
-    const power = expeditionPower(soldier, archer, smithTier);
+    const power = expeditionPower(soldier, archer, smithTier) * rulerFx(rulerRef.current).expeditionMult;
     setSoldiers((sv) => ({ soldier: sv.soldier - soldier, archer: sv.archer - archer }));
     setExpedition({ region: id, soldier, archer, power, strength, chance: expeditionWinChance(power, strength), departDay: dayRef.current, returnDay: dayRef.current + EXPEDITION_DAYS });
     logEvent('⚔️', `Feldzug gegen ${REGION_DEFS[id].acc} aufgebrochen (${soldier + archer} Mann)`, 'neutral');
     SOUND.play('warhorn');
   };
+  const oathTerms = (id) => {
+    const f = rulerFx(rulerRef.current);
+    return { gold: Math.round(REGION_DEFS[id].oath.gold * f.oathGoldMult), rep: REGION_DEFS[id].oath.rep - f.oathRepLess };
+  };
   const swearOath = (id) => {
     const def = REGION_DEFS[id];
-    setResources((r) => ({ ...r, gold: r.gold - def.oath.gold }));
+    const terms = oathTerms(id);
+    setResources((r) => ({ ...r, gold: r.gold - terms.gold }));
     claimRegion(id, 'Lehnseid');
-    setEventOutcome({ emoji: '📜', tone: 'good', title: 'Der Lehnseid', text: `${def.lord} kniet vor Euch nieder, legt seine Hände in die Euren und schwört Euch Treue. ${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich — die ${def.oath.gold} 🪙 sind gut angelegt.` });
+    setEventOutcome({ emoji: '📜', tone: 'good', title: 'Der Lehnseid', text: `${def.lord} kniet vor Euch nieder, legt seine Hände in die Euren und schwört Euch Treue. ${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich — die ${terms.gold} 🪙 sind gut angelegt.` });
   };
   useEffect(() => {
     if (!toasts.length) return undefined;
@@ -7992,8 +8159,8 @@ export default function CastleBuilder() {
   // time doesn't keep running (and workers/battles don't keep progressing) underneath it.
   // Not having named the king yet counts as one of these — nothing should run before that.
   useEffect(() => {
-    if (petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || !kingName) setIsPaused(true);
-  }, [petitionEvent, eventOutcome, gameOverEvent, dynastyEvent, desertionForecast, courtRivalryEvent, kingName]);
+    if (petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || actEvent || skillOffer || !kingName) setIsPaused(true);
+  }, [petitionEvent, eventOutcome, gameOverEvent, dynastyEvent, desertionForecast, courtRivalryEvent, actEvent, skillOffer, kingName]);
   // ...and once that same popup is answered/dismissed, time should just pick back up on its
   // own rather than leaving the player to go hunt down a separate "Weiter" button. A true
   // game-over (type 'end'/'keepFallen') never actually clears gameOverEvent again — its
@@ -8004,10 +8171,10 @@ export default function CastleBuilder() {
   // already running the instant they've typed a name in. So auto-resume watches only the
   // *other* popups (petitions, dynasty events, etc.) — !kingName still forces isPaused back
   // to true above, it just isn't one of the things that un-pauses it again on its own.
-  const blockingEventActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || actEvent || !kingName);
+  const blockingEventActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || actEvent || skillOffer || !kingName);
   // (The very first act introduction right after the coronation is left out on purpose, for
   // the same reason as the coronation itself.)
-  const autoResumeWatchActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || (actEvent && !actEvent.first));
+  const autoResumeWatchActive = !!(petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || skillOffer || (actEvent && !actEvent.first));
   const prevAutoResumeWatchActiveRef = useRef(autoResumeWatchActive);
   useEffect(() => {
     if (prevAutoResumeWatchActiveRef.current && !autoResumeWatchActive) setIsPaused(false);
@@ -8258,7 +8425,7 @@ export default function CastleBuilder() {
       // brief pre-battle warning and then froze in place once fighting actually started.
       const fleeMode = !!battlePhaseRef.current;
       const onStrike = happinessRef.current < STRIKE_THRESHOLD;
-      const result = computeTick(structuresRef.current, workersRef.current, resourcesRef.current, pilesRef.current, onStrike, haulPriorityRef.current, fleeMode, forestTreesRef.current, hillRocksRef.current, dayRef.current, baumeisterHiredRef.current ? BAUMEISTER_BUILD_SPEED : 1);
+      const result = computeTick(structuresRef.current, workersRef.current, resourcesRef.current, pilesRef.current, onStrike, haulPriorityRef.current, fleeMode, forestTreesRef.current, hillRocksRef.current, dayRef.current, (baumeisterHiredRef.current ? BAUMEISTER_BUILD_SPEED : 1) * rulerFx(rulerRef.current).buildMult);
       setStructures(result.structures);
       setWorkerUnits(result.workers);
       setForestTrees(result.trees);
@@ -8286,9 +8453,11 @@ export default function CastleBuilder() {
       if (isPausedRef.current || battlePhaseRef.current || gameOverEventRef.current) return;
       const hiredCounts = { laborer: 0, arbeiter: 0, carpenter: 0, mason: 0, quarrier: 0, lumberjack: 0 };
       workersRef.current.forEach((w) => { hiredCounts[w.type] += 1; });
-      const totalWage = hiredCounts.laborer * WAGE.laborer + hiredCounts.arbeiter * WAGE.arbeiter + hiredCounts.carpenter * WAGE.carpenter + hiredCounts.mason * WAGE.mason
+      const fxNow = rulerFx(rulerRef.current);
+      const tutoring = royalFamilyRef.current.children.filter((c) => c.tutor && !c.trait).length;
+      const totalWage = fxNow.wageMult * (hiredCounts.laborer * WAGE.laborer + hiredCounts.arbeiter * WAGE.arbeiter + hiredCounts.carpenter * WAGE.carpenter + hiredCounts.mason * WAGE.mason
         + hiredCounts.quarrier * WAGE.quarrier + hiredCounts.lumberjack * WAGE.lumberjack
-        + (soldiersRef.current.soldier * SOLDIER_WAGE.soldier + soldiersRef.current.archer * SOLDIER_WAGE.archer) * (SMITH_WAGE_MULT[smithTierRef.current] || 1) * soldierWageMultiplierRef.current
+        + (soldiersRef.current.soldier * SOLDIER_WAGE.soldier + soldiersRef.current.archer * SOLDIER_WAGE.archer) * (SMITH_WAGE_MULT[smithTierRef.current] || 1) * soldierWageMultiplierRef.current * fxNow.soldierWageMult
         + KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]).length * CHAMPION_WAGE * (SMITH_WAGE_MULT[smithTierRef.current] || 1) * (1 + knightRaisesRef.current * 0.2)
         + (hofnarrHiredRef.current && !capturedCourtiersRef.current.hofnarr ? HOFNARR_WAGE : 0)
         + (moorishHiredRef.current && !capturedCourtiersRef.current.moorish ? MOORISH_WAGE : 0)
@@ -8298,7 +8467,8 @@ export default function CastleBuilder() {
         + (falconerHiredRef.current && !capturedCourtiersRef.current.falconer ? FALCONER_WAGE : 0)
         + (armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust ? ARMBRUST_WAGE : 0)
         + (SMITH_UPKEEP_PER_DAY[smithTierRef.current] || 0)
-        + (baumeisterHiredRef.current ? BAUMEISTER_WAGE : 0);
+        + (baumeisterHiredRef.current ? BAUMEISTER_WAGE : 0))
+        + tutoring * TUTOR_GOLD_PER_MONTH / MONTH_LENGTH;
       const totalFood = (hiredCounts.laborer + hiredCounts.arbeiter + hiredCounts.carpenter + hiredCounts.mason + hiredCounts.quarrier + hiredCounts.lumberjack) * FOOD_PER_WORKER
         + (soldiersRef.current.soldier + soldiersRef.current.archer) * FOOD_PER_SOLDIER
         + KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]).length * FOOD_PER_SOLDIER * 1.5;
@@ -8328,8 +8498,9 @@ export default function CastleBuilder() {
         const brunnenBonusForecast = brunnenFoodPerMonth(structuresRef.current);
         const brauhausBuiltForecast = hasDoneAmenity(structuresRef.current, 'brauhaus');
         const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
-        const farmFoodPerDayForecast = (onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast * regionFarmMult(ownedRegionsRef.current) + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH) + regionFoodPerMonth(ownedRegionsRef.current) / MONTH_LENGTH;
-        const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
+        const ffx = rulerFx(rulerRef.current);
+        const farmFoodPerDayForecast = (onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast * regionFarmMult(ownedRegionsRef.current) * ffx.farmMult + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH) + (regionFoodPerMonth(ownedRegionsRef.current) + ffx.foodPerMonth) / MONTH_LENGTH;
+        const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * ffx.taxMult + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
 
         const netGoldPerDay = villageGoldPerDayForecast - totalWage;
         const netFoodPerDay = farmFoodPerDayForecast - totalFood;
@@ -8371,8 +8542,9 @@ export default function CastleBuilder() {
           const brauhausBuiltNow = hasDoneAmenity(structuresRef.current, 'brauhaus');
           const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
           const owned = ownedRegionsRef.current;
-          const farmFoodPerDay = (onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult * regionFarmMult(owned) + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH) + regionFoodPerMonth(owned) / MONTH_LENGTH;
-          const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) + regionGoldPerMonth(owned)) / MONTH_LENGTH;
+          const rfx = rulerFx(rulerRef.current);
+          const farmFoodPerDay = (onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult * regionFarmMult(owned) * rfx.farmMult + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH) + (regionFoodPerMonth(owned) + rfx.foodPerMonth) / MONTH_LENGTH;
+          const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * rfx.taxMult + regionGoldPerMonth(owned)) / MONTH_LENGTH;
           const foodCap = storageCapacity(structuresRef.current);
           return {
             ...prev,
@@ -8393,7 +8565,7 @@ export default function CastleBuilder() {
           const monkBonus = (monkHiredRef.current && !capturedCourtiersRef.current.monk) ? MONK_HAPPINESS_BONUS : 0;
           // A well-regarded king makes for a content village, a disreputable one the opposite.
           const repBonus = (reputationRef.current - 50) / 50;
-          const delta = (HAPPINESS_RECOVERY_PER_MONTH + repBonus + churchBonus + kapelleBonus + brauhausBonus + monkBonus - taxPenalty - frohndienstPenalty - unrestPenalty - churchUnrestPenalty) / MONTH_LENGTH;
+          const delta = (HAPPINESS_RECOVERY_PER_MONTH + rulerFx(rulerRef.current).happinessPerMonth + repBonus + churchBonus + kapelleBonus + brauhausBonus + monkBonus - taxPenalty - frohndienstPenalty - unrestPenalty - churchUnrestPenalty) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, h + delta));
         });
 
@@ -8417,7 +8589,7 @@ export default function CastleBuilder() {
           const strikePenalty = onStrikeNow ? 2.5 : 0;
           const currentYearNow2 = getCalendarDate(newDay).year;
           const churchUnrestPenalty2 = (churchUnrestUntilYear && currentYearNow2 < churchUnrestUntilYear) ? 2.5 : 0;
-          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
+          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + rulerFx(rulerRef.current).courtPerMonth + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, m + delta));
         });
 
@@ -8466,8 +8638,22 @@ export default function CastleBuilder() {
           // into how risky this particular year turns out to be.
           const newAge = kingAgeRef.current + 1;
           setKingAge(newAge);
+          addRulerXp(RULER_XP.year);
+          // Children under a tutor for long enough finish their education.
+          setRoyalFamily((fam) => {
+            let changed = false;
+            const children = fam.children.map((c) => {
+              if (c.tutor && !c.trait && newDate.year - c.tutorSince >= EDUCATION_YEARS) {
+                changed = true;
+                logEvent('🎓', `${c.name} hat die Erziehung abgeschlossen: ${RULER_TRAITS[TUTORS[c.tutor].trait].name}`, 'good');
+                return { ...c, trait: TUTORS[c.tutor].trait };
+              }
+              return c;
+            });
+            return changed ? { ...fam, children } : fam;
+          });
           const lowMoraleNow = courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD;
-          const healthDecline = healthDeclinePerYear(newAge) * (lowMoraleNow ? 1.4 : 1);
+          const healthDecline = healthDeclinePerYear(newAge) * (lowMoraleNow ? 1.4 : 1) * rulerFx(rulerRef.current).healthLossMult;
           const newHealth = Math.max(0, kingHealthRef.current - healthDecline);
           setKingHealth(newHealth);
           const wasSick = kingSickRef.current;
@@ -8533,6 +8719,7 @@ export default function CastleBuilder() {
           setPendingBattleSource(finale ? 'finale' : 'sachsen');
           const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
           markMercenaries(spawned.units, mercenaryCountRef.current);
+          empowerSpawnRef.current(spawned);
           setBattleUnits(spawned.units);
           setBattleObstacles(spawned.obstacles);
           setAttackerMorale(1);
@@ -8558,6 +8745,7 @@ export default function CastleBuilder() {
             setPendingBattleSource(due.type);
             const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, forced.length, newDate.year - START_YEAR, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]), forced);
             markMercenaries(spawned.units, mercenaryCountRef.current);
+          empowerSpawnRef.current(spawned);
             setBattleUnits(spawned.units);
             setBattleObstacles(spawned.obstacles);
             setAttackerMorale(1);
@@ -8769,6 +8957,27 @@ export default function CastleBuilder() {
     const lostArchers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'archer' && u.hp <= 0).length;
     const fallenKnightIds = battleUnits.filter((u) => u.side === 'defender' && u.type === 'champion' && u.hp <= 0 && u.knightId).map((u) => u.knightId);
     const fallenKnightNames = fallenKnightIds.map((id) => KNIGHT_DEFS[id] && KNIGHT_DEFS[id].name).filter(Boolean);
+    // Knights who lived through it grow in experience; the fallen take theirs to the grave.
+    const survivingKnightIds = battleUnits.filter((u) => u.side === 'defender' && u.type === 'champion' && u.hp > 0 && u.knightId).map((u) => u.knightId);
+    if (survivingKnightIds.length || fallenKnightIds.length) {
+      const gain = (won ? 2 : 1) + (pendingBattleSource === 'finale' ? 1 : 0);
+      const next = { ...knightProgressRef.current };
+      fallenKnightIds.forEach((id) => { delete next[id]; });
+      survivingKnightIds.forEach((id) => {
+        const before = next[id] || { xp: 0, talent: null };
+        const xp = before.xp + gain;
+        const oldRank = knightRank(before.xp), newRank = knightRank(xp);
+        let talent = before.talent;
+        if (newRank >= 3 && !talent) {
+          const ids = Object.keys(KNIGHT_TALENTS);
+          talent = ids[Math.floor(Math.random() * ids.length)];
+        }
+        next[id] = { xp, talent };
+        if (newRank > oldRank) logEvent('🐎', `${KNIGHT_DEFS[id].name} steigt auf: ${KNIGHT_RANKS[newRank - 1]}${talent && !before.talent ? ` — Talent „${KNIGHT_TALENTS[talent].name}“` : ''}`, 'good');
+      });
+      knightProgressRef.current = next;
+      setKnightProgress(next);
+    }
     const totalAttackersOut = totalAttackers;
 
     setSoldiers((s) => ({ soldier: Math.max(0, s.soldier - lostSoldiers), archer: Math.max(0, s.archer - lostArchers) }));
@@ -9519,7 +9728,7 @@ export default function CastleBuilder() {
   const activeToolInfo = TOOLS.find((t) => t.id === tool) || null;
   const calDate = getCalendarDate(day);
   const monthName = MONTH_NAMES[calDate.month];
-  const villageGoldPerMonth = Math.round(villagePop * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100));
+  const villageGoldPerMonth = Math.round(villagePop * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * fx.taxMult);
   const onStrike = happiness < STRIKE_THRESHOLD;
   const keepUnlocked = !!structures.keep;
   const farmersCount = Math.max(0, villagePop - frohndienstCount);
@@ -9529,7 +9738,7 @@ export default function CastleBuilder() {
   const brunnenFoodNow = brunnenFoodPerMonth(structures);
   const regionGoldNow = regionGoldPerMonth(ownedRegions);
   const regionFoodNow = regionFoodPerMonth(ownedRegions);
-  const farmFoodPerMonth = (onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * bakeryMultNow * regionFarmMult(ownedRegions) + brunnenFoodNow) + regionFoodNow;
+  const farmFoodPerMonth = (onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * bakeryMultNow * regionFarmMult(ownedRegions) * fx.farmMult + brunnenFoodNow) + regionFoodNow + fx.foodPerMonth;
 
   const yearNum = calDate.year - START_YEAR + 1;
   const daysUntilAttack = daysUntilYearEnd(day);
@@ -9571,6 +9780,7 @@ export default function CastleBuilder() {
     setRealmStats((rs) => ({ ...rs, goals: rs.goals + newly.length }));
     newly.forEach((g) => {
       addReward(g.reward);
+      addRulerXp(RULER_XP.goal);
       logEvent('🎯', `Reichsziel erreicht: ${g.label} (${rewardText(g.reward)})`, 'good');
     });
   });
@@ -9588,6 +9798,7 @@ export default function CastleBuilder() {
     if (battleEvent) {
       const won = !!battleEvent.won && !battleEvent.raided;
       setRealmStats((rs) => ({ ...rs, won: rs.won + (won ? 1 : 0), lost: rs.lost + (won ? 0 : 1) }));
+      if (won) addRulerXp(RULER_XP.battle + (battleEvent.source === 'finale' ? RULER_XP.finale : 0));
       if (battleEvent.source === 'finale') actResultRef.current = { won, year: battleEvent.year };
       return;
     }
@@ -9616,6 +9827,16 @@ export default function CastleBuilder() {
       setActEvent({ type: 'failed', act });
     }
   }, [battleEvent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Herrscher: a new rank lets the player choose an ability ------------------------------
+  useEffect(() => {
+    if (!ruler || !(ruler.picks > 0) || skillOffer || battlePhase || battleEvent) return;
+    if (petitionEvent || eventOutcome || gameOverEvent || dynastyEvent || desertionForecast || courtRivalryEvent || actEvent) return;
+    const options = skillChoices(ruler);
+    if (!options.length) { setRuler((r) => ({ ...r, picks: 0 })); return; }
+    setSkillOffer({ options });
+    SOUND.play('event');
+  });
 
   // ---- Autosave ----------------------------------------------------------------------------
   // Once a year (as soon as the new year's attack and its report are over) and once before
@@ -9695,18 +9916,19 @@ export default function CastleBuilder() {
   }, [battlePhase]);
 
   const smithWageMult = SMITH_WAGE_MULT[smithTier] || 1;
-  const effectiveSoldierWage = SOLDIER_WAGE.soldier * smithWageMult * soldierWageMultiplier;
-  const effectiveArcherWage = SOLDIER_WAGE.archer * smithWageMult * soldierWageMultiplier;
-  const wagePerDay = hired.arbeiter * WAGE.arbeiter + hired.carpenter * WAGE.carpenter + hired.mason * WAGE.mason
+  const effectiveSoldierWage = SOLDIER_WAGE.soldier * smithWageMult * soldierWageMultiplier * fx.soldierWageMult * fx.wageMult;
+  const effectiveArcherWage = SOLDIER_WAGE.archer * smithWageMult * soldierWageMultiplier * fx.soldierWageMult * fx.wageMult;
+  const tutoringNow = royalFamily.children.filter((c) => c.tutor && !c.trait).length;
+  const wagePerDay = tutoringNow * TUTOR_GOLD_PER_MONTH / MONTH_LENGTH + fx.wageMult * (hired.arbeiter * WAGE.arbeiter + hired.carpenter * WAGE.carpenter + hired.mason * WAGE.mason
     + hired.quarrier * WAGE.quarrier + hired.lumberjack * WAGE.lumberjack
-    + soldiers.soldier * effectiveSoldierWage + soldiers.archer * effectiveArcherWage
+    + (soldiers.soldier * effectiveSoldierWage + soldiers.archer * effectiveArcherWage) / fx.wageMult
     + recruitedKnightIds.length * CHAMPION_WAGE * smithWageMult * (1 + knightRaises * 0.2)
     + (hofnarrHired && !capturedCourtiers.hofnarr ? HOFNARR_WAGE : 0)
     + (moorishHired && !capturedCourtiers.moorish ? MOORISH_WAGE : 0) + (monkHired && !capturedCourtiers.monk ? MONK_WAGE : 0)
     + (medicusHired && !capturedCourtiers.medicus ? MEDICUS_WAGE : 0) + (ladyHired && !capturedCourtiers.lady ? LADY_WAGE : 0) + (falconerHired && !capturedCourtiers.falconer ? FALCONER_WAGE : 0)
     + (armbrustHired && !capturedCourtiers.armbrust ? ARMBRUST_WAGE : 0)
     + (SMITH_UPKEEP_PER_DAY[smithTier] || 0)
-    + (baumeisterHired ? BAUMEISTER_WAGE : 0);
+    + (baumeisterHired ? BAUMEISTER_WAGE : 0));
   const foodPerDayTotal = (hired.laborer + hired.arbeiter + hired.carpenter + hired.mason + hired.quarrier + hired.lumberjack) * FOOD_PER_WORKER
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
   const contractsPerMonth = contracts.reduce((sum, c) => sum + (day <= c.untilDay ? c.perMonth : 0), 0);
@@ -9981,13 +10203,27 @@ export default function CastleBuilder() {
                 „Der Erzbischof spricht: Ich kröne Euch zum König über dieses Reich!"
               </p>
               <input type="text" value={kingNameDraft} maxLength={20} onChange={(e) => setKingNameDraft(e.target.value)}
-                style={{ width: '100%', maxWidth: 280, padding: '8px 10px', borderRadius: 3, border: '2px solid #5C554A', fontFamily: "'EB Garamond', serif", fontSize: '1rem', textAlign: 'center', marginBottom: 14, background: '#FFFDF7' }} />
+                style={{ width: '100%', maxWidth: 280, padding: '8px 10px', borderRadius: 3, border: '2px solid #5C554A', fontFamily: "'EB Garamond', serif", fontSize: '1rem', textAlign: 'center', marginBottom: 12, background: '#FFFDF7' }} />
+              <div style={{ fontSize: '0.86rem', color: '#2B2420', marginBottom: 6 }}>Welche Gabe zeichnet den König aus?</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+                {traitOffer.map((t) => {
+                  const on = (traitPick || traitOffer[0]) === t;
+                  return (
+                    <button key={t} onClick={() => setTraitPick(t)} title={RULER_TRAITS[t].text}
+                      style={{ width: 168, padding: '7px 8px', borderRadius: 4, border: on ? '2px solid #2B2420' : '2px solid rgba(92,85,74,0.5)', background: on ? '#f5e6b0' : 'rgba(255,253,247,0.6)', cursor: 'pointer', textAlign: 'left', fontFamily: "'EB Garamond', serif", color: '#2B2420' }}>
+                      <div style={{ fontFamily: "'Cinzel', serif", fontSize: '0.86rem' }}>{RULER_TRAITS[t].icon} {RULER_TRAITS[t].name}</div>
+                      <div style={{ fontSize: '0.74rem', color: '#4a4034', lineHeight: 1.3 }}>{RULER_TRAITS[t].text}</div>
+                    </button>
+                  );
+                })}
+              </div>
               <div>
                 <button
                   onClick={() => {
                     const name = kingNameDraft.trim() || BOY_NAMES[0];
                     setKingName(name);
                     setKingOrdinal(ordinalForNewMonarch(name, dynastyAncestorsRef.current));
+                    setRuler(newRuler(traitPick || traitOffer[0]));
                     // Deliberately NOT unpausing here: the reign should open on a paused map
                     // so the player has a moment to look around before pressing "Weiter"
                     // themselves — see the auto-resume effect's comment for why this one
@@ -10774,10 +11010,11 @@ export default function CastleBuilder() {
                         {open && reachable && (() => {
                           const maxS = soldiers.soldier, maxA = soldiers.archer;
                           const sendS = Math.min(expDraft.soldier, maxS), sendA = Math.min(expDraft.archer, maxA);
-                          const power = expeditionPower(sendS, sendA, smithTier);
+                          const power = expeditionPower(sendS, sendA, smithTier) * fx.expeditionMult;
                           const chance = expeditionWinChance(power, strength);
                           const canSend = !expedition && !busy && sendS + sendA > 0;
-                          const repOk = reputation >= d.oath.rep, goldOk = resources.gold >= d.oath.gold;
+                          const terms = oathTerms(id);
+                          const repOk = reputation >= terms.rep, goldOk = resources.gold >= terms.gold;
                           return (
                             <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 12, marginTop: 10 }}>
                               <div style={{ borderRight: '1px solid rgba(59,46,31,0.2)', paddingRight: 12 }}>
@@ -10805,8 +11042,8 @@ export default function CastleBuilder() {
                                 <div className="cb-section-title" style={{ marginBottom: 6 }}>📜 Lehnseid</div>
                                 <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
                                   {d.lord} würde Euch die Treue schwören:
-                                  <div style={{ color: repOk ? '#3d5a2c' : '#8a2d20' }}>{repOk ? '✔' : '✘'} Ruf mindestens {d.oath.rep} (jetzt {Math.round(reputation)})</div>
-                                  <div style={{ color: goldOk ? '#3d5a2c' : '#8a2d20' }}>{goldOk ? '✔' : '✘'} {d.oath.gold} 🪙 als Geschenk</div>
+                                  <div style={{ color: repOk ? '#3d5a2c' : '#8a2d20' }}>{repOk ? '✔' : '✘'} Ruf mindestens {terms.rep} (jetzt {Math.round(reputation)})</div>
+                                  <div style={{ color: goldOk ? '#3d5a2c' : '#8a2d20' }}>{goldOk ? '✔' : '✘'} {terms.gold} 🪙 als Geschenk</div>
                                 </div>
                                 <button className="cb-btn is-active" disabled={!repOk || !goldOk || busy || (expedition && expedition.region === id)} onClick={() => { setOpenPanel(null); setReichFocus(null); swearOath(id); }}
                                   style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem', marginTop: 8 }}>Lehnseid annehmen</button>
@@ -10822,6 +11059,32 @@ export default function CastleBuilder() {
             );
           })()}
         </Modal>
+      )}
+
+      {skillOffer && ruler && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,8,5,0.78)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 66, padding: '56px 16px', overflowY: 'auto' }}>
+          <div className="cb-parch cb-modal-in" style={{ maxWidth: 620, width: '100%', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 22px 12px', textAlign: 'center', background: 'linear-gradient(180deg, #4b3925, #2e2216)', borderBottom: '3px solid #c9a24b' }}>
+              <div style={{ fontSize: '1.8rem', lineHeight: 1 }}>👑</div>
+              <div style={{ color: '#d8c79a', fontFamily: "'Cinzel', serif", letterSpacing: '0.18em', fontSize: '0.78rem', marginTop: 6 }}>RANG {ruler.rank - (ruler.picks - 1)}</div>
+              <div className="cb-title" style={{ fontSize: '1.3rem', color: '#f5e6b0' }}>{kingName} {regnalNumeral(kingOrdinal)}. — {RULER_RANK_NAMES[Math.min(RULER_RANK_NAMES.length - 1, ruler.rank - (ruler.picks - 1))]}</div>
+            </div>
+            <div style={{ padding: '16px 22px 20px' }}>
+              <p style={{ fontSize: '0.95rem', lineHeight: 1.6, marginTop: 0 }}>Die Jahre auf dem Thron, die Schlachten und Entscheidungen haben den König geformt. Worin hat er sich besonders hervorgetan?</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
+                {skillOffer.options.map((id) => (
+                  <button key={id} className="cb-btn" onClick={() => { setRuler((r) => ({ ...r, skills: [...r.skills, id], picks: Math.max(0, (r.picks || 0) - 1) })); setSkillOffer(null); logEvent(RULER_SKILLS[id].icon, `${kingName} erlernt „${RULER_SKILLS[id].name}“`, 'good'); }}
+                    style={{ padding: '12px 10px', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>{RULER_SKILLS[id].icon}</span>
+                    <span className="cb-title" style={{ fontSize: '0.95rem' }}>{RULER_SKILLS[id].name}</span>
+                    <span style={{ fontSize: '0.82rem', color: '#4a4034', lineHeight: 1.35 }}>{RULER_SKILLS[id].text}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: '0.76rem', color: '#6b5536', fontStyle: 'italic', marginTop: 10 }}>Die zuletzt erlernte Fähigkeit gibt der König als Vermächtnis an seinen Erben weiter.</div>
+            </div>
+          </div>
+        </div>
       )}
 
       {openPanel === 'einstellungen' && (
@@ -11057,8 +11320,14 @@ export default function CastleBuilder() {
               {
                 label: 'Ritter in der Garnison', active: recruitedKnightIds.length > 0,
                 detail: recruitedKnightIds.length > 0
-                  ? `${recruitedKnightIds.map((id) => KNIGHT_DEFS[id].name).join(', ')} — je ×${CHAMPION_DAMAGE_MULT.toFixed(1)} Schaden einer starken Nahkampfeinheit, kämpfen vorn mit den Fußsoldaten`
+                  ? `${recruitedKnightIds.map((id) => { const pr = knightProgress[id]; const k = knightBattleStats(pr); return `${KNIGHT_DEFS[id].name} (${KNIGHT_RANKS[k.rank - 1]}${pr && pr.talent ? `, ${KNIGHT_TALENTS[pr.talent].name}` : ''})`; }).join(', ')} — je ×${CHAMPION_DAMAGE_MULT.toFixed(1)} Schaden einer starken Nahkampfeinheit; jeder Rang +10 % Schaden, +12 % Lebenskraft`
                   : 'Keiner angeworben — kämpft als besonders starke, berittene Einheit mit.',
+              },
+              {
+                label: 'Kriegskunst des Herrschers', active: fx.meleeMult > 1 || fx.archerMult > 1 || fx.wallHpMult > 1,
+                detail: (fx.meleeMult > 1 || fx.archerMult > 1 || fx.wallHpMult > 1)
+                  ? [fx.meleeMult > 1 && `Nahkampf +${Math.round((fx.meleeMult - 1) * 100)} %`, fx.archerMult > 1 && `Bogenschützen +${Math.round((fx.archerMult - 1) * 100)} %`, fx.wallHpMult > 1 && `Mauern +${Math.round((fx.wallHpMult - 1) * 100)} % Haltbarkeit`].filter(Boolean).join(' · ')
+                  : 'Eigenschaften und Fähigkeiten wie Feldherr, Klingenkunst oder Bogenmeister stärken die Garnison.',
               },
               {
                 label: 'Sold-Erhöhung (Bittsteller)', active: soldierWageMultiplier > 1,
@@ -11108,7 +11377,32 @@ export default function CastleBuilder() {
         );
         const connector = (h = 16) => <div style={{ width: 2, height: h, background: '#5C554A' }} />;
         return (
-          <Modal title="👑 Stammbaum der königlichen Familie" onClose={() => { setOpenPanel(null); setAbdicateConfirm(false); }}>
+          <Modal title="👑 Stammbaum der königlichen Familie" maxWidth={600} onClose={() => { setOpenPanel(null); setAbdicateConfirm(false); }}>
+            {ruler && (() => {
+              const next = RULER_RANK_XP[ruler.rank];
+              const prevXp = ruler.rank > 0 ? RULER_RANK_XP[ruler.rank - 1] : 0;
+              const tr = RULER_TRAITS[ruler.trait];
+              return (
+                <div className="cb-parch" style={{ padding: '10px 12px', marginBottom: 12, boxShadow: 'inset 0 0 0 1px rgba(201,162,75,0.4)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span className="cb-title" style={{ fontSize: '0.98rem' }}>{kingName} {regnalNumeral(kingOrdinal)}.</span>
+                    <span style={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#6b5536' }}>Rang {ruler.rank} · {RULER_RANK_NAMES[Math.min(RULER_RANK_NAMES.length - 1, ruler.rank)]}</span>
+                  </div>
+                  <div className="cb-meter" style={{ margin: '6px 0 2px' }}><div style={{ width: `${next ? ((ruler.xp - prevXp) / (next - prevXp)) * 100 : 100}%`, background: '#a8822e' }} /></div>
+                  <div style={{ fontSize: '0.72rem', color: '#6b5536' }}>Herrschererfahrung {ruler.xp}{next ? ` / ${next} bis zum nächsten Rang` : ''} — aus Regierungsjahren, Siegen, Reichszielen und Landgewinn</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    <span className="cb-has-tip" style={{ position: 'relative', fontSize: '0.8rem', padding: '2px 8px', borderRadius: 10, background: tr.negative ? 'rgba(168,64,44,0.18)' : 'rgba(201,162,75,0.3)', border: '1px solid rgba(92,85,74,0.4)' }}>
+                      {tr.icon} {tr.name}<span className="cb-tip">Eigenschaft: {tr.text}</span>
+                    </span>
+                    {ruler.skills.map((id) => (
+                      <span key={id} className="cb-has-tip" style={{ position: 'relative', fontSize: '0.8rem', padding: '2px 8px', borderRadius: 10, background: 'rgba(255,253,247,0.7)', border: '1px solid rgba(92,85,74,0.35)' }}>
+                        {RULER_SKILLS[id].icon} {RULER_SKILLS[id].name}{id === ruler.legacy ? ' (Vermächtnis)' : ''}<span className="cb-tip">{RULER_SKILLS[id].text}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4 }}>
               {lastAncestor && (
                 <>
@@ -11183,6 +11477,7 @@ export default function CastleBuilder() {
                             )}
                           </div>
                           {nodeLabel(c.name, c.imprisoned ? '🔒 hinter Gittern' : `${age} Jahre${c === heir ? ' · Thronfolger' : ''}`)}
+                          {c.trait && <div style={{ fontSize: '0.7rem', marginTop: 2 }} title={RULER_TRAITS[c.trait].text}>{RULER_TRAITS[c.trait].icon} {RULER_TRAITS[c.trait].name}</div>}
                         </div>
                       );
                     })}
@@ -11190,6 +11485,36 @@ export default function CastleBuilder() {
                 </>
               )}
             </div>
+            {royalFamily.children.length > 0 && (
+              <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                <div className="cb-section-title">Erziehung der Kinder</div>
+                <div style={{ fontSize: '0.78rem', color: '#5A5044', marginBottom: 8, lineHeight: 1.4 }}>Ab {EDUCATION_START_AGE} Jahren kann ein Kind einem Lehrer anvertraut werden ({TUTOR_GOLD_PER_MONTH} 🪙 im Monat). Nach {EDUCATION_YEARS} Jahren ist es geprägt — und bringt diese Eigenschaft mit auf den Thron. Ohne Erziehung entscheidet der Zufall.</div>
+                {orderedChildren.map((c, idx) => {
+                  const age = Math.max(0, calDate.year - c.bornYear);
+                  return (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.84rem', padding: '5px 0', borderBottom: '1px dashed rgba(92,85,74,0.2)' }}>
+                      <strong style={{ minWidth: 96 }}>{c.name}{c === heir ? ' 👑' : ''}</strong>
+                      <span style={{ color: '#5A5044', minWidth: 58 }}>{age} Jahre</span>
+                      {c.trait ? (
+                        <span>🎓 {RULER_TRAITS[c.trait].icon} {RULER_TRAITS[c.trait].name} — {RULER_TRAITS[c.trait].text}</span>
+                      ) : c.tutor ? (
+                        <span>{TUTORS[c.tutor].icon} {TUTORS[c.tutor].name} — {TUTORS[c.tutor].text} · noch {Math.max(0, EDUCATION_YEARS - (calDate.year - c.tutorSince))} Jahre</span>
+                      ) : age < EDUCATION_START_AGE ? (
+                        <span style={{ fontStyle: 'italic', color: '#7a6a50' }}>noch zu jung für einen Lehrer</span>
+                      ) : (
+                        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {Object.entries(TUTORS).map(([tid, t]) => (
+                            <button key={tid} className="cb-btn" title={`${t.name}: ${t.text} → ${RULER_TRAITS[t.trait].name}`}
+                              onClick={() => setRoyalFamily((fam) => ({ ...fam, children: fam.children.map((x) => (x === c ? { ...x, tutor: tid, tutorSince: calDate.year } : x)) }))}
+                              style={{ padding: '2px 7px', fontSize: '0.78rem' }}>{t.icon} {RULER_TRAITS[t.trait].name}</button>
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {heir && (
               <div style={{ textAlign: 'center', marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
                 {!abdicateConfirm ? (
