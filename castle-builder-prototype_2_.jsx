@@ -972,6 +972,15 @@ const ARROW_ANIM_MS = 40;
 const LADDER_YEAR = 3;
 const RAM_YEAR = 5;
 const CATAPULT_YEAR = 10;
+// Act II brings sappers (Mineure), who dig under a wall until it caves in however strong it
+// is; Act III brings siege towers, which roll up to a wall and let the host climb over it.
+// A ditch is the answer to both: it has to be filled before either can do its work.
+const SAPPER_YEAR = 14;
+const SAPPER_DIG_TICKS = 40; // ticks of digging that bring down any wall or gate
+const SIEGE_TOWER_YEAR = 21;
+const SIEGE_TOWER_HP_MULT = 7;
+const SIEGE_TOWER_SPEED = 0.55;
+const SIEGE_TOWER_ARROW_MULT = 0.3; // arrows mostly stick in the hides
 // From this year, part of the attacking force starts circling around to approach from the
 // far side of the map (see flankFraction in spawnBattleUnits) instead of always funnelling
 // in from the same direction.
@@ -3339,6 +3348,8 @@ const PERSON_COLORS = {
   saxonLadder: { body: '#5c2a20', accent: '#3a1a12', skin: '#c9a877' },
   saxonRam: { body: '#4a2016', accent: '#2c130d', skin: '#c9a877' },
   saxonCatapult: { body: '#5c2a20', accent: '#3a1a12', skin: '#c9a877' },
+  saxonSapper: { body: '#4f3a26', accent: '#2e2014', skin: '#c9a877' },
+  saxonSiegeTower: { body: '#5c2a20', accent: '#3a1a12', skin: '#c9a877' },
 };
 
 // ------------------------------------------------------------------------------ figures --
@@ -3385,6 +3396,9 @@ function Headgear({ type, c }) {
           <path d="M 2.4 -23.4 Q 6.5 -27.5 8 -26.6 Q 5.6 -25 3.2 -22.2 Z" fill="#c23a2a" />
         </g>
       );
+    case 'saxonSapper':
+      // A sapper's leather hood, smeared with earth.
+      return <path d="M -3.9 -19 Q -4.6 -25.6 0 -25.8 Q 4.6 -25.6 3.9 -19 L 2.8 -20.2 Q 2.6 -23.6 0 -23.8 Q -2.6 -23.6 -2.8 -20.2 Z" fill="#5a4630" stroke="#2a2014" strokeWidth="0.5" />;
     case 'saxon':
     case 'saxonLadder':
       // Shaggy hair and a fur cap.
@@ -3430,6 +3444,7 @@ function HeldTool({ type, c }) {
           <path d="M 8 -12.6 L 13 -15 L 12.6 -11.2 Z" fill={steel} stroke={steelEdge} strokeWidth="0.5" />
         </g>
       );
+    case 'saxonSapper':
     case 'quarrier':
       // Pickaxe.
       return (
@@ -3643,6 +3658,37 @@ function RamFigure() {
   );
 }
 
+// Siege tower (Belagerungsturm): a tall timber frame on wheels, faced with wet hides against
+// fire arrows, a drawbridge folded up at the top and archers' slits along its sides.
+function SiegeTowerFigure({ moving }) {
+  return (
+    <g>
+      <ellipse cx="0" cy="5" rx="16" ry="4" fill="rgba(0,0,0,0.22)" />
+      <g className={moving ? 'cb-person-walk' : undefined}>
+        <path d="M -12 2 L -10 -52 L 10 -52 L 12 2 Z" fill="#7a5a36" stroke="#2e1e10" strokeWidth="0.9" strokeLinejoin="round" />
+        <path d="M 0 2 L 1 -52 L 10 -52 L 12 2 Z" fill="#5f452a" />
+        {/* wet hides */}
+        <path d="M -11.4 -14 L -10.6 -40 L 10.6 -40 L 11.4 -14 Z" fill="#8f7452" opacity="0.85" />
+        <path d="M -11.4 -14 Q -6 -11 0 -14 Q 6 -11 11.4 -14" stroke="#4a3620" strokeWidth="0.7" fill="none" />
+        <path d="M -10.8 -27 Q -5 -24 0 -27 Q 5 -24 10.8 -27" stroke="#4a3620" strokeWidth="0.7" fill="none" />
+        {/* floors */}
+        {[-14, -27, -40].map((y) => <line key={y} x1="-11.4" y1={y} x2="11.4" y2={y} stroke="#3a2614" strokeWidth="1" />)}
+        {[-33, -20].map((y) => <rect key={y} x="-2" y={y} width="4" height="4" fill="#1c120a" />)}
+        {/* drawbridge folded up, and the top platform */}
+        <path d="M -10 -52 L -8 -60 L 8 -60 L 10 -52 Z" fill="#6b4a2c" stroke="#2e1e10" strokeWidth="0.8" />
+        <path d="M -7 -52 L -6 -57 M 0 -52 L 0 -57 M 7 -52 L 6 -57" stroke="#3a2614" strokeWidth="0.6" />
+        <path d="M -8 -60 L -9 -64 L -5 -64 L -5 -61 L -1 -61 L -1 -64 L 3 -64 L 3 -61 L 7 -61 L 7 -64 L 9 -64 L 8 -60 Z" fill="#7a5a36" stroke="#2e1e10" strokeWidth="0.6" />
+      </g>
+      {[[-8.5, 3.4], [8.5, 3.4]].map(([x, y], k) => (
+        <g key={k}>
+          <circle cx={x} cy={y} r="4" fill="#4a3220" stroke="#1c120a" strokeWidth="0.8" />
+          <path d={`M ${x - 3.8} ${y} H ${x + 3.8} M ${x} ${y - 3.8} V ${y + 3.8}`} stroke="#2a1c10" strokeWidth="0.7" />
+        </g>
+      ))}
+    </g>
+  );
+}
+
 // Trebuchet: A-frame tower on a wheeled base, a long throwing arm with a counterweight box at
 // the short end and a sling at the long end. The arm swings on the cb-catapult-arm cycle.
 function CatapultFigure() {
@@ -3677,6 +3723,7 @@ function PersonFigure({ type, mode }) {
   const bodyClass = mode === 'work' ? 'cb-person-work' : mode === 'walk' ? 'cb-person-walk' : 'cb-person-idle';
   if (type === 'saxonRam') return <g className={bodyClass}><RamFigure /></g>;
   if (type === 'saxonCatapult') return <g className={bodyClass}><CatapultFigure /></g>;
+  if (type === 'saxonSiegeTower') return <g><SiegeTowerFigure moving={mode === 'walk'} /></g>;
   if (type === 'champion' || type === 'enemyKnight') return <g className={bodyClass}><MountedFigure c={c} mode={mode} /></g>;
   return <g className={bodyClass}><FootFigure type={type} c={c} mode={mode} /></g>;
 }
@@ -4751,6 +4798,7 @@ function findBlockingObstacle(u, dest, obstacles) {
   for (const o of obstacles) {
     if (o.isPoint || o.breached || o.hp <= 0) continue;
     if (u.type === 'saxonLadder' && o.type === 'wall') continue;
+    if (o.bridged) continue;
     if (segmentsIntersect({ i: u.i, j: u.j }, dest, { i: o.i1, j: o.j1 }, { i: o.i2, j: o.j2 })) {
       const mid = obstacleMidpoint(o);
       const d = distance2(u, mid);
@@ -4797,6 +4845,57 @@ function feudAttackerForce(feudType, reignYear = 10) {
   for (let i = 0; i < (reignYear >= 8 ? 2 : 1); i++) force.push({ type: 'enemyKnight', hpMult: 1.8 });
   return force;
 }
+// The make-up of a year's host: archers first, then from their year on rams, catapults,
+// mounted knights, siege towers and sappers take a growing share, the rest split between
+// ladder crews and plain foot soldiers. Shared by the battle itself and the scouts' report.
+function attackerTypeSequence(y, n) {
+  let typeSequence;
+  const archerCount = saxonArcherCountForYear(y, n);
+  let meleePool = n - archerCount;
+  // The new siege arms of the later acts get their share first.
+  const towerCount = y >= SIEGE_TOWER_YEAR ? Math.min(meleePool, 3, 1 + Math.floor((y - SIEGE_TOWER_YEAR) / 6)) : 0;
+  meleePool -= towerCount;
+  const sapperFrac = y >= SAPPER_YEAR ? Math.min(0.22, 0.12 + (y - SAPPER_YEAR) * 0.01) : 0;
+  const sapperCount = sapperFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(n * sapperFrac))) : 0;
+  meleePool -= sapperCount;
+  const ramFrac = y >= RAM_YEAR ? Math.min(0.35, 0.12 + (y - RAM_YEAR) * 0.02) : 0;
+  const catapultFrac = y >= CATAPULT_YEAR ? Math.min(0.3, 0.12 + (y - CATAPULT_YEAR) * 0.02) : 0;
+  const knightFrac = y >= KNIGHT_YEAR ? Math.min(0.3, 0.1 + (y - KNIGHT_YEAR) * 0.02) : 0;
+  const ramCount = ramFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * ramFrac))) : 0;
+  meleePool -= ramCount;
+  const catapultCount = catapultFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * catapultFrac))) : 0;
+  meleePool -= catapultCount;
+  const knightCount = knightFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * knightFrac))) : 0;
+  meleePool -= knightCount;
+  const ladderCount = (y >= LADDER_YEAR) ? Math.round(meleePool * 0.45) : 0;
+  const basicCount = meleePool - ladderCount;
+
+  typeSequence = [];
+  for (let k = 0; k < archerCount; k++) typeSequence.push('saxonArcher');
+  for (let k = 0; k < ramCount; k++) typeSequence.push('saxonRam');
+  for (let k = 0; k < catapultCount; k++) typeSequence.push('saxonCatapult');
+  for (let k = 0; k < knightCount; k++) typeSequence.push('enemyKnight');
+  for (let k = 0; k < towerCount; k++) typeSequence.push('saxonSiegeTower');
+  for (let k = 0; k < sapperCount; k++) typeSequence.push('saxonSapper');
+  for (let k = 0; k < ladderCount; k++) typeSequence.push('saxonLadder');
+  for (let k = 0; k < basicCount; k++) typeSequence.push('saxon');
+  return typeSequence;
+}
+const FOE_NAMES = {
+  saxonArcher: ['Bogenschütze', 'Bogenschützen'], saxonLadder: ['Leiterträger', 'Leiterträger'], saxonRam: ['Rammbock', 'Rammböcke'],
+  saxonCatapult: ['Katapult', 'Katapulte'], enemyKnight: ['Reiter', 'Reiter'], saxonSapper: ['Mineur', 'Mineure'], saxonSiegeTower: ['Belagerungsturm', 'Belagerungstürme'],
+};
+// "2 Rammböcke, 3 Mineure, …" — the notable parts of a host, for the scouts' report.
+function scoutReport(y, count) {
+  const seq = attackerTypeSequence(y, Math.min(count, MAX_BATTLE_ATTACKERS));
+  const tally = {};
+  seq.forEach((t) => { tally[t] = (tally[t] || 0) + 1; });
+  const parts = ['saxonSiegeTower', 'saxonSapper', 'saxonCatapult', 'saxonRam', 'enemyKnight', 'saxonLadder', 'saxonArcher']
+    .filter((t) => tally[t])
+    .map((t) => `${tally[t]} ${FOE_NAMES[t][tally[t] === 1 ? 0 : 1]}`);
+  const strength = Math.sqrt(count / MAX_BATTLE_ATTACKERS);
+  return parts.join(', ') + (strength > 1.05 ? ` — kampferprobt, jeder etwa ×${Math.min(5, strength).toFixed(1)} so stark` : '');
+}
 function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKnightIds, forcedAttackers) {
   const units = [];
   const keepDone = structures.keep && structures.keep.stage === 'done';
@@ -4822,27 +4921,7 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
     // rest split between plain footsoldiers and (from year 3) ladder-carrying climbers. With
     // the total unit count capped, this is how the Sachsen keep getting rougher to fight
     // year over year even once the raw headcount has maxed out.
-    const archerCount = saxonArcherCountForYear(y, n);
-    let meleePool = n - archerCount;
-    const ramFrac = y >= RAM_YEAR ? Math.min(0.35, 0.12 + (y - RAM_YEAR) * 0.02) : 0;
-    const catapultFrac = y >= CATAPULT_YEAR ? Math.min(0.3, 0.12 + (y - CATAPULT_YEAR) * 0.02) : 0;
-    const knightFrac = y >= KNIGHT_YEAR ? Math.min(0.3, 0.1 + (y - KNIGHT_YEAR) * 0.02) : 0;
-    const ramCount = ramFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * ramFrac))) : 0;
-    meleePool -= ramCount;
-    const catapultCount = catapultFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * catapultFrac))) : 0;
-    meleePool -= catapultCount;
-    const knightCount = knightFrac > 0 ? Math.min(meleePool, Math.max(1, Math.round(meleePool * knightFrac))) : 0;
-    meleePool -= knightCount;
-    const ladderCount = (y >= LADDER_YEAR) ? Math.round(meleePool * 0.45) : 0;
-    const basicCount = meleePool - ladderCount;
-
-    typeSequence = [];
-    for (let k = 0; k < archerCount; k++) typeSequence.push('saxonArcher');
-    for (let k = 0; k < ramCount; k++) typeSequence.push('saxonRam');
-    for (let k = 0; k < catapultCount; k++) typeSequence.push('saxonCatapult');
-    for (let k = 0; k < knightCount; k++) typeSequence.push('enemyKnight');
-    for (let k = 0; k < ladderCount; k++) typeSequence.push('saxonLadder');
-    for (let k = 0; k < basicCount; k++) typeSequence.push('saxon');
+    typeSequence = attackerTypeSequence(y, n);
   }
 
   // The visible attacker headcount is capped for performance/legibility (MAX_BATTLE_ATTACKERS),
@@ -4863,7 +4942,7 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
     const offI = ((k % 4) - 1.5) * 0.6;
     const offJ = Math.floor(k / 4) * 0.55;
     const type = typeSequence[k] || 'saxon';
-    const hpMult = (forcedAttackers ? (forcedAttackers[k].hpMult || 1) : (type === 'enemyKnight' ? 1.8 : 1)) * strengthMult;
+    const hpMult = (forcedAttackers ? (forcedAttackers[k].hpMult || 1) : (type === 'enemyKnight' ? 1.8 : type === 'saxonSiegeTower' ? SIEGE_TOWER_HP_MULT : type === 'saxonSapper' ? 0.8 : 1)) * strengthMult;
     const maxHp = Math.round(UNIT_MAX_HP * hpMult);
     // With three fronts the host splits roughly in thirds, otherwise about a third flanks.
     const front = useThird ? [fronts.flank, fronts.third, fronts.main][k % 3] : (flankEvery > 0 && k % flankEvery === 0 ? fronts.flank : fronts.main);
@@ -4895,7 +4974,8 @@ function buildBattleNav(obstacles, keepPos, mode) {
   obstacles.forEach((o, idx) => {
     if (o.isPoint) { if (o.type === 'tower') navAddTower(nav, o.i, o.j); return; }
     if (o.breached || o.hp <= 0) return;
-    if (o.type === 'wall' && mode === 'ladder') { navBlockEdge(nav, o.i1, o.j1, o.i2, o.j2, 1.5, -1); return; }
+    if (o.bridged || (o.type === 'wall' && mode === 'ladder')) { navBlockEdge(nav, o.i1, o.j1, o.i2, o.j2, 1.5, -1); return; }
+    if (mode === 'tower') { navBlockEdge(nav, o.i1, o.j1, o.i2, o.j2, o.type === 'graben' ? 400 : 3, idx); return; }
     const cost = o.type === 'wall' ? 8 + o.hp * 1.5
       : o.type === 'gate' ? (mode === 'ram' ? 1 + o.hp * 0.3 : 6 + o.hp * 1.4)
       : 6 + o.hp * 1.2;
@@ -4955,7 +5035,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   // movement mode is built lazily per tick.
   const navCache = {};
   const navFor = (u) => {
-    const mode = u.type === 'saxonLadder' ? 'ladder' : u.type === 'saxonRam' ? 'ram' : 'foot';
+    const mode = u.type === 'saxonLadder' ? 'ladder' : u.type === 'saxonRam' ? 'ram' : u.type === 'saxonSiegeTower' ? 'tower' : 'foot';
     if (!navCache[mode]) navCache[mode] = buildBattleNav(obstacles, keepPos, mode);
     return navCache[mode];
   };
@@ -4969,7 +5049,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   const stepToward = (u, p, maxStep = Infinity) => {
     const d = distance2(u, p);
     if (d < 1e-6) return;
-    const step = Math.min(1, (UNIT_SPEED_PER_TICK * marchMult(u)) / d, maxStep / d);
+    const step = Math.min(1, (UNIT_SPEED_PER_TICK * marchMult(u) * (u.type === 'saxonSiegeTower' ? SIEGE_TOWER_SPEED : 1)) / d, maxStep / d);
     u.i += (p.i - u.i) * step;
     u.j += (p.j - u.j) * step;
   };
@@ -4982,6 +5062,15 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       const mid = obstacleMidpoint(blocker);
       const near = distance2(u, mid) <= MELEE_RANGE + 0.25 || distance2(u, r.standPoint) < 0.15;
       if (!near) { stepToward(u, r.waypoint); return false; }
+      if (u.type === 'saxonSapper' && (blocker.type === 'wall' || blocker.type === 'gate')) {
+        // Digging a tunnel under the foundations: the same time for any wall, however
+        // strong — but out in the open, and twice as easy to shoot.
+        u.fillingDitch = true;
+        u.mining = true;
+        blocker.hp = Math.max(0, blocker.hp - (blocker.maxHp / SAPPER_DIG_TICKS) * moraleDmgMult);
+        if (blocker.hp <= 0) { blocker.breached = true; blocker.undermined = true; }
+        return false;
+      }
       if (u.type === 'saxonRam' && blocker.type === 'gate') {
         blocker.hp = Math.max(0, blocker.hp - GATE_DAMAGE_PER_TICK * RAM_DAMAGE_MULT * moraleDmgMult);
         if (blocker.hp <= 0) blocker.breached = true;
@@ -5042,7 +5131,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   });
   units.forEach((u) => {
     if (u.hp <= 0 || u.exited) return;
-    if (u.side === 'attacker' && (u.routed || u.type === 'saxonCatapult')) return;
+    if (u.side === 'attacker' && (u.routed || u.type === 'saxonCatapult' || u.type === 'saxonSapper' || u.type === 'saxonSiegeTower')) return;
     if (u.targetId != null) {
       if (isMeleeUnit(u)) targetLoad[u.targetId] = (targetLoad[u.targetId] || 0) + 1;
       return; // already fighting someone valid — stick with it
@@ -5074,6 +5163,19 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     if (isMeleeUnit(u)) targetLoad[chosen.o.id] = (targetLoad[chosen.o.id] || 0) + 1;
   });
 
+
+  // Siege towers: a stretch of wall stays open only while its tower still stands. A tower
+  // left alone on the field (the rest of the host dead or fled) is abandoned.
+  obstacles.forEach((o) => { if (o.bridged) o.bridged = false; });
+  const othersActive = units.some((u) => u.side === 'attacker' && u.hp > 0 && !u.exited && !u.routed && u.type !== 'saxonSiegeTower');
+  units.forEach((u) => {
+    if (u.type !== 'saxonSiegeTower' || u.hp <= 0 || u.exited) return;
+    if (!othersActive || u.routed) { u.exited = true; return; }
+    if (u.dockedKey) {
+      const o = obstacles.find((x) => x.key === u.dockedKey);
+      if (o && !o.breached && o.hp > 0) o.bridged = true;
+    }
+  });
 
   // Pass 2: move / fight / breach / flee.
   units.forEach((u) => {
@@ -5120,6 +5222,34 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         } else {
           stepToward(u, battleRoute(navFor(u), u, mid).waypoint);
         }
+        return;
+      }
+
+      // Sappers make for the keep and undermine anything in their way (see attackerAdvance).
+      if (u.type === 'saxonSapper') {
+        u.mining = false;
+        if (keepPos && attackerAdvance(u, keepPos)) {
+          const keep = obstacles.find((o) => o.type === 'keep' && o.hp > 0);
+          if (keep) { u.mining = true; u.fillingDitch = true; keep.hp = Math.max(0, keep.hp - GATE_DAMAGE_PER_TICK * moraleDmgMult); }
+        }
+        return;
+      }
+      // Siege towers roll up to the first wall on their way and dock there; while one stands
+      // docked, that stretch of wall is open to the whole host. A ditch stops them cold
+      // until the infantry has filled it in.
+      if (u.type === 'saxonSiegeTower') {
+        if (u.dockedKey) return;
+        const r = battleRoute(navFor(u), u, keepPos);
+        if (r.blocker >= 0) {
+          const blocker = obstacles[r.blocker];
+          const near = distance2(u, obstacleMidpoint(blocker)) <= MELEE_RANGE + 0.45 || distance2(u, r.standPoint) < 0.2;
+          if (!near) { stepToward(u, r.waypoint); return; }
+          if (blocker.type === 'graben') return; // waits for the ditch to be filled
+          u.dockedKey = blocker.key;
+          blocker.bridged = true;
+          return;
+        }
+        stepToward(u, r.waypoint);
         return;
       }
 
@@ -5226,6 +5356,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
           u.reloadTicks = reloadLeft;
         } else {
           let dmg = ARCHER_SHOT_DAMAGE * smithDamageMult * (u.dmgMult || 1);
+          if (target.type === 'saxonSiegeTower') dmg *= SIEGE_TOWER_ARROW_MULT;
           if (kapelleBonus) dmg *= kapelleBonus;
           if (moorishBonus) dmg *= MOORISH_COMBAT_BONUS;
           if (crossbowMult) dmg *= crossbowMult;
@@ -5242,6 +5373,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         }
       } else {
         let dmg = SOLDIER_DAMAGE_PER_TICK * smithDamageMult * (u.dmgMult || 1);
+        if (target.type === 'saxonSiegeTower') dmg *= 0.6;
         if (kapelleBonus) dmg *= kapelleBonus;
         if (isChampion) dmg *= CHAMPION_DAMAGE_MULT * (knightRaiseMult || 1);
         else if (moorishBonus) dmg *= MOORISH_COMBAT_BONUS;
@@ -5431,6 +5563,13 @@ const ACT_YEARS = 10;
 const ACT_FINALE_BASE_MULT = 1.7;
 const ACT_FINALE_GOAL_RELIEF = 0.07; // each goal met shrinks the final host by this share
 const ACT_FAIL_DELAY_YEARS = 2;
+// The long winter of Act III: before the storm the castle is shut in, and the stores have to
+// feed garrison and village through it. What's missing costs deserters and fighting spirit.
+const WINTER_FOOD_PER_DEFENDER = 5;
+const WINTER_FOOD_PER_VILLAGER = 2;
+function winterSiegeNeed(defenders, pop) {
+  return Math.round(defenders * WINTER_FOOD_PER_DEFENDER + pop * WINTER_FOOD_PER_VILLAGER);
+}
 const ACT_DEFS = {
   1: {
     numeral: 'I', title: 'Die Grenzburg', icon: '🏰',
@@ -6730,6 +6869,9 @@ export default function CastleBuilder() {
         u.armor = k.armor;
       }
     });
+    if (winterPenaltyRef.current > 0) {
+      spawned.units.forEach((u) => { if (u.side === 'defender') u.dmgMult = (u.dmgMult || 1) * (1 - 0.35 * winterPenaltyRef.current); });
+    }
     if (f.wallHpMult !== 1) {
       spawned.obstacles.forEach((o) => {
         if (o.type === 'wall' || o.type === 'gate' || o.type === 'tower') { o.maxHp = (o.maxHp || o.hp) * f.wallHpMult; o.hp *= f.wallHpMult; }
@@ -6775,6 +6917,9 @@ export default function CastleBuilder() {
   useEffect(() => { actFinaleYearRef.current = actFinaleYear; }, [actFinaleYear]);
   const actGoalsDoneRef = useRef(actGoalsDone);
   useEffect(() => { actGoalsDoneRef.current = actGoalsDone; }, [actGoalsDone]);
+  const actRef = useRef(act);
+  useEffect(() => { actRef.current = act; }, [act]);
+  const winterPenaltyRef = useRef(0);
   const campaignDoneRef = useRef(campaignDone);
   useEffect(() => { campaignDoneRef.current = campaignDone; }, [campaignDone]);
   const actIntroShownRef = useRef(false);
@@ -8714,10 +8859,29 @@ export default function CastleBuilder() {
           const finaleMult = finale ? actFinaleMult(Object.keys(actGoalsDoneRef.current).length) : 1;
           const attackerCount = Math.max(1, Math.round(attackersForYear(yearIdx) * nextAttackMultRef.current * finaleMult));
           setNextAttackMult(1);
-          setPreBattleSoldiers({ ...soldiersRef.current });
+          // Act III's finale comes after a winter shut in behind the walls.
+          let garrison = { ...soldiersRef.current };
+          winterPenaltyRef.current = 0;
+          if (finale && actRef.current === 3) {
+            const need = winterSiegeNeed(garrison.soldier + garrison.archer, villagePopRef.current);
+            const have = resourcesRef.current.food;
+            if (have >= need) {
+              setResources((r) => ({ ...r, food: Math.max(0, r.food - need) }));
+              logEvent('❄️', `Der lange Winter: Die Vorräte reichen (${need} 🌾 verbraucht)`, 'good');
+            } else {
+              const shortage = 1 - have / Math.max(1, need);
+              const lostS = Math.round(garrison.soldier * shortage * 0.3), lostA = Math.round(garrison.archer * shortage * 0.3);
+              garrison = { soldier: garrison.soldier - lostS, archer: garrison.archer - lostA };
+              setSoldiers(garrison);
+              setResources((r) => ({ ...r, food: 0 }));
+              winterPenaltyRef.current = shortage;
+              logEvent('❄️', `Der lange Winter: Hunger in der Burg — ${lostS + lostA} Männer desertiert, die übrigen geschwächt`, 'bad');
+            }
+          }
+          setPreBattleSoldiers({ ...garrison });
           setPendingBattleYear(newDate.year - 1);
           setPendingBattleSource(finale ? 'finale' : 'sachsen');
-          const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
+          const spawned = spawnBattleUnits(structuresRef.current, { ...garrison, soldier: garrison.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
           markMercenaries(spawned.units, mercenaryCountRef.current);
           empowerSpawnRef.current(spawned);
           setBattleUnits(spawned.units);
@@ -9827,6 +9991,19 @@ export default function CastleBuilder() {
       setActEvent({ type: 'failed', act });
     }
   }, [battleEvent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Späher: what's coming, reported when the warning begins -----------------------------
+  const scoutedRef = useRef(null);
+  useEffect(() => {
+    if (!kingName || !warningActive) return;
+    const key = `${calDate.year}`;
+    if (scoutedRef.current === key) return;
+    scoutedRef.current = key;
+    const report = scoutReport(yearNum, expectedAttackers);
+    const novel = yearNum === SAPPER_YEAR ? ' Neu: Mineure graben Mauern von unten aus — Gräben und Bogenschützen helfen.'
+      : yearNum === SIEGE_TOWER_YEAR ? ' Neu: Belagerungstürme machen Mauern übersteigbar — nur ein Graben hält sie auf.' : '';
+    logEvent('🔭', `Späher melden: ${report || 'ein kleiner Haufen Fußvolk'}.${novel}`, novel ? 'bad' : 'neutral');
+  }, [warningActive, kingName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Herrscher: a new rank lets the player choose an ability ------------------------------
   useEffect(() => {
@@ -11881,14 +12058,18 @@ export default function CastleBuilder() {
                           <text x="0" y={(-24 - skullT * 14).toFixed(1)} textAnchor="middle" fontSize="10" opacity={Math.max(0, 1 - skullT)}>💀</text>
                         )}
                         {!dead && u.fillingDitch && (
-                          <text x="8" y="-14" textAnchor="middle" fontSize="9">⛏️</text>
+                          <text x="8" y="-14" textAnchor="middle" fontSize="9">{u.mining ? '🕳️' : '⛏️'}</text>
                         )}
-                        {!dead && (
-                          <>
-                            <rect x="-9" y="-30" width="18" height="3" fill="#2b2118" />
-                            <rect x="-9" y="-30" width={18 * (u.hp / u.maxHp)} height="3" fill={u.side === 'attacker' ? '#a8402c' : '#4a7a3c'} />
-                          </>
-                        )}
+                        {!dead && (() => {
+                          const top = u.type === 'saxonSiegeTower' ? -70 : -30;
+                          const w = u.type === 'saxonSiegeTower' ? 26 : 18;
+                          return (
+                            <>
+                              <rect x={-w / 2} y={top} width={w} height="3" fill="#2b2118" />
+                              <rect x={-w / 2} y={top} width={w * (u.hp / u.maxHp)} height="3" fill={u.side === 'attacker' ? '#a8402c' : '#4a7a3c'} />
+                            </>
+                          );
+                        })()}
                       </g>
                     );
                   })}
@@ -12042,6 +12223,16 @@ export default function CastleBuilder() {
                   <div style={{ fontSize: '0.74rem', color: '#5A5044', marginTop: 8, lineHeight: 1.4 }}>
                     {actGoalsCount}/{actDef.goals.length} Ziele erreicht · Stärke des Finales <strong>×{finaleMultNow.toFixed(2)}</strong>
                   </div>
+                  {act === 3 && (() => {
+                    const need = winterSiegeNeed(soldiers.soldier + soldiers.archer, villagePop);
+                    const ok = resources.food >= need;
+                    return (
+                      <div className="cb-has-tip" style={{ position: 'relative', fontSize: '0.76rem', marginTop: 4, color: ok ? '#3d5a2c' : '#8a2d20' }}>
+                        ❄️ Vorräte für den langen Winter: {Math.floor(resources.food)} / {need} 🌾
+                        <div className="cb-tip">Vor dem Finale wird die Burg den Winter über eingeschlossen. Garnison und Dorf zehren dann von den Vorräten — fehlt etwas, desertieren Männer und die übrigen kämpfen geschwächt. Ein Lagerhaus vergrößert den Speicher.</div>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </div>
