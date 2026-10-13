@@ -9,7 +9,8 @@
 
 **Stand:** eingebaut sind `alchemist`, `gilde`, `turnier`, `fluechtlinge`, `baumeister`, `spion`,
 `wilderer`, `wilderer_folge`, `verraeter`, `unwetter`, `seuche`.
-Es fehlen noch: `soeldner`, `silberfund`, `brand` (dazu die vier optionalen).
+Es fehlen noch: `soeldner`, `silberfund`, `brand`. Von den optionalen ist `winter` eingebaut;
+`lehnseid`, `feldzug` und `hochkoenig` sind noch offen.
 
 Tipp: Mach alle Bilder im selben Gemini-Chat und lade die Vorlage immer wieder mit hoch. Dann bleiben König, Saal und Stil am einheitlichsten. Wenn ein Bild stilistisch abweicht, hilft: „Halte dich genauer an den Stil und den Bildaufbau der Vorlage.“
 
