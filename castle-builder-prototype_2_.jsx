@@ -1,7 +1,11 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 
-const GRID_COLS = 30;
-const GRID_ROWS = 23;
+// The realm: the original 30×23 heartland (Kernland) in the top corner, with five further
+// Landstriche to the east and south that are won over the course of the reign.
+const GRID_COLS = 46;
+const GRID_ROWS = 36;
+const KERN_COLS = 30;
+const KERN_ROWS = 23;
 
 const TILE_W = 76;
 const TILE_H = 44;
@@ -51,26 +55,153 @@ function buildTerrain() {
       if (ci >= 0 && ci < GRID_COLS) grid[j][ci] = 'water';
     }
   }
+  // ---- the Landstriche beyond the heartland ----
+  const noise = (i, j, s) => 0.6 * hash2(Math.floor(i / 2), Math.floor(j / 2), s) + 0.4 * hash2(i, j, s + 1);
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+    if (i < KERN_COLS && j < KERN_ROWS) continue;
+    const r = regionAt(i, j);
+    let t = 'grass';
+    if (r === 'ostwald') {
+      // Old forest with one clearing in the middle.
+      const dc = Math.hypot(i - 37.5, (j - 5.5) * 1.2);
+      if (dc > 3.2 && noise(i, j, 11) < 0.8) t = 'forest';
+    } else if (r === 'auen') {
+      // Strip fields between grassy paths, and a fishpond.
+      if (Math.hypot(i - 41.5, (j - 17.5) * 1.3) < 1.9) t = 'water';
+      else if ((i - 31) % 5 < 3 && (j - 13) % 4 < 3 && i >= 31 && j >= 13 && i <= 44 && j <= 21) t = 'field';
+    } else if (r === 'suedhuegel') {
+      const dc = Math.hypot((i - 6) * 1.1, j - 30);
+      if (dc < 4.6 + noise(i, j, 21) * 1.8) t = 'hill';
+      else if (noise(i, j, 23) < 0.22) t = 'forest';
+    } else if (r === 'markt') {
+      if (i >= 19 && i <= 25 && j >= 27 && j <= 31) t = 'village';
+      else if (i >= 17 && i <= 27 && j >= 25 && j <= 33 && ((i + 2 * j) % 7 < 2)) t = 'field';
+    } else if (r === 'strasse') {
+      // The king's road runs diagonally to the far corner.
+      const roadJ = 23 + Math.round((i - 30) * 12 / 15);
+      if (j === roadJ || j === roadJ + 1) t = 'road';
+      else if (Math.hypot(i - 42, j - 27) < 2.6 || Math.hypot(i - 33, j - 33) < 2) t = 'forest';
+    }
+    grid[j][i] = t;
+  }
   return grid;
+}
+// ---- Landstriche ---------------------------------------------------------------------------
+// Each region beyond the heartland is held by someone else at first: it can be taken by force
+// (a Feldzug with part of the garrison) or won over (the local lord swears the Lehnseid for
+// gold, if the king's reputation is high enough). Owned land can be built on and worked, and
+// each region brings its own lasting benefit.
+const REGION_DEFS = {
+  kern: { id: 'kern', name: 'Kernland', i0: 0, i1: KERN_COLS - 1, j0: 0, j1: KERN_ROWS - 1 },
+  ostwald: {
+    id: 'ostwald', acc: 'den Ostwald', holderDat: 'den Raubrittern vom Ostwald', short: 'Ostwald', name: 'Der Ostwald', icon: '🌲', i0: KERN_COLS, i1: GRID_COLS - 1, j0: 0, j1: 11,
+    holder: 'die Raubritter vom Ostwald', lord: 'Der Ritter vom Ostwald', strength: 12, oath: { gold: 250, rep: 55 }, needs: [],
+    perks: ['Altholz: die Bäume hier geben 60 % mehr Holz', 'Wildbret: +15 🌾 im Monat'],
+  },
+  auen: {
+    id: 'auen', acc: 'die Auen', holderDat: 'einem abtrünnigen Vogt', short: 'Auen', plural: true, name: 'Die Auen', icon: '🌾', i0: KERN_COLS, i1: GRID_COLS - 1, j0: 12, j1: KERN_ROWS - 1,
+    holder: 'ein abtrünniger Vogt', lord: 'Der Vogt der Auen', strength: 16, oath: { gold: 350, rep: 58 }, needs: [],
+    perks: ['Fruchtbare Felder: +30 % Ernte', 'Platz für 3 weitere Bauern'],
+  },
+  suedhuegel: {
+    id: 'suedhuegel', acc: 'die Südhügel', holderDat: 'dem Bergvolk', short: 'Südhügel', plural: true, name: 'Die Südhügel', icon: '⛰️', i0: 0, i1: 14, j0: KERN_ROWS, j1: GRID_ROWS - 1,
+    holder: 'das Bergvolk', lord: 'Der Älteste des Bergvolks', strength: 14, oath: { gold: 300, rep: 55 }, needs: [],
+    perks: ['Reiche Steinbrüche: 60 % mehr Stein je Fels', 'Erzadern: +10 🪙 im Monat'],
+  },
+  markt: {
+    id: 'markt', acc: 'Lindenau', holderDat: 'einem fremden Grafen', short: 'Lindenau', name: 'Marktflecken Lindenau', icon: '🏘️', i0: 15, i1: KERN_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
+    holder: 'ein fremder Graf', lord: 'Der Graf von Lindenau', strength: 20, oath: { gold: 450, rep: 62 }, needs: [],
+    perks: ['Zweites Dorf: Platz für 8 weitere Bauern', 'Markt: +25 🪙 im Monat'],
+  },
+  strasse: {
+    id: 'strasse', acc: 'die Königsstraße', holderDat: 'den Wegelagerern der Straße', short: 'Königsstraße', name: 'Die Königsstraße', icon: '🛣️', i0: KERN_COLS, i1: GRID_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
+    holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 600, rep: 68 }, needs: ['auen', 'markt'],
+    perks: ['Zoll: +40 🪙 im Monat', 'Platz für 2 weitere Bauern, Ruf +5'],
+  },
+};
+const REGION_IDS = ['ostwald', 'auen', 'suedhuegel', 'markt', 'strasse'];
+function regionAt(i, j) {
+  if (i < KERN_COLS && j < KERN_ROWS) return 'kern';
+  if (j < KERN_ROWS) return j <= 11 ? 'ostwald' : 'auen';
+  if (i < 15) return 'suedhuegel';
+  if (i < KERN_COLS) return 'markt';
+  return 'strasse';
+}
+// Mirrors the owned regions from the game state so that the plain helper functions below
+// (buildability, which trees a lumberjack may fell) can ask without threading it through.
+let OWNED_REGIONS = new Set(['kern']);
+function setOwnedRegionsGlobal(list) { OWNED_REGIONS = new Set(['kern', ...list]); }
+function isOwnedTile(i, j) { return OWNED_REGIONS.has(regionAt(i, j)); }
+function regionReachable(id, owned) {
+  const def = REGION_DEFS[id];
+  return !def.needs.length || def.needs.some((n) => owned.includes(n));
+}
+// The economic side of the realm's land.
+function regionPopBonus(owned) {
+  return (owned.includes('auen') ? 3 : 0) + (owned.includes('markt') ? 8 : 0) + (owned.includes('strasse') ? 2 : 0);
+}
+function regionGoldPerMonth(owned) {
+  return (owned.includes('suedhuegel') ? 10 : 0) + (owned.includes('markt') ? 25 : 0) + (owned.includes('strasse') ? 40 : 0);
+}
+function regionFoodPerMonth(owned) { return owned.includes('ostwald') ? 15 : 0; }
+function regionFarmMult(owned) { return owned.includes('auen') ? 1.3 : 1; }
+const EXPEDITION_DAYS = 30;
+// Fighting power of a Feldzug force, and its chance of carrying the day.
+function expeditionPower(soldier, archer, smithTier) {
+  return (soldier * 1 + archer * 0.8) * (SMITH_DAMAGE_MULT[smithTier] || 1);
+}
+function expeditionWinChance(power, strength) {
+  if (power <= 0) return 0;
+  return 1 / (1 + Math.exp(-4 * (power / strength - 1)));
+}
+function regionStrength(id, year) {
+  return Math.round(REGION_DEFS[id].strength * (1 + 0.03 * Math.max(0, year - START_YEAR)));
 }
 const TERRAIN = buildTerrain();
 function generateForestTrees() {
   const trees = [];
   let id = 0;
   for (let j = 0; j <= 6; j++) for (let i = 24; i <= 29; i++) trees.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 5, felled: false, regrowDay: null });
+  return [...trees, ...regionForestTrees()];
+}
+// Trees and rocks of the outer regions carry their region and a richer yield; ids start at
+// 1000 so they never collide with the heartland's (and can be added to older saves).
+function regionForestTrees() {
+  const trees = [];
+  let id = 1000;
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+    if (regionAt(i, j) === 'kern' || TERRAIN[j][i] !== 'forest') continue;
+    trees.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 8, full: 8, rate: 1.6, region: regionAt(i, j), felled: false, regrowDay: null });
+  }
   return trees;
 }
 function generateHillRocks() {
   const rocks = [];
   let id = 0;
   for (let j = 18; j <= 22; j++) for (let i = 0; i <= 5; i++) rocks.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 50, depleted: false });
+  return [...rocks, ...regionHillRocks()];
+}
+function regionHillRocks() {
+  const rocks = [];
+  let id = 1000;
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+    if (regionAt(i, j) === 'kern' || TERRAIN[j][i] !== 'hill') continue;
+    rocks.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 80, rate: 1.6, region: regionAt(i, j), depleted: false });
+  }
   return rocks;
+}
+// Older saves only know the heartland's trees and rocks: add the outer regions' ones.
+function withRegionNodes(list, extra) {
+  const have = new Set(list.map((n) => n.id));
+  return [...list, ...extra.filter((n) => !have.has(n.id))];
 }
 const VILLAGE_HOUSE_SPOTS = (() => {
   const spots = [];
   // Houses only ever stand on the lighter half of the checkerboard-shaded village plots (see
   // TileFace) — the darker tiles read as yards, gardens and paths between them instead.
   for (let j = 18; j <= 22; j++) for (let i = 24; i <= 29; i++) if ((i + j) % 2 !== 0) spots.push({ i, j });
+  // The market town of Lindenau fills up once the heartland village is full.
+  for (let j = 27; j <= 31; j++) for (let i = 19; i <= 25; i++) if ((i + j) % 2 !== 0) spots.push({ i, j });
   return spots;
 })();
 function terrainAt(i, j) {
@@ -81,8 +212,9 @@ function isBuildableVertex(i, j, allowWater = false) {
   const neighbors = [[i - 1, j - 1], [i, j - 1], [i - 1, j], [i, j]];
   for (const [ni, nj] of neighbors) {
     if (ni >= 0 && ni < GRID_COLS && nj >= 0 && nj < GRID_ROWS) {
+      if (!isOwnedTile(ni, nj)) return false;
       const terrain = TERRAIN[nj][ni];
-      if (terrain !== 'grass' && !(allowWater && terrain === 'water')) return false;
+      if (terrain !== 'grass' && terrain !== 'road' && !(allowWater && terrain === 'water')) return false;
     }
   }
   return true;
@@ -162,6 +294,27 @@ function isKemenateAllowed(structures, i, j) {
 
 const STONE_GATHER = { i: 2.5, j: 20 };
 const WOOD_GATHER = { i: 26.5, j: 3 };
+// Where attackers march in from. While the realm is just the heartland they come out of the
+// forest (and, later, round by the quarry hills); as the realm grows, each front moves out to
+// the edge of the land the king holds — and holding the south brings a third front with it.
+// `in` points onto the board, `side` along the line the warband spreads out on.
+function attackOrigins() {
+  const o = OWNED_REGIONS;
+  const main = o.has('ostwald')
+    ? { key: 'east', i: GRID_COLS, j: 5.5, in: [-1, 0], side: [0, 1] }
+    : { key: 'wood', i: WOOD_GATHER.i, j: WOOD_GATHER.j, in: [0, 1], side: [1, 0] };
+  const flank = o.has('suedhuegel')
+    ? { key: 'south', i: 7.5, j: GRID_ROWS, in: [0, -1], side: [1, 0] }
+    : { key: 'stone', i: STONE_GATHER.i, j: STONE_GATHER.j, in: [0, -1], side: [1, 0] };
+  let third = null;
+  if (o.has('strasse')) third = { key: 'corner', i: GRID_COLS - 0.5, j: GRID_ROWS - 0.5, in: [-0.71, -0.71], side: [0.71, -0.71] };
+  else if (o.has('markt')) third = { key: 'markt', i: 22.5, j: GRID_ROWS, in: [0, -1], side: [1, 0] };
+  else if (o.has('auen')) third = { key: 'auen', i: GRID_COLS, j: 17.5, in: [-1, 0], side: [0, 1] };
+  return { main, flank, third };
+}
+function originEntry(origin) {
+  return { i: origin.i + origin.in[0], j: origin.j + origin.in[1] };
+}
 
 const PALETTE = {
   tower: { top: '#a89f8e', left: '#7d7566', right: '#5f584a' },
@@ -1527,6 +1680,8 @@ const TERRAIN_TINTS = {
   village: ['#8f9a62', '#a0a870'],
   villageYard: ['#9a8763', '#ad9a72'],
   water: ['#3d6f86', '#4b7f96'],
+  field: ['#b29a4e', '#c4ac5c'],
+  road: ['#9c8763', '#ab966f'],
 };
 function terrainTint(terrain, i, j) {
   const key = terrain === 'village' && (i + j) % 2 === 0 ? 'villageYard' : terrain;
@@ -1603,6 +1758,18 @@ const TileFace = React.memo(function TileFace({ i, j }) {
         deco.push(<ellipse key="peb" cx={c.x} cy={c.y} rx="2.4" ry="1.4" fill="#9a9384" stroke="#5f5a50" strokeWidth="0.4" />);
       }
     }
+  } else if (terrain === 'field') {
+    // Furrows of ripening grain.
+    let d = '';
+    for (let r = 0; r < 5; r++) {
+      const a = at(0.08, 0.14 + r * 0.17), b = at(0.92, 0.14 + r * 0.17);
+      d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+    }
+    deco.push(<path key="furrows" d={d} stroke="#8a7432" strokeWidth="1.3" strokeLinecap="round" opacity="0.7" />);
+  } else if (terrain === 'road') {
+    const a = at(0.1, 0.38), b = at(0.9, 0.38), c = at(0.1, 0.62), e = at(0.9, 0.62);
+    deco.push(<path key="ruts" d={`M${a.x} ${a.y}L${b.x} ${b.y}M${c.x} ${c.y}L${e.x} ${e.y}`} stroke="rgba(70,52,30,0.4)" strokeWidth="1.2" fill="none" />);
+    if (rnd(3) < 0.4) { const p = at(0.3 + rnd(4) * 0.4, 0.5); deco.push(<ellipse key="stone" cx={p.x} cy={p.y} rx="1.8" ry="1" fill="#857660" />); }
   } else if (terrain === 'hill') {
     let d = '';
     for (let k = 0; k < 4; k++) {
@@ -4213,14 +4380,14 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
         let node = w.targetNodeId != null ? rocksIn.find((r) => r.id === w.targetNodeId && !r.depleted) : null;
         if (!node) {
           let best = null, bestD = Infinity;
-          rocksIn.forEach((r) => { if (!r.depleted) { const d = distance({ i: w.curI, j: w.curJ }, { i: r.i, j: r.j }); if (d < bestD) { bestD = d; best = r; } } });
+          rocksIn.forEach((r) => { if (!r.depleted && OWNED_REGIONS.has(r.region || 'kern')) { const d = distance({ i: w.curI, j: w.curJ }, { i: r.i, j: r.j }) / (r.rate || 1); if (d < bestD) { bestD = d; best = r; } } });
           w.targetNodeId = best ? best.id : null;
         }
       } else if (w.type === 'lumberjack') {
         let node = w.targetNodeId != null ? treesIn.find((t) => t.id === w.targetNodeId && !t.felled) : null;
         if (!node) {
           let best = null, bestD = Infinity;
-          treesIn.forEach((t) => { if (!t.felled) { const d = distance({ i: w.curI, j: w.curJ }, { i: t.i, j: t.j }); if (d < bestD) { bestD = d; best = t; } } });
+          treesIn.forEach((t) => { if (!t.felled && OWNED_REGIONS.has(t.region || 'kern')) { const d = distance({ i: w.curI, j: w.curJ }, { i: t.i, j: t.j }) / (t.rate || 1); if (d < bestD) { bestD = d; best = t; } } });
           w.targetNodeId = best ? best.id : null;
         }
       }
@@ -4336,7 +4503,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
       if (w.type === 'quarrier' && w.atTarget && w.targetNodeId != null) {
         const rock = rocks.find((r) => r.id === w.targetNodeId);
         if (rock && !rock.depleted) {
-          const take = Math.min(QUARRY_RATE_PER_TICK, rock.amount);
+          const take = Math.min(QUARRY_RATE_PER_TICK * (rock.rate || 1), rock.amount);
           rock.amount -= take;
           stonePileGain += take;
           if (rock.amount <= 0.001) { rock.depleted = true; rock.amount = 0; }
@@ -4345,7 +4512,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
       if (w.type === 'lumberjack' && w.atTarget && w.targetNodeId != null) {
         const tree = trees.find((t) => t.id === w.targetNodeId);
         if (tree && !tree.felled) {
-          const take = Math.min(LUMBER_RATE_PER_TICK, tree.amount);
+          const take = Math.min(LUMBER_RATE_PER_TICK * (tree.rate || 1), tree.amount);
           tree.amount -= take;
           woodPileGain += take;
           if (tree.amount <= 0.001) { tree.felled = true; tree.amount = 0; tree.regrowDay = currentDay + 360; }
@@ -4476,10 +4643,10 @@ function attackersForYear(year) {
   // From year 5 on the warband grows by roughly a fifth each year: steady pressure that a
   // castle growing along with it (more towers, upgrades, a bigger garrison) can keep up
   // with for a long reign, rather than an exponential wall that ends every game by year 13.
-  // After the first act the growth slows to a steady few percent a year — the reign now
+  // After the first act the growth slows to a steady eight percent a year — the reign now
   // spans four acts (forty years and more), and each act ends with its own great siege.
   if (year <= 12) return Math.round(8 * Math.pow(1.22, year - 4));
-  return Math.round(8 * Math.pow(1.22, 8) * Math.pow(1.07, year - 12));
+  return Math.round(8 * Math.pow(1.22, 8) * Math.pow(1.08, year - 12));
 }
 function saxonArcherCountForYear(year, total) {
   if (year < 2) return 0;
@@ -4508,10 +4675,11 @@ function isCastleEnclosed(structures) {
   // Attackers can approach from either the wood side or, from FLANK_YEAR on, the stone side
   // (see flankFraction in spawnBattleUnits) — so a perimeter only counts as enclosed if the
   // keep is unreachable from BOTH directions, not just the original one.
-  const starts = [
-    [Math.max(0, Math.min(GRID_COLS - 1, Math.floor(WOOD_GATHER.i))), Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(WOOD_GATHER.j)))],
-    [Math.max(0, Math.min(GRID_COLS - 1, Math.floor(STONE_GATHER.i))), Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(STONE_GATHER.j)))],
-  ];
+  const fronts = attackOrigins();
+  const starts = [fronts.main, fronts.flank, fronts.third].filter(Boolean).map((o) => {
+    const e = originEntry(o);
+    return [Math.max(0, Math.min(GRID_COLS - 1, Math.floor(e.i))), Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(e.j)))];
+  });
   const visited = new Set(starts.map(([si, sj]) => `${si},${sj}`));
   const queue = starts.map(([si, sj]) => [si, sj]);
   while (queue.length > 0) {
@@ -4682,24 +4850,28 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
   // siege quietly stalling out in difficulty once the cap is hit, the "missing" numbers get
   // folded into how hard each spawned attacker hits and how much punishment it can take — so the
   // Sachsen genuinely keep getting tougher year over year, not just differently composed.
-  const strengthMult = Math.min(4, Math.max(1, Math.sqrt(attackerCount / MAX_BATTLE_ATTACKERS)));
+  const strengthMult = Math.min(5, Math.max(1, Math.sqrt(attackerCount / MAX_BATTLE_ATTACKERS)));
   // From FLANK_YEAR on, the Sachsen no longer funnel in from a single direction — a share of
   // the force circles around and comes in from the rocky side instead (STONE_GATHER, on the
   // far side of the map from the usual approach), so a castle only ever walled and garrisoned
   // facing one direction can be caught out.
   const flankFraction = (!forcedAttackers && y >= FLANK_YEAR) ? 0.35 : 0;
   const flankEvery = flankFraction > 0 ? Math.round(1 / flankFraction) : 0;
+  const fronts = attackOrigins();
+  const useThird = !!fronts.third && !forcedAttackers && y >= FLANK_YEAR;
   for (let k = 0; k < n; k++) {
     const offI = ((k % 4) - 1.5) * 0.6;
     const offJ = Math.floor(k / 4) * 0.55;
     const type = typeSequence[k] || 'saxon';
     const hpMult = (forcedAttackers ? (forcedAttackers[k].hpMult || 1) : (type === 'enemyKnight' ? 1.8 : 1)) * strengthMult;
     const maxHp = Math.round(UNIT_MAX_HP * hpMult);
-    const fromStone = flankEvery > 0 && k % flankEvery === 0;
-    const origin = fromStone ? STONE_GATHER : WOOD_GATHER;
-    const spawnI = origin.i + offI;
-    const spawnJ = fromStone ? origin.j - 1 - offJ : origin.j + 1 + offJ;
-    units.push({ id: battleUnitIdSeq++, side: 'attacker', type, origin: fromStone ? 'stone' : 'wood', i: spawnI, j: spawnJ, hp: maxHp, maxHp, elev: 0, targetId: null, strengthMult });
+    // With three fronts the host splits roughly in thirds, otherwise about a third flanks.
+    const front = useThird ? [fronts.flank, fronts.third, fronts.main][k % 3] : (flankEvery > 0 && k % flankEvery === 0 ? fronts.flank : fronts.main);
+    const fromStone = front !== fronts.main;
+    const entry = originEntry(front);
+    const spawnI = Math.max(0.3, Math.min(GRID_COLS - 0.3, entry.i + front.side[0] * offI + front.in[0] * offJ));
+    const spawnJ = Math.max(0.3, Math.min(GRID_ROWS - 0.3, entry.j + front.side[1] * offI + front.in[1] * offJ));
+    units.push({ id: battleUnitIdSeq++, side: 'attacker', type, origin: fromStone ? 'stone' : 'wood', homeI: entry.i, homeJ: entry.j, i: spawnI, j: spawnJ, hp: maxHp, maxHp, elev: 0, targetId: null, strengthMult });
   }
   return { units, obstacles, keepPos };
 }
@@ -4787,10 +4959,17 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     if (!navCache[mode]) navCache[mode] = buildBattleNav(obstacles, keepPos, mode);
     return navCache[mode];
   };
+  // Out in open country, far from the castle and its walls, a warband comes on at a forced
+  // march — the realm is large now, and nobody wants to watch a ten-minute approach.
+  const standing = obstacles.filter((o) => !o.breached).map(obstacleMidpoint);
+  const marchMult = (u) => {
+    if (u.side !== 'attacker' || distance2(u, keepPos) < 12) return 1;
+    return standing.some((m) => distance2(u, m) < 7) ? 1 : 4;
+  };
   const stepToward = (u, p, maxStep = Infinity) => {
     const d = distance2(u, p);
     if (d < 1e-6) return;
-    const step = Math.min(1, UNIT_SPEED_PER_TICK / d, maxStep / d);
+    const step = Math.min(1, (UNIT_SPEED_PER_TICK * marchMult(u)) / d, maxStep / d);
     u.i += (p.i - u.i) * step;
     u.j += (p.j - u.j) * step;
   };
@@ -4905,10 +5084,12 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       // stop counting as a combatant at all (battle resolution treats them like they're
       // no longer part of the fight, same as a casualty, just still alive).
       const homeBase = u.origin === 'stone' ? STONE_GATHER : WOOD_GATHER;
-      const home = { i: homeBase.i, j: homeBase.j + (u.origin === 'stone' ? -1 : 1) };
+      const home = u.homeI != null ? { i: u.homeI, j: u.homeJ } : { i: homeBase.i, j: homeBase.j + (u.origin === 'stone' ? -1 : 1) };
       const d = distance2(u, home);
-      if (d < 0.6) { u.exited = true; return; }
-      const step = Math.min(1, (UNIT_SPEED_PER_TICK * ROUT_SPEED_MULT) / d);
+      // Gone for good once home — or simply far enough from the castle that they're no
+      // longer part of this fight (the realm's edge can be a long way off now).
+      if (d < 0.6 || distance2(u, keepPos) > 15) { u.exited = true; return; }
+      const step = Math.min(1, (UNIT_SPEED_PER_TICK * ROUT_SPEED_MULT * (distance2(u, keepPos) > 10 ? 2 : 1)) / d);
       u.i += (home.i - u.i) * step;
       u.j += (home.j - u.j) * step;
       return;
@@ -5180,7 +5361,7 @@ const UI_CSS = `
   .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
   @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
   @media (max-width: 2100px) { .cb-nav-label { display: none; } }
-  @media (max-width: 1500px) { .cb-navbtn { padding: 5px 6px !important; } .cb-date { min-width: 0 !important; } }
+  @media (max-width: 1500px) { .cb-navbtn { padding: 5px 5px !important; } .cb-topbar { gap: 5px !important; } .cb-chip { padding: 2px 6px; gap: 3px; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
   @media (max-width: 1400px) { .cb-chip .cb-cap { display: none; } }
   @media (max-width: 1300px) { .cb-date-sub { display: none; } .cb-topbar { gap: 4px !important; } }
@@ -5193,11 +5374,12 @@ const SEASON_ICON = ['❄️', '❄️', '🌱', '🌱', '🌸', '☀️', '☀�
 // Minimap: the whole board in miniature with every building and the current view outlined;
 // a click recentres the main view there.
 const MINIMAP_W = 210;
-const MinimapTerrain = React.memo(function MinimapTerrain() {
+const MinimapTerrain = React.memo(function MinimapTerrain({ ownedKey }) { // eslint-disable-line no-unused-vars
   const cells = [];
   for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
     const t = TERRAIN[j][i];
-    const fill = t === 'water' ? '#4b7f96' : t === 'forest' ? '#3f5a30' : t === 'hill' ? '#8a7b5d' : t === 'village' ? '#9a8a5c' : '#6f874b';
+    const base = t === 'water' ? '#4b7f96' : t === 'forest' ? '#3f5a30' : t === 'hill' ? '#8a7b5d' : t === 'village' ? '#9a8a5c' : t === 'field' ? '#b29a4e' : t === 'road' ? '#9c8763' : '#6f874b';
+    const fill = isOwnedTile(i, j) ? base : mixHex(base, '#15170f', 0.55);
     const pts = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => gridToScreen(a, b, 0));
     cells.push(<polygon key={`${i}-${j}`} points={ptsStr(pts)} fill={fill} stroke={fill} strokeWidth="2" />);
   }
@@ -5228,7 +5410,7 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
           onJump(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
         }}>
         <rect width={VIEW_W} height={VIEW_H} fill="#171a12" />
-        <MinimapTerrain />
+        <MinimapTerrain ownedKey={[...OWNED_REGIONS].join(',')} />
         {marks}
         {workers.map((w) => { const p = gridToScreen(w.curI, w.curJ, 0); return <circle key={w.id} cx={p.x} cy={p.y} r="9" fill="#ffe08a" />; })}
         {(battleUnits || []).filter((u) => u.hp > 0).map((u) => { const p = gridToScreen(u.i, u.j, 0); return <circle key={`b${u.id}`} cx={p.x} cy={p.y} r="12" fill={u.side === 'attacker' ? '#e0452f' : '#5fb2e8'} />; })}
@@ -5274,7 +5456,7 @@ const ACT_DEFS = {
     goals: [
       { id: 'ring', icon: '⭕', label: 'Einen geschlossenen Mauerring bauen', target: 1, value: (s) => (s.enclosed ? 1 : 0), reward: { gold: 80 } },
       { id: 'moat', icon: '🕳️', label: 'Grabenstücke ausheben', target: 8, value: (s) => s.graben, reward: { gold: 60 } },
-      { id: 'buildings', icon: '🏛️', label: 'Gebäude in der Burg', target: 4, value: (s) => s.amenities, reward: { gold: 60 } },
+      { id: 'land', icon: '🗺️', label: 'Einen Landstrich gewinnen', target: 1, value: (s) => s.regions, reward: { gold: 80 } },
       { id: 'tower2', icon: '🗼', label: 'Türme auf Stufe 2', target: 2, value: (s) => s.towersAtLeast(2), reward: { gold: 70 } },
       { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 60, value: (s) => s.reputation, reward: { gold: 60 } },
       { id: 'heir', icon: '👶', label: 'Einen Erben haben', target: 1, value: (s) => s.children, reward: { rep: 6 } },
@@ -5292,7 +5474,7 @@ const ACT_DEFS = {
       { id: 'amenity2', icon: '⬆️', label: 'Gebäude auf Stufe 2 oder höher', target: 3, value: (s) => s.amenitiesAtLeast(2), reward: { gold: 80 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 24, value: (s) => s.defenders, reward: { gold: 100 } },
       { id: 'knights', icon: '🐎', label: 'Ritter in Euren Diensten', target: 2, value: (s) => s.knights, reward: { rep: 6 } },
-      { id: 'treasury', icon: '🪙', label: 'Gold in der Schatzkammer', target: 400, value: (s) => s.gold, reward: { rep: 6 } },
+      { id: 'land', icon: '🗺️', label: 'Landstriche im Reich', target: 3, value: (s) => s.regions, reward: { gold: 120 } },
     ],
   },
   4: {
@@ -5302,11 +5484,11 @@ const ACT_DEFS = {
     complete: 'Der große Sturm ist gebrochen. Als der Rauch sich verzieht, knien die Fürsten des Landes vor Euch nieder.',
     reward: { gold: 500, rep: 15 },
     goals: [
-      { id: 'towers', icon: '🗼', label: 'Türme errichten', target: 8, value: (s) => s.towers, reward: { gold: 100 } },
+      { id: 'land', icon: '🗺️', label: 'Alle Landstriche im Reich', target: 5, value: (s) => s.regions, reward: { gold: 150 } },
       { id: 'amenity3', icon: '⬆️', label: 'Gebäude auf Stufe 3', target: 3, value: (s) => s.amenitiesAtLeast(3), reward: { gold: 120 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 30, value: (s) => s.defenders, reward: { gold: 120 } },
       { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 80, value: (s) => s.reputation, reward: { gold: 100 } },
-      { id: 'pop', icon: '👥', label: 'Bewohner im Dorf', target: 15, value: (s) => s.pop, reward: { gold: 80 } },
+      { id: 'pop', icon: '👥', label: 'Bewohner im Reich', target: 24, value: (s) => s.pop, reward: { gold: 80 } },
       { id: 'dynasty', icon: '🌳', label: 'Herrscher der Dynastie', target: 2, value: (s) => s.generations, reward: { rep: 8 } },
     ],
   },
@@ -6214,6 +6396,19 @@ export default function CastleBuilder() {
   const [resources, setResources] = useState({ gold: 80, stone: 20, wood: 20, food: 60 });
   const [piles, setPiles] = useState({ stone: 0, wood: 0 });
   const [forestTrees, setForestTrees] = useState(() => generateForestTrees());
+  // ---- Landstriche: owned regions beyond the heartland, and a Feldzug under way ----------
+  const [ownedRegions, setOwnedRegions] = useState([]);
+  const [expedition, setExpedition] = useState(null);
+  const [reichFocus, setReichFocus] = useState(null);
+  const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0 });
+  const ownedRegionsRef = useRef(ownedRegions);
+  useEffect(() => { ownedRegionsRef.current = ownedRegions; }, [ownedRegions]);
+  setOwnedRegionsGlobal(ownedRegions); // keep the module-level helpers in step, every render
+  const villageCap = MAX_VILLAGE_POP + regionPopBonus(ownedRegions);
+  const expeditionRef = useRef(expedition);
+  useEffect(() => { expeditionRef.current = expedition; }, [expedition]);
+  const claimRegionRef = useRef(null);
+  const resolveExpeditionRef = useRef(null);
   const [hillRocks, setHillRocks] = useState(() => generateHillRocks());
   const [taxRate, setTaxRate] = useState(50);
   const [haulPriority, setHaulPriority] = useState('auto');
@@ -6526,7 +6721,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats };
+    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -6587,7 +6782,7 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats };
+    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
     if (!('act' in st)) {
       const y = getCalendarDate(st.day).year;
@@ -6597,6 +6792,11 @@ export default function CastleBuilder() {
     }
     setActEvent(null);
     actIntroShownRef.current = true;
+    // Saves from before the larger map: add the outer regions' trees and rocks, and look at
+    // the castle again (the board itself has moved on screen).
+    setForestTrees((list) => withRegionNodes(list, regionForestTrees()));
+    setHillRocks((list) => withRegionNodes(list, regionHillRocks()));
+    setTimeout(() => centerOnCastleRef.current && centerOnCastleRef.current(), 0);
     const maxWorkerId = (st.workerUnits || []).reduce((m, w) => Math.max(m, w.id || 0), 0);
     workerIdSeq = Math.max(workerIdSeq, maxWorkerId + 1);
     setIsPaused(true);
@@ -6674,6 +6874,49 @@ export default function CastleBuilder() {
     setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
   }, []);
   const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
+  // ---- Landgewinn ----------------------------------------------------------------------------
+  const claimRegion = (id, how) => {
+    const def = REGION_DEFS[id];
+    setOwnedRegions((list) => (list.includes(id) ? list : [...list, id]));
+    if (id === 'strasse') setReputation((r) => Math.min(100, r + 5));
+    logEvent(def.icon, `${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich (${how})`, 'good');
+    SOUND.play('victory');
+  };
+  claimRegionRef.current = claimRegion;
+  resolveExpeditionRef.current = (exp) => {
+    const def = REGION_DEFS[exp.region];
+    const sent = exp.soldier + exp.archer;
+    const won = Math.random() < exp.chance;
+    const lossShare = won ? Math.max(0.05, Math.min(0.4, 0.3 * exp.strength / Math.max(1, exp.power))) : 0.45 + Math.random() * 0.25;
+    const lostS = Math.min(exp.soldier, Math.round(exp.soldier * lossShare));
+    const lostA = Math.min(exp.archer, Math.round(exp.archer * lossShare * 0.7));
+    setSoldiers((sv) => ({ soldier: sv.soldier + exp.soldier - lostS, archer: sv.archer + exp.archer - lostA }));
+    setExpedition(null);
+    if (won) {
+      claimRegion(exp.region, 'erobert');
+      setReputation((r) => Math.min(100, r + 3));
+      setEventOutcome({ emoji: def.icon, tone: 'good', title: `${def.name} ${def.plural ? 'sind' : 'ist'} erobert!`, text: `Euer Heer war ${def.holderDat} überlegen und hat das Banner des Reiches über ${def.acc} gehisst. ${lostS + lostA > 0 ? `${lostS + lostA} von ${sent} Männern sind gefallen.` : 'Kein einziger Mann ist gefallen.'} Ab sofort könnt Ihr dort bauen und das Land bewirtschaften.` });
+    } else {
+      setReputation((r) => Math.max(0, r - 4));
+      logEvent('🏴', `Der Feldzug gegen ${def.acc} ist gescheitert`, 'bad');
+      setEventOutcome({ emoji: '🏴', tone: 'bad', title: 'Der Feldzug ist gescheitert', text: `${def.holder.charAt(0).toUpperCase() + def.holder.slice(1)} hat Euer Heer zurückgeschlagen. ${lostS + lostA} von ${sent} Männern sind nicht heimgekehrt. Mit mehr Truppen oder einer besseren Schmiede steigen die Aussichten.` });
+    }
+  };
+  const startExpedition = (id, soldier, archer) => {
+    const year = getCalendarDate(dayRef.current).year;
+    const strength = regionStrength(id, year);
+    const power = expeditionPower(soldier, archer, smithTier);
+    setSoldiers((sv) => ({ soldier: sv.soldier - soldier, archer: sv.archer - archer }));
+    setExpedition({ region: id, soldier, archer, power, strength, chance: expeditionWinChance(power, strength), departDay: dayRef.current, returnDay: dayRef.current + EXPEDITION_DAYS });
+    logEvent('⚔️', `Feldzug gegen ${REGION_DEFS[id].acc} aufgebrochen (${soldier + archer} Mann)`, 'neutral');
+    SOUND.play('warhorn');
+  };
+  const swearOath = (id) => {
+    const def = REGION_DEFS[id];
+    setResources((r) => ({ ...r, gold: r.gold - def.oath.gold }));
+    claimRegion(id, 'Lehnseid');
+    setEventOutcome({ emoji: '📜', tone: 'good', title: 'Der Lehnseid', text: `${def.lord} kniet vor Euch nieder, legt seine Hände in die Euren und schwört Euch Treue. ${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich — die ${def.oath.gold} 🪙 sind gut angelegt.` });
+  };
   useEffect(() => {
     if (!toasts.length) return undefined;
     const t = setTimeout(() => setToastNow(Date.now()), 1000);
@@ -7361,7 +7604,7 @@ export default function CastleBuilder() {
             desc: '+2 Dorfbewohner, −25 Nahrung, Ruf +6. Doch nicht jeder Fremde kommt in guter Absicht…',
             disabled: resourcesRef.current.food < 25,
             apply: () => {
-              setVillagePop((p) => Math.min(MAX_VILLAGE_POP, p + 2));
+              setVillagePop((p) => Math.min(MAX_VILLAGE_POP + regionPopBonus(ownedRegionsRef.current), p + 2));
               setResources((r) => ({ ...r, food: Math.max(0, r.food - 25) }));
               adjustRep(6);
               // One in four times a Saxon agent slipped in with them — he'll be found out
@@ -7967,6 +8210,13 @@ export default function CastleBuilder() {
     const p = gridToScreen(k ? k.i : DEPOT_I, k ? k.j : DEPOT_J - 2, 0);
     jumpTo(p.x, p.y);
   }, [jumpTo]);
+  const centerOnCastleRef = useRef(null);
+  centerOnCastleRef.current = centerOnCastle;
+  // The board is far larger than the screen: start out looking at the heartland.
+  const initialCenterRef = useRef(0);
+  useEffect(() => {
+    if (initialCenterRef.current < 2) { initialCenterRef.current += 1; centerOnCastle(); }
+  }, [viewportSize]); // eslint-disable-line react-hooks/exhaustive-deps
   const [helpOpen, setHelpOpen] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   useEffect(() => {
@@ -8078,8 +8328,8 @@ export default function CastleBuilder() {
         const brunnenBonusForecast = brunnenFoodPerMonth(structuresRef.current);
         const brauhausBuiltForecast = hasDoneAmenity(structuresRef.current, 'brauhaus');
         const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
-        const farmFoodPerDayForecast = onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH;
-        const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100)) / MONTH_LENGTH;
+        const farmFoodPerDayForecast = (onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast * regionFarmMult(ownedRegionsRef.current) + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH) + regionFoodPerMonth(ownedRegionsRef.current) / MONTH_LENGTH;
+        const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
 
         const netGoldPerDay = villageGoldPerDayForecast - totalWage;
         const netFoodPerDay = farmFoodPerDayForecast - totalFood;
@@ -8104,6 +8354,13 @@ export default function CastleBuilder() {
         desertionForecastWarnedRef.current = false;
       }
 
+      // A Feldzug comes home.
+      const exp = expeditionRef.current;
+      if (exp && dayRef.current + 1 >= exp.returnDay) {
+        expeditionRef.current = null;
+        resolveExpeditionRef.current(exp);
+      }
+
       setDay((d) => {
         const newDay = d + 1;
         const onStrikeNow = happinessRef.current < STRIKE_THRESHOLD;
@@ -8113,8 +8370,9 @@ export default function CastleBuilder() {
           const brunnenBonusPerMonth = brunnenFoodPerMonth(structuresRef.current);
           const brauhausBuiltNow = hasDoneAmenity(structuresRef.current, 'brauhaus');
           const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
-          const farmFoodPerDay = onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH;
-          const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100)) / MONTH_LENGTH;
+          const owned = ownedRegionsRef.current;
+          const farmFoodPerDay = (onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult * regionFarmMult(owned) + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH) + regionFoodPerMonth(owned) / MONTH_LENGTH;
+          const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) + regionGoldPerMonth(owned)) / MONTH_LENGTH;
           const foodCap = storageCapacity(structuresRef.current);
           return {
             ...prev,
@@ -8184,7 +8442,7 @@ export default function CastleBuilder() {
         if (newDay % (GROWTH_INTERVAL_DAYS / 2) === 0) {
           const h = happinessRef.current;
           if (h >= 60 || (newDay % GROWTH_INTERVAL_DAYS === 0 && h >= STRIKE_THRESHOLD)) {
-            setVillagePop((p) => Math.min(MAX_VILLAGE_POP, p + 1));
+            setVillagePop((p) => Math.min(MAX_VILLAGE_POP + regionPopBonus(ownedRegionsRef.current), p + 1));
           }
         }
 
@@ -8193,7 +8451,7 @@ export default function CastleBuilder() {
           const next = prev.map((t) => {
             if (t.felled && t.regrowDay != null && newDay >= t.regrowDay) {
               changed = true;
-              return { ...t, felled: false, amount: 5, regrowDay: null };
+              return { ...t, felled: false, amount: t.full || 5, regrowDay: null };
             }
             return t;
           });
@@ -8611,45 +8869,56 @@ export default function CastleBuilder() {
     return () => clearTimeout(timer);
   }, [battlePhase, raidEvent, pendingBattleYear, pendingBattleSource]);
 
+  // Click targets only cover the realm's own land: everything else can't be built on anyway,
+  // and the board is big enough now that offering it all would slow every frame down.
+  const nearOwned = (i, j) => [[i - 1, j - 1], [i, j - 1], [i - 1, j], [i, j]].some(([a, b]) => a >= 0 && b >= 0 && a < GRID_COLS && b < GRID_ROWS && isOwnedTile(a, b));
+  const ownedKey = ownedRegions.join(',');
   const vertices = useMemo(() => {
     const list = [];
-    for (let j = 0; j <= GRID_ROWS; j++) for (let i = 0; i <= GRID_COLS; i++) list.push({ key: `${i},${j}`, i, j });
+    for (let j = 0; j <= GRID_ROWS; j++) for (let i = 0; i <= GRID_COLS; i++) if (nearOwned(i, j)) list.push({ key: `${i},${j}`, i, j });
     return list;
-  }, []);
+  }, [ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edges = useMemo(() => {
     const list = [];
-    for (let j = 0; j <= GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push({ key: `${i},${j}-${i + 1},${j}`, i1: i, j1: j, i2: i + 1, j2: j });
-    for (let i = 0; i <= GRID_COLS; i++) for (let j = 0; j < GRID_ROWS; j++) list.push({ key: `${i},${j}-${i},${j + 1}`, i1: i, j1: j, i2: i, j2: j + 1 });
+    for (let j = 0; j <= GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (nearOwned(i, j) || nearOwned(i + 1, j)) list.push({ key: `${i},${j}-${i + 1},${j}`, i1: i, j1: j, i2: i + 1, j2: j });
+    for (let i = 0; i <= GRID_COLS; i++) for (let j = 0; j < GRID_ROWS; j++) if (nearOwned(i, j) || nearOwned(i, j + 1)) list.push({ key: `${i},${j}-${i},${j + 1}`, i1: i, j1: j, i2: i, j2: j + 1 });
     // The two corner-to-corner diagonals of every tile — only wall pieces (not gates or a
     // graben) can go here, see handleEdgeClick, but the hit targets themselves are offered
     // everywhere so an already-built diagonal wall stays clickable to inspect or delete too.
     for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+      if (!isOwnedTile(i, j)) continue;
       list.push({ key: `diag:${i},${j}-${i + 1},${j + 1}`, i1: i, j1: j, i2: i + 1, j2: j + 1, diagonal: true });
       list.push({ key: `diag:${i + 1},${j}-${i},${j + 1}`, i1: i + 1, j1: j, i2: i, j2: j + 1, diagonal: true });
     }
     return list;
-  }, []);
+  }, [ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tiles = useMemo(() => {
     const list = [];
-    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push({ i, j });
+    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (isOwnedTile(i, j)) list.push({ i, j });
     return list;
-  }, []);
+  }, [ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const props = useMemo(() => {
     const list = [];
+    // Trees and rocks on land the realm doesn't hold yet stand in the haze of the fog.
+    const foreign = (n) => !OWNED_REGIONS.has(n.region || 'kern');
     forestTrees.forEach((t) => {
-      if (!t.felled) list.push({ depth: t.i + t.j + 0.5, node: <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} /> });
+      if (t.felled) return;
+      const node = <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} />;
+      list.push({ depth: t.i + t.j + 0.5, node: foreign(t) ? <g key={`tree-${t.id}`} opacity="0.5">{node}</g> : node });
     });
     hillRocks.forEach((r) => {
-      if (!r.depleted) list.push({ depth: r.i + r.j + 0.5, node: <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} /> });
+      if (r.depleted) return;
+      const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
+      list.push({ depth: r.i + r.j + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
     });
     VILLAGE_HOUSE_SPOTS.slice(0, villagePop).forEach((spot, idx) => {
       list.push({ depth: spot.i + spot.j + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
     });
     return list;
-  }, [forestTrees, hillRocks, villagePop]);
+  }, [forestTrees, hillRocks, villagePop, ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edgeInteractive = !battlePhase && (tool === 'wall' || tool === 'gate' || tool === 'graben' || tool === 'delete' || tool === null);
   const vertexInteractive = !battlePhase && (tool === 'tower' || tool === 'delete' || tool === null);
@@ -9258,7 +9527,9 @@ export default function CastleBuilder() {
   const brunnenActive = hasDoneAmenity(structures, 'brunnen');
   const bakeryMultNow = bakeryFoodMult(structures, bakeryUpgraded);
   const brunnenFoodNow = brunnenFoodPerMonth(structures);
-  const farmFoodPerMonth = onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * bakeryMultNow + brunnenFoodNow;
+  const regionGoldNow = regionGoldPerMonth(ownedRegions);
+  const regionFoodNow = regionFoodPerMonth(ownedRegions);
+  const farmFoodPerMonth = (onStrike ? 0 : farmersCount * FOOD_PER_FARMER_PER_MONTH * bakeryMultNow * regionFarmMult(ownedRegions) + brunnenFoodNow) + regionFoodNow;
 
   const yearNum = calDate.year - START_YEAR + 1;
   const daysUntilAttack = daysUntilYearEnd(day);
@@ -9272,7 +9543,7 @@ export default function CastleBuilder() {
     keepDone: !!keepDone, walls: doneWalls, gates: doneGates, towers: doneTowers, graben: doneGraben, amenities: doneAmenities,
     pop: villagePop, defenders: soldiers.soldier + soldiers.archer, knights: recruitedKnightIds.length,
     reputation: Math.round(reputation), gold: Math.floor(resources.gold), enclosed: enclosedNow,
-    children: royalFamily.children.length, generations: dynastyAncestors.length + 1,
+    children: royalFamily.children.length, generations: dynastyAncestors.length + 1, regions: ownedRegions.length,
     towersAtLeast: (l) => values.filter((x) => x.type === 'tower' && x.stage === 'done' && (x.level || 1) >= l).length,
     amenitiesAtLeast: (l) => values.filter((x) => x.type === 'amenity' && x.stage === 'done' && (x.level || 1) >= l).length,
   };
@@ -9440,7 +9711,7 @@ export default function CastleBuilder() {
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
   const contractsPerMonth = contracts.reduce((sum, c) => sum + (day <= c.untilDay ? c.perMonth : 0), 0);
   const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
-  const goldNetPerMonth = villageGoldPerMonth + contractsPerMonth - wagePerDay * MONTH_LENGTH;
+  const goldNetPerMonth = villageGoldPerMonth + regionGoldNow + contractsPerMonth - wagePerDay * MONTH_LENGTH;
   const foodNetPerMonth = farmFoodPerMonth + brauhausFoodNow - foodPerDayTotal * MONTH_LENGTH;
   const unreadChronicle = Math.max(0, chronicle.length - chronicleSeen);
   const financeRows = [
@@ -9974,6 +10245,7 @@ export default function CastleBuilder() {
             <div className="cb-tip">
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Gold pro Monat</div>
               <div className="cb-tip-row"><span>Steuern ({taxRate} %)</span><span>+{villageGoldPerMonth}</span></div>
+              {regionGoldNow > 0 && <div className="cb-tip-row"><span>Landstriche</span><span>+{regionGoldNow}</span></div>}
               {contractsPerMonth > 0 && <div className="cb-tip-row"><span>Verträge & Silber</span><span>+{contractsPerMonth}</span></div>}
               <div className="cb-tip-row"><span>Löhne & Unterhalt</span><span>−{(wagePerDay * MONTH_LENGTH).toFixed(0)}</span></div>
               <div className="cb-tip-row" style={{ borderTop: '1px solid rgba(43,36,32,0.25)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}><span>Bilanz</span><span>{goldNetPerMonth >= 0 ? '+' : ''}{goldNetPerMonth.toFixed(0)}</span></div>
@@ -10001,7 +10273,7 @@ export default function CastleBuilder() {
             <span style={{ fontSize: '0.8rem', color: happiness >= 60 ? '#a5d87f' : happiness >= STRIKE_THRESHOLD ? '#e8d27a' : '#ff9e86' }}>{happiness >= 60 ? '☺' : happiness >= STRIKE_THRESHOLD ? '😐' : '😠'} {Math.round(happiness)}</span>
             <div className="cb-tip">
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Dorf</div>
-              <div>{villagePop} von {MAX_VILLAGE_POP} Bewohnern, Zufriedenheit {Math.round(happiness)}.</div>
+              <div>{villagePop} von {villageCap} Bewohnern, Zufriedenheit {Math.round(happiness)}.</div>
               <div style={{ marginTop: 4 }}>{happiness >= 60 ? 'Das Dorf wächst zweimal im Jahr.' : happiness >= STRIKE_THRESHOLD ? 'Das Dorf wächst einmal im Jahr — ab 60 Zufriedenheit doppelt so schnell.' : 'Die Bauern streiken! Kein Wachstum, keine Ernte.'}</div>
             </div>
           </div>
@@ -10029,6 +10301,7 @@ export default function CastleBuilder() {
             { id: 'dynastie', icon: '👑', label: 'Dynastie' },
             { id: 'hof', icon: '🎭', label: 'Hof' },
             { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
+            { id: 'reich', icon: '🗺️', label: 'Reich' },
             { id: 'speicher', icon: '💾', label: 'Spielstände' },
           ].map((p) => (
             <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark cb-navbtn${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
@@ -10465,6 +10738,92 @@ export default function CastleBuilder() {
         );
       })()}
 
+      {openPanel === 'reich' && (
+        <Modal title="🗺️ Das Reich" onClose={() => { setOpenPanel(null); setReichFocus(null); }} maxWidth={720}>
+          {(() => {
+            const year = calDate.year;
+            const focus = reichFocus || REGION_IDS.find((id) => !ownedRegions.includes(id) && regionReachable(id, ownedRegions)) || REGION_IDS[0];
+            const busy = !!battlePhase;
+            return (
+              <>
+                <div style={{ fontSize: '0.92rem', lineHeight: 1.55, marginBottom: 10 }}>
+                  Euer Reich umfasst <strong>{ownedRegions.length + 1} von {REGION_IDS.length + 1}</strong> Landstrichen. Fremdes Land lässt sich <strong>erobern</strong> — mit einem Feldzug, für den Ihr einen Teil der Garnison {EXPEDITION_DAYS} Tage lang entbehren müsst — oder sein Herr leistet Euch den <strong>Lehnseid</strong>, wenn Euer Ruf groß genug ist und das Gold stimmt.
+                </div>
+                {expedition && (
+                  <div className="cb-parch" style={{ padding: '8px 12px', marginBottom: 10, background: 'rgba(168,64,44,0.12)', boxShadow: 'none' }}>
+                    ⚔️ <strong>Feldzug gegen {REGION_DEFS[expedition.region].acc}</strong> — {expedition.soldier} Soldaten, {expedition.archer} Bogenschützen. Rückkehr in {Math.max(0, expedition.returnDay - day)} Tagen · Aussicht auf Sieg etwa {Math.round(expedition.chance * 100)} %.
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {REGION_IDS.map((id) => {
+                    const d = REGION_DEFS[id];
+                    const owned = ownedRegions.includes(id);
+                    const reachable = regionReachable(id, ownedRegions);
+                    const open = id === focus && !owned;
+                    const strength = regionStrength(id, year);
+                    return (
+                      <div key={id} className="cb-parch" style={{ padding: '9px 12px', boxShadow: open ? 'inset 0 0 0 2px #c9a24b' : 'inset 0 0 0 1px rgba(201,162,75,0.35)', background: owned ? 'linear-gradient(180deg,#eef0d6,#dfe2b8)' : undefined, cursor: owned || open ? 'default' : 'pointer' }}
+                        onClick={() => { if (!owned && !open) setReichFocus(id); }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                          <span className="cb-title" style={{ fontSize: '0.98rem' }}>{d.icon} {d.name}</span>
+                          <span style={{ fontSize: '0.8rem', color: owned ? '#3d5a2c' : '#6b5536', fontStyle: 'italic' }}>
+                            {owned ? '✅ gehört zum Reich' : !reachable ? `erreichbar über ${d.needs.map((n) => REGION_DEFS[n].short).join(' oder ')}` : `in der Hand von ${d.holderDat}`}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.82rem', color: '#4a4034', marginTop: 3 }}>{d.perks.join(' · ')}</div>
+                        {open && reachable && (() => {
+                          const maxS = soldiers.soldier, maxA = soldiers.archer;
+                          const sendS = Math.min(expDraft.soldier, maxS), sendA = Math.min(expDraft.archer, maxA);
+                          const power = expeditionPower(sendS, sendA, smithTier);
+                          const chance = expeditionWinChance(power, strength);
+                          const canSend = !expedition && !busy && sendS + sendA > 0;
+                          const repOk = reputation >= d.oath.rep, goldOk = resources.gold >= d.oath.gold;
+                          return (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 12, marginTop: 10 }}>
+                              <div style={{ borderRight: '1px solid rgba(59,46,31,0.2)', paddingRight: 12 }}>
+                                <div className="cb-section-title" style={{ marginBottom: 6 }}>⚔️ Feldzug</div>
+                                <div style={{ fontSize: '0.8rem', marginBottom: 6 }}>Stärke der Verteidiger: <strong>{strength}</strong></div>
+                                {[['soldier', '🛡️ Soldaten', maxS, sendS], ['archer', '🏹 Bogenschützen', maxA, sendA]].map(([key, label, max, val]) => (
+                                  <label key={key} style={{ display: 'grid', gridTemplateColumns: '108px 1fr 30px', alignItems: 'center', gap: 6, fontSize: '0.82rem', marginBottom: 3 }}>
+                                    <span>{label}</span>
+                                    <input type="range" min="0" max={max} value={val} disabled={!max || !!expedition} onChange={(e) => setExpDraft((x) => ({ ...x, [key]: Number(e.target.value) }))} style={{ accentColor: '#a8822e' }} />
+                                    <span style={{ textAlign: 'right' }}>{val}</span>
+                                  </label>
+                                ))}
+                                <div style={{ fontSize: '0.8rem', margin: '4px 0 6px' }}>
+                                  Kampfkraft <strong>{power.toFixed(0)}</strong> · Aussicht auf Sieg <strong style={{ color: chance >= 0.7 ? '#3d5a2c' : chance >= 0.4 ? '#7a5a20' : '#8a2d20' }}>{Math.round(chance * 100)} %</strong>
+                                  <div className="cb-meter" style={{ marginTop: 4 }}><div style={{ width: `${chance * 100}%`, background: chance >= 0.7 ? '#5d8a3c' : chance >= 0.4 ? '#c9a24b' : '#a8402c' }} /></div>
+                                </div>
+                                <button className="cb-btn is-active" disabled={!canSend} onClick={() => { startExpedition(id, sendS, sendA); setExpDraft({ soldier: 0, archer: 0 }); setOpenPanel(null); setReichFocus(null); }}
+                                  style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem' }}
+                                  title={expedition ? 'Es ist schon ein Feldzug unterwegs' : busy ? 'Nicht während einer Schlacht' : ''}>
+                                  {expedition ? 'Ein Feldzug ist schon unterwegs' : `Aufbrechen (${EXPEDITION_DAYS} Tage)`}
+                                </button>
+                                <div style={{ fontSize: '0.72rem', color: '#6b5536', fontStyle: 'italic', marginTop: 4, lineHeight: 1.35 }}>Wer auszieht, fehlt so lange daheim — auch wenn die Sachsen kommen.</div>
+                              </div>
+                              <div>
+                                <div className="cb-section-title" style={{ marginBottom: 6 }}>📜 Lehnseid</div>
+                                <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
+                                  {d.lord} würde Euch die Treue schwören:
+                                  <div style={{ color: repOk ? '#3d5a2c' : '#8a2d20' }}>{repOk ? '✔' : '✘'} Ruf mindestens {d.oath.rep} (jetzt {Math.round(reputation)})</div>
+                                  <div style={{ color: goldOk ? '#3d5a2c' : '#8a2d20' }}>{goldOk ? '✔' : '✘'} {d.oath.gold} 🪙 als Geschenk</div>
+                                </div>
+                                <button className="cb-btn is-active" disabled={!repOk || !goldOk || busy || (expedition && expedition.region === id)} onClick={() => { setOpenPanel(null); setReichFocus(null); swearOath(id); }}
+                                  style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem', marginTop: 8 }}>Lehnseid annehmen</button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            );
+          })()}
+        </Modal>
+      )}
+
       {openPanel === 'einstellungen' && (
         <Modal title="⚙️ Klang & Einstellungen" onClose={() => setOpenPanel(null)} maxWidth={440}>
           <div className="cb-section-title">Klang</div>
@@ -10557,7 +10916,7 @@ export default function CastleBuilder() {
 
       {openPanel === 'dorf' && (
         <Modal title="Dorf &amp; Frondienste" onClose={() => setOpenPanel(null)}>
-          <div style={{ fontSize: '0.9rem', marginBottom: 8 }}>🧑‍🌾 Dorfbevölkerung: <strong>{villagePop}</strong> / {MAX_VILLAGE_POP}</div>
+          <div style={{ fontSize: '0.9rem', marginBottom: 8 }}>🧑‍🌾 Dorfbevölkerung: <strong>{villagePop}</strong> / {villageCap}</div>
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 3 }}>
               <span>😊 Zufriedenheit</span>
@@ -10595,7 +10954,7 @@ export default function CastleBuilder() {
             </div>
           )}
           <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
-            Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} verweigern die Bauern die Arbeit. Das Dorf wächst von selbst weiter, bis zu {MAX_VILLAGE_POP} Bauern.
+            Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} verweigern die Bauern die Arbeit. Das Dorf wächst von selbst weiter, bis zu {villageCap} Bauern — mehr Land bietet Platz für mehr.
           </p>
         </Modal>
       )}
@@ -11027,8 +11386,32 @@ export default function CastleBuilder() {
                 <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
                 <MapBase />
                 <g>{groundLayer}</g>
+                <g pointerEvents="none">
+                  {REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
+                    const d = REGION_DEFS[id];
+                    const pts = [[d.i0, d.j0], [d.i1 + 1, d.j0], [d.i1 + 1, d.j1 + 1], [d.i0, d.j1 + 1]].map(([a, b]) => gridToScreen(a, b, 0));
+                    return <polygon key={`fog-${id}`} points={ptsStr(pts)} fill="rgba(14,16,10,0.5)" stroke="rgba(201,162,75,0.35)" strokeWidth="2" strokeDasharray="10 8" />;
+                  })}
+                </g>
                 <g>{drawables.map((d) => d.node)}</g>
                 <CloudShadows />
+                <g>
+                  {REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
+                    const d = REGION_DEFS[id];
+                    const c = gridToScreen((d.i0 + d.i1 + 1) / 2, (d.j0 + d.j1 + 1) / 2, 0);
+                    const away = expedition && expedition.region === id;
+                    const reachable = regionReachable(id, ownedRegions);
+                    const sub = away ? '⚔️ Euer Feldzug ist unterwegs' : reachable ? 'Erobern oder Lehnseid — klicken' : `erreichbar über ${d.needs.map((n) => REGION_DEFS[n].short).join(' oder ')}`;
+                    return (
+                      <g key={`banner-${id}`} transform={`translate(${c.x}, ${c.y})`} style={{ cursor: 'pointer' }}
+                        onClick={(e) => { e.stopPropagation(); setReichFocus(id); setOpenPanel('reich'); }}>
+                        <rect x="-118" y="-24" width="236" height="48" rx="7" fill="rgba(24,18,11,0.82)" stroke="#c9a24b" strokeWidth="1.5" />
+                        <text x="0" y="-3" textAnchor="middle" fill="#f5e6b0" style={{ fontFamily: "'Cinzel', serif", fontSize: 15, letterSpacing: '0.04em' }}>{d.icon} {d.name}</text>
+                        <text x="0" y="15" textAnchor="middle" fill={away ? '#f0c060' : '#c9b78f'} style={{ fontFamily: "'EB Garamond', serif", fontSize: 12.5, fontStyle: 'italic' }}>{sub}</text>
+                      </g>
+                    );
+                  })}
+                </g>
                 <g>
                   {edges.map((e) => {
                     // Previously the click target sat only at ground level, but a finished
