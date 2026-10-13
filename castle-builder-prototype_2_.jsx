@@ -650,7 +650,10 @@ const ARCHER_DAMAGE_PER_TICK = 0.17;
 // draw before the next shot. Fewer, heavier hits keep the average damage output similar.
 const ARCHER_RELOAD_TICKS = 10; // ~1.5s between shots at 1x speed
 const ARCHER_SHOT_DAMAGE = ARCHER_DAMAGE_PER_TICK * ARCHER_RELOAD_TICKS;
-const DITCH_FILL_EXPOSED_MULT = 2; // shovelling dirt into a moat under fire is dangerous work
+const DITCH_FILL_EXPOSED_MULT = 2.5; // shovelling dirt into a moat under fire is dangerous work
+// An intact moat keeps the enemy's bowmen at a distance: arrows that have to fly across one
+// lose much of their bite.
+const MOAT_ARROW_MULT = 0.6;
 const SOLDIER_DAMAGE_PER_TICK = 0.42;
 const UNIT_SPEED_PER_TICK = 0.13;
 const MAX_BATTLE_ATTACKERS = 24;
@@ -954,7 +957,7 @@ const COURT_RIVALRY_ROUNDS = [
 
 const GATE_SIEGE_HP = 6;
 const WALL_SIEGE_HP = 9;
-const DITCH_SIEGE_HP = 18;
+const DITCH_SIEGE_HP = 26;
 const TOWER_SIEGE_HP = 11;
 // The keep itself: if an unopposed attacker reaches it (no living defender left to fight,
 // and no wall/gate/ditch segment still barring the way), they start tearing it down directly.
@@ -5025,6 +5028,8 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   // clean hits get deflected or glance off more often. Once every wall segment has fallen,
   // there's nothing left to hide behind and this protection disappears entirely.
   const anyWallStanding = obstacles.some((o) => (o.type === 'wall' || o.type === 'gate') && !o.breached && o.hp > 0);
+  const intactMoat = obstacles.filter((o) => o.type === 'graben' && !o.breached && o.hp > 0);
+  const acrossMoat = (a, b) => intactMoat.some((o) => segmentsIntersect(a, b, { i: o.i1, j: o.j1 }, { i: o.i2, j: o.j2 }));
   const wallShieldMult = anyWallStanding ? 0.72 : 1;
   // Whether a battering ram / catapult is still active on the field this tick — see the
   // "engineHandlesIt" note further down for what this gates.
@@ -5086,6 +5091,8 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       if (engineHandlesIt) return false;
       // Filling in a ditch means standing out in the open shovelling dirt for a while —
       // defenders get a clean shot at anyone doing it.
+      // Rams and siege engines can't fill a ditch — they wait for the men with shovels.
+      if (blocker.type === 'graben' && (u.type === 'saxonRam' || u.type === 'saxonCatapult')) return false;
       if (blocker.type === 'graben') u.fillingDitch = true;
       blocker.hp = Math.max(0, blocker.hp - GATE_DAMAGE_PER_TICK * moraleDmgMult);
       if (blocker.hp <= 0) blocker.breached = true;
@@ -5207,7 +5214,8 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       if (u.type === 'saxonCatapult') {
         let target = null, bestD = Infinity;
         obstacles.forEach((o) => {
-          if (o.breached || o.hp <= 0) return;
+          // A stone thrown into a ditch does nothing — catapults aim at masonry.
+          if (o.breached || o.hp <= 0 || o.type === 'graben') return;
           const mid = obstacleMidpoint(o);
           const d = distance2(u, mid);
           if (d < bestD) { bestD = d; target = o; }
@@ -5268,7 +5276,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
                 u.reloadTicks = reloadLeft;
               } else {
                 const wasAlive = target.hp > 0;
-                const shield = target.type === 'champion' ? (target.armor || 1) : wallShieldMult;
+                const shield = (target.type === 'champion' ? (target.armor || 1) : wallShieldMult) * (acrossMoat(u, target) ? MOAT_ARROW_MULT : 1);
                 target.hp = Math.max(0, target.hp - ARCHER_SHOT_DAMAGE * moraleDmgMult * (u.strengthMult || 1) * elevationDefenseMult(target.elev) * shield);
                 if (wasAlive && target.hp <= 0) target.diedAtTick = tickCount || 0;
                 shots.push({ fromI: u.i, fromJ: u.j, fromElev: u.elev || 0, toI: target.i, toJ: target.j, toElev: target.elev || 0 });
