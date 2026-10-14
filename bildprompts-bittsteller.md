@@ -7,10 +7,8 @@
 3. Wenn ein Bild passt, lade es als JPG herunter und benenne es nach dem **Schlüssel**, zum Beispiel `alchemist.jpg`.
 4. Schick mir die Bilder. Ich trage sie im Spiel ein und verkleinere sie bei Bedarf.
 
-**Stand:** eingebaut sind `alchemist`, `gilde`, `turnier`, `fluechtlinge`, `baumeister`, `spion`,
-`wilderer`, `wilderer_folge`, `verraeter`, `unwetter`, `seuche`.
-Es fehlen noch: `soeldner`, `silberfund`, `brand`. Von den optionalen ist `winter` eingebaut;
-`lehnseid`, `feldzug` und `hochkoenig` sind noch offen.
+**Stand:** Alle 14 Bittsteller und Ereignisse haben ihr Bild, dazu `winter`.
+Offen sind nur noch die optionalen Bilder `lehnseid`, `feldzug` und `hochkoenig`.
 
 Tipp: Mach alle Bilder im selben Gemini-Chat und lade die Vorlage immer wieder mit hoch. Dann bleiben König, Saal und Stil am einheitlichsten. Wenn ein Bild stilistisch abweicht, hilft: „Halte dich genauer an den Stil und den Bildaufbau der Vorlage.“
 
