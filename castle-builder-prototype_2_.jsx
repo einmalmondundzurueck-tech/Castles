@@ -1,11 +1,14 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 
-// The realm: the original 30×23 heartland (Kernland) in the top corner, with five further
-// Landstriche to the east and south that are won over the course of the reign.
-const GRID_COLS = 46;
-const GRID_ROWS = 36;
+// The realm: the 30×23 heartland (Kernland) in the middle, with five further Landstriche
+// around it — the Ostwald to the north, Lindenau to the west, the Auen to the east, the
+// Südhügel to the south and the Königsstraße to the south-east — won over the reign.
+const GRID_COLS = 72;
+const GRID_ROWS = 64;
 const KERN_COLS = 30;
 const KERN_ROWS = 23;
+const KI = 21; // the heartland's north-west corner
+const KJ = 18;
 
 const TILE_W = 76;
 const TILE_H = 44;
@@ -99,30 +102,60 @@ function gridToScreen(i, j, elev = 0) {
 }
 
 // ---- Der Fluss ------------------------------------------------------------------------------
-// It comes down out of the north-west, swings round the quarry hills and runs on through the
-// southern hills to the edge of the map. Two bridges cross it: one from the castle to the
-// quarry, one between the southern hills and Lindenau.
-function riverCenter(j) {
-  const y = j + 0.5;
-  const smooth = (t) => t * t * (3 - 2 * t);
-  const top = (v) => 2.6 + 1.5 * Math.sin(v * 0.45);
-  if (y <= 11) return top(y);
-  if (y <= 18) return top(11) + (7 - top(11)) * smooth((y - 11) / 7);
-  if (y <= 21.5) return 7;
-  if (y <= 28) return 7 + 6 * smooth((y - 21.5) / 6.5);
-  return 13 + 0.7 * Math.sin((y - 28) * 0.6);
-}
+// It comes down from the north through the Ostwald, runs along the west of the heartland and
+// round the quarry, then turns east through the southern hills and leaves the realm past the
+// toll castle on the Königsstraße. The tiles under it are water; it is drawn as one band.
+const RIVER_PATH = [[24.5, -1], [24, 5], [22.6, 11], [23.2, 17], [23.6, 22], [22.4, 28], [23.4, 33], [28.3, 36.5], [28.6, 39.5], [29.5, 44], [33, 48.3], [40, 50.4], [47, 51], [54, 52.8], [61, 52], [67, 54], [73, 55]];
 const RIVER_HALF_WIDTH = 1.25;
-const BRIDGE_ROWS = [20, 31];
-const BRIDGE_ROADS = [{ j: 20, i0: 4, i1: 10 }, { j: 31, i0: 9, i1: 18 }];
+// A smooth line through the control points (Catmull-Rom), sampled finely.
+function smoothLine(points, step) {
+  const out = [];
+  for (let k = 0; k < points.length - 1; k++) {
+    const p0 = points[Math.max(0, k - 1)], p1 = points[k], p2 = points[k + 1], p3 = points[Math.min(points.length - 1, k + 2)];
+    const n = Math.max(2, Math.ceil(Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) / step));
+    for (let s = 0; s < n; s++) {
+      const t = s / n, t2 = t * t, t3 = t2 * t;
+      const f = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]);
+    }
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+const RIVER_LINE = smoothLine(RIVER_PATH, 0.35);
+function distToLine(line, x, y) {
+  let best = Infinity, dir = null;
+  for (let k = 0; k < line.length - 1; k++) {
+    const [ax, ay] = line[k], [bx, by] = line[k + 1];
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2));
+    const d = Math.hypot(x - ax - dx * t, y - ay - dy * t);
+    if (d < best) { best = d; dir = [dx, dy]; }
+  }
+  return { d: best, dir };
+}
+// The roads: to the quarry, west to Lindenau, south into the hills, and the Königsstraße from
+// the village out to the far south-east corner. Where they meet the river, a bridge.
+const ROADS = [
+  [[25.8, 38.5], [32.5, 38.5]],
+  [[-1, 29.5], [12, 29.5], [21, 29.5], [27.5, 29.5]],
+  [[36.5, 40.6], [36.5, 55.6]],
+  [[48.2, 39], [50.5, 42], [54, 45.5], [56.6, 48.4], [57.5, 50], [57.5, 55], [59.6, 57.6], [65, 60.5], [73, 64.5]],
+];
+const BRIDGE_DIR = {}; // 'i' or 'j': which way a bridge tile's deck runs
+const RIVER_MASK = [];
+// The heartland's own landmarks, grown rather than laid out with a ruler.
+const VILLAGE_CENTER = { i: 46.5, j: 36.5 };
+const PLAZA_RADIUS = 1.6;
+const LINDENAU_CENTER = { i: 8, j: 29.5 };
 // Where the lords of the outer regions hold court: a walled ring (i0,j0)-(i1,j1) of vertices,
 // the gate on the side facing the heartland, and how strong it is built.
 const FOE_CASTLE_SITES = {
-  ostwald: { i0: 36, j0: 4, i1: 40, j1: 8, gate: 'w', wall: 1, tower: 1, gateLevel: 1, keep: 1, plot: [35, 3, 41, 9], village: [[41, 2], [42, 3], [41, 9], [42, 8]] },
-  auen: { i0: 39, j0: 14, i1: 43, j1: 18, gate: 'w', wall: 2, tower: 2, gateLevel: 1, keep: 2, plot: [37, 13, 44, 19], village: [[37, 13], [38, 19], [36, 18], [44, 13]] },
-  suedhuegel: { i0: 4, j0: 28, i1: 8, j1: 32, gate: 'n', wall: 1, tower: 1, gateLevel: 1, keep: 1, plot: [3, 27, 9, 33], village: [[2, 26], [3, 34], [1, 30], [9, 34]] },
-  markt: { i0: 21, j0: 32, i1: 25, j1: 35, gate: 'n', wall: 2, tower: 2, gateLevel: 2, keep: 2, plot: [20, 32, 26, 35], village: [] },
-  strasse: { i0: 38, j0: 26, i1: 43, j1: 31, gate: 'w', wall: 3, tower: 3, gateLevel: 2, keep: 2, plot: [37, 25, 44, 32], village: [[36, 25], [44, 33], [37, 33]] },
+  ostwald: { i0: 42, j0: 6, i1: 46, j1: 10, gate: 's', wall: 1, tower: 1, gateLevel: 1, keep: 1, plot: [40, 4, 48, 12], village: [[48, 8], [49, 9], [40, 12], [48, 11]] },
+  auen: { i0: 59, j0: 27, i1: 63, j1: 31, gate: 'w', wall: 2, tower: 2, gateLevel: 1, keep: 2, plot: [57, 25, 65, 33], village: [[64, 25], [65, 27], [57, 33], [64, 33]] },
+  suedhuegel: { i0: 34, j0: 56, i1: 38, j1: 60, gate: 'n', wall: 1, tower: 1, gateLevel: 1, keep: 1, plot: [32, 54, 40, 62], village: [[31, 54], [40, 55], [31, 60], [40, 61]] },
+  markt: { i0: 6, j0: 36, i1: 10, j1: 40, gate: 'e', wall: 2, tower: 2, gateLevel: 2, keep: 2, plot: [4, 34, 12, 42], village: [] },
+  strasse: { i0: 59, j0: 44, i1: 63, j1: 48, gate: 'w', wall: 3, tower: 3, gateLevel: 2, keep: 2, plot: [57, 42, 65, 50], village: [[65, 43], [65, 46], [57, 50]] },
 };
 function inFoePlot(i, j) {
   return Object.values(FOE_CASTLE_SITES).some((c) => i >= c.plot[0] && i < c.plot[2] && j >= c.plot[1] && j < c.plot[3]);
@@ -135,34 +168,45 @@ function buildTerrain() {
     for (let i = 0; i < GRID_COLS; i++) row.push('grass');
     grid.push(row);
   }
-  for (let j = 18; j <= 22; j++) for (let i = 0; i <= 5; i++) if (j < GRID_ROWS && i < GRID_COLS) grid[j][i] = 'hill';
-  for (let j = 18; j <= 22; j++) for (let i = 24; i <= 29; i++) if (j < GRID_ROWS && i < GRID_COLS) grid[j][i] = 'village';
-  for (let j = 0; j <= 6; j++) for (let i = 24; i <= 29; i++) if (j < GRID_ROWS && i < GRID_COLS) grid[j][i] = 'forest';
-  // ---- the Landstriche beyond the heartland ----
   const noise = (i, j, s) => 0.6 * hash2(Math.floor(i / 2), Math.floor(j / 2), s) + 0.4 * hash2(i, j, s + 1);
+  // A rounded patch with a ragged edge: inside if the scaled distance is below 1 (± noise).
+  const blob = (i, j, cx, cy, rx, ry, seed, rough = 0.45) => {
+    const d = Math.hypot((i + 0.5 - cx) / rx, (j + 0.5 - cy) / ry);
+    return d < 1 + (noise(i, j, seed) - 0.5) * rough;
+  };
+  const inKern = (i, j) => i >= KI && i < KI + KERN_COLS && j >= KJ && j < KJ + KERN_ROWS;
   for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
-    if (i < KERN_COLS && j < KERN_ROWS) continue;
     const r = regionAt(i, j);
     let t = 'grass';
-    if (r === 'ostwald') {
-      // Old forest with one clearing in the middle.
-      const dc = Math.hypot(i - 37.5, (j - 5.5) * 1.2);
-      if (dc > 3.2 && noise(i, j, 11) < 0.8) t = 'forest';
+    if (r === 'kern') {
+      // The quarry hills by the river, the wood in the north-east, the village in the south-east.
+      if (blob(i, j, 23.6, 38.2, 3.1, 2.7, 31)) t = 'hill';
+      else if (blob(i, j, 47.2, 21.6, 4.3, 3.7, 33) || (blob(i, j, 43.5, 19.4, 2.2, 1.6, 35, 0.6))) t = 'forest';
+      else if (Math.hypot(i + 0.5 - VILLAGE_CENTER.i, j + 0.5 - VILLAGE_CENTER.j) < PLAZA_RADIUS) t = 'plaza';
+      else if (blob(i, j, VILLAGE_CENTER.i, VILLAGE_CENTER.j, 4.3, 3.8, 37)) t = 'village';
+    } else if (r === 'ostwald') {
+      // Old forest; a clearing round the robber knights' castle, glades, and a forest lake.
+      const clearing = Math.hypot(i + 0.5 - 44, (j + 0.5 - 8) * 1.1) < 5.5 + (noise(i, j, 12) - 0.5) * 2;
+      if (blob(i, j, 60, 7, 3, 2.4, 14, 0.3)) t = 'water';
+      else if (!clearing && noise(i, j, 11) < 0.66) t = 'forest';
     } else if (r === 'auen') {
-      // Strip fields between grassy paths.
-      if ((i - 31) % 5 < 3 && (j - 13) % 4 < 3 && i >= 31 && j >= 13 && i <= 44 && j <= 21) t = 'field';
+      // River meadows: strip fields, vineyards on the eastern slopes, a few lone trees.
+      if (i >= 65 && j >= 19 && j <= 40 && !inFoePlot(i, j)) t = j % 2 ? 'vineyard' : 'grass';
+      else if (noise(i, j, 41) < 0.42 && (i + Math.floor(j / 3)) % 4 < 3 && !inFoePlot(i, j)) t = 'field';
+      else if (noise(i, j, 43) < 0.06) t = 'forest';
     } else if (r === 'suedhuegel') {
-      const dc = Math.hypot((i - 6) * 1.1, j - 30);
-      if (dc < 4.6 + noise(i, j, 21) * 1.8) t = 'hill';
-      else if (noise(i, j, 23) < 0.22) t = 'forest';
+      const hills = [[27, 46.5, 3.2, 2.6], [36, 58, 4.4, 3.8], [45.5, 57, 3.6, 3], [28.5, 58.5, 3.2, 2.8], [46, 45.5, 2.8, 2.2], [41, 62.5, 2.6, 1.8]];
+      if (hills.some(([cx, cy, rx, ry], k) => blob(i, j, cx, cy, rx, ry, 21 + k, 0.6))) t = 'hill';
+      else if (noise(i, j, 23) < 0.2) t = 'forest';
     } else if (r === 'markt') {
-      if (i >= 19 && i <= 25 && j >= 27 && j <= 31) t = 'village';
-      else if (i >= 17 && i <= 27 && j >= 25 && j <= 33 && ((i + 2 * j) % 7 < 2)) t = 'field';
+      // The market town of Lindenau amid fields and orchards; woods further south.
+      if (Math.hypot(i + 0.5 - LINDENAU_CENTER.i, j + 0.5 - LINDENAU_CENTER.j) < 1.4) t = 'plaza';
+      else if (blob(i, j, LINDENAU_CENTER.i, LINDENAU_CENTER.j, 4.2, 3.6, 51)) t = 'village';
+      else if (j >= 44 && noise(i, j, 53) < 0.4) t = 'forest';
+      else if (noise(i, j, 55) < 0.45 && (j + Math.floor(i / 3)) % 4 < 3 && !inFoePlot(i, j)) t = 'field';
+      else if (noise(i, j, 57) < 0.07) t = 'forest';
     } else if (r === 'strasse') {
-      // The king's road runs diagonally to the far corner.
-      const roadJ = 23 + Math.round((i - 30) * 12 / 15);
-      if (j === roadJ || j === roadJ + 1) t = 'road';
-      else if (Math.hypot(i - 42, j - 27) < 2.6 || Math.hypot(i - 33, j - 33) < 2) t = 'forest';
+      if (noise(i, j, 61) < 0.32 && !inFoePlot(i, j)) t = 'forest';
     }
     grid[j][i] = t;
   }
@@ -172,10 +216,22 @@ function buildTerrain() {
     c.village.forEach(([i, j]) => { if (i >= 0 && i < GRID_COLS && j >= 0 && j < GRID_ROWS) grid[j][i] = 'village'; });
   });
   for (let j = 0; j < GRID_ROWS; j++) {
-    const x = riverCenter(j);
-    for (let i = 0; i < GRID_COLS; i++) if (Math.abs(i + 0.5 - x) <= RIVER_HALF_WIDTH) grid[j][i] = BRIDGE_ROWS.includes(j) ? 'bridge' : 'water';
+    const row = [];
+    for (let i = 0; i < GRID_COLS; i++) {
+      const wet = distToLine(RIVER_LINE, i + 0.5, j + 0.5).d <= RIVER_HALF_WIDTH;
+      row.push(wet);
+      if (wet) grid[j][i] = 'water';
+    }
+    RIVER_MASK.push(row);
   }
-  BRIDGE_ROADS.forEach((r) => { for (let i = r.i0; i <= r.i1; i++) if (grid[r.j][i] !== 'bridge' && grid[r.j][i] !== 'water' && grid[r.j][i] !== 'village') grid[r.j][i] = 'road'; });
+  ROADS.forEach((pts) => {
+    const line = smoothLine(pts, 0.3);
+    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
+      const { d, dir } = distToLine(line, i + 0.5, j + 0.5);
+      if (d > 0.62) continue;
+      if (grid[j][i] === 'water') { grid[j][i] = 'bridge'; BRIDGE_DIR[`${i},${j}`] = Math.abs(dir[0]) >= Math.abs(dir[1]) ? 'i' : 'j'; } else if (grid[j][i] !== 'plaza' && grid[j][i] !== 'bridge') grid[j][i] = 'road';
+    }
+  });
   return grid;
 }
 // ---- Landstriche ---------------------------------------------------------------------------
@@ -184,30 +240,30 @@ function buildTerrain() {
 // gold, if the king's reputation is high enough). Owned land can be built on and worked, and
 // each region brings its own lasting benefit.
 const REGION_DEFS = {
-  kern: { id: 'kern', name: 'Kernland', i0: 0, i1: KERN_COLS - 1, j0: 0, j1: KERN_ROWS - 1 },
+  kern: { id: 'kern', name: 'Kernland', i0: KI, i1: KI + KERN_COLS - 1, j0: KJ, j1: KJ + KERN_ROWS - 1 },
   ostwald: {
-    id: 'ostwald', acc: 'den Ostwald', holderDat: 'den Raubrittern vom Ostwald', short: 'Ostwald', name: 'Der Ostwald', icon: '🌲', i0: KERN_COLS, i1: GRID_COLS - 1, j0: 0, j1: 11,
+    id: 'ostwald', acc: 'den Ostwald', holderDat: 'den Raubrittern vom Ostwald', short: 'Ostwald', name: 'Der Ostwald', icon: '🌲', i0: 0, i1: GRID_COLS - 1, j0: 0, j1: KJ - 1,
     holder: 'die Raubritter vom Ostwald', lord: 'Der Ritter vom Ostwald', strength: 12, oath: { gold: 250, rep: 55 }, needs: [],
     perks: ['Altholz: die Bäume hier geben 60 % mehr Holz', 'Wildbret: +15 🌾 im Monat', '🦊 Pelze: +4 im Monat'],
   },
   auen: {
-    id: 'auen', acc: 'die Auen', holderDat: 'einem abtrünnigen Vogt', short: 'Auen', plural: true, name: 'Die Auen', icon: '🌾', i0: KERN_COLS, i1: GRID_COLS - 1, j0: 12, j1: KERN_ROWS - 1,
+    id: 'auen', acc: 'die Auen', holderDat: 'einem abtrünnigen Vogt', short: 'Auen', plural: true, name: 'Die Auen', icon: '🌾', i0: KI + KERN_COLS, i1: GRID_COLS - 1, j0: KJ, j1: KJ + KERN_ROWS - 1,
     holder: 'ein abtrünniger Vogt', lord: 'Der Vogt der Auen', strength: 16, oath: { gold: 350, rep: 58 }, needs: [],
     perks: ['Fruchtbare Felder: +30 % Ernte', 'Platz für 4 weitere Einwohner', '🍷 Wein: +5 im Monat'],
   },
   suedhuegel: {
-    id: 'suedhuegel', acc: 'die Südhügel', holderDat: 'dem Bergvolk', short: 'Südhügel', plural: true, name: 'Die Südhügel', icon: '⛰️', i0: 0, i1: 14, j0: KERN_ROWS, j1: GRID_ROWS - 1,
+    id: 'suedhuegel', acc: 'die Südhügel', holderDat: 'dem Bergvolk', short: 'Südhügel', plural: true, name: 'Die Südhügel', icon: '⛰️', i0: KI, i1: KI + KERN_COLS - 1, j0: KJ + KERN_ROWS, j1: GRID_ROWS - 1,
     holder: 'das Bergvolk', lord: 'Der Älteste des Bergvolks', strength: 14, oath: { gold: 300, rep: 55 }, needs: [],
     perks: ['Reiche Steinbrüche: 60 % mehr Stein je Fels', 'Erzadern: +10 🪙 im Monat', '⛓️ Eisen: +5 im Monat'],
   },
   markt: {
-    id: 'markt', acc: 'Lindenau', holderDat: 'einem fremden Grafen', short: 'Lindenau', name: 'Marktflecken Lindenau', icon: '🏘️', i0: 15, i1: KERN_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
+    id: 'markt', acc: 'Lindenau', holderDat: 'einem fremden Grafen', short: 'Lindenau', name: 'Marktflecken Lindenau', icon: '🏘️', i0: 0, i1: KI - 1, j0: KJ, j1: GRID_ROWS - 1,
     holder: 'ein fremder Graf', lord: 'Der Graf von Lindenau', strength: 20, oath: { gold: 450, rep: 62 }, needs: [],
     perks: ['Zweites Dorf: Platz für 10 weitere Einwohner', 'Markt: +25 🪙 im Monat', '🪟 Glas: +3 im Monat'],
   },
   strasse: {
-    id: 'strasse', acc: 'die Königsstraße', holderDat: 'den Wegelagerern der Straße', short: 'Königsstraße', name: 'Die Königsstraße', icon: '🛣️', i0: KERN_COLS, i1: GRID_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
-    holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 600, rep: 68 }, needs: ['auen', 'markt'],
+    id: 'strasse', acc: 'die Königsstraße', holderDat: 'den Wegelagerern der Straße', short: 'Königsstraße', name: 'Die Königsstraße', icon: '🛣️', i0: KI + KERN_COLS, i1: GRID_COLS - 1, j0: KJ + KERN_ROWS, j1: GRID_ROWS - 1,
+    holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 600, rep: 68 }, needs: ['auen', 'suedhuegel'],
     perks: ['Zoll: +40 🪙 im Monat', 'Platz für 3 weitere Einwohner, Ruf +5', '🐫 Fernhändler kommen öfter und 15 % billiger'],
   },
 };
@@ -223,8 +279,8 @@ function foeCastleStructures(id) {
   const edge = (i1, j1, i2, j2, gate) => {
     st[edgeKeyOf(i1, j1, i2, j2)] = { type: gate ? 'gate' : 'wall', i1, j1, i2, j2, stage: 'done', progress: 1, level: gate ? c.gateLevel : c.wall, doorOpen: false };
   };
-  for (let i = c.i0; i < c.i1; i++) { edge(i, c.j0, i + 1, c.j0, c.gate === 'n' && i === midI); edge(i, c.j1, i + 1, c.j1, false); }
-  for (let j = c.j0; j < c.j1; j++) { edge(c.i0, j, c.i0, j + 1, c.gate === 'w' && j === midJ); edge(c.i1, j, c.i1, j + 1, false); }
+  for (let i = c.i0; i < c.i1; i++) { edge(i, c.j0, i + 1, c.j0, c.gate === 'n' && i === midI); edge(i, c.j1, i + 1, c.j1, c.gate === 's' && i === midI); }
+  for (let j = c.j0; j < c.j1; j++) { edge(c.i0, j, c.i0, j + 1, c.gate === 'w' && j === midJ); edge(c.i1, j, c.i1, j + 1, c.gate === 'e' && j === midJ); }
   [[c.i0, c.j0], [c.i1, c.j0], [c.i0, c.j1], [c.i1, c.j1]].forEach(([i, j]) => { st[`v:${i},${j}`] = { type: 'tower', i, j, stage: 'done', progress: 1, level: c.tower }; });
   st.keep = { type: 'keep', i: midI + 0.5, j: midJ + 0.5, stage: 'done', progress: 1, level: c.keep };
   return st;
@@ -250,8 +306,9 @@ function foeGarrison(id, year) {
     if (k < slots.length) out.push({ ...slots[k], type: 'archer' });
     else out.push({ i: fc.keep.i + ((k % 4) - 1.5) * 0.3, j: fc.keep.j + 0.7, elev: 0, type: 'archer' });
   }
-  const gateMid = c.gate === 'w' ? { i: c.i0, j: Math.floor((c.j0 + c.j1) / 2) + 0.5 } : { i: Math.floor((c.i0 + c.i1) / 2) + 0.5, j: c.j0 };
-  const inward = c.gate === 'w' ? { i: 1, j: 0 } : { i: 0, j: 1 };
+  const midI = Math.floor((c.i0 + c.i1) / 2) + 0.5, midJ = Math.floor((c.j0 + c.j1) / 2) + 0.5;
+  const gateMid = { w: { i: c.i0, j: midJ }, e: { i: c.i1, j: midJ }, n: { i: midI, j: c.j0 }, s: { i: midI, j: c.j1 } }[c.gate];
+  const inward = { w: { i: 1, j: 0 }, e: { i: -1, j: 0 }, n: { i: 0, j: 1 }, s: { i: 0, j: -1 } }[c.gate];
   const along = { i: inward.j, j: inward.i };
   for (let k = 0; k < nSol; k++) {
     const row = Math.floor(k / 5), col = k % 5;
@@ -269,14 +326,14 @@ function siegeSurrendered(id, units) {
 // Where a Feldzug forms up before the assault: a few tiles out in front of the gate.
 function foeApproachPoint(id) {
   const c = FOE_CASTLE_SITES[id];
-  return c.gate === 'w' ? { i: c.i0 - 3.5, j: (c.j0 + c.j1) / 2 } : { i: (c.i0 + c.i1) / 2, j: c.j0 - 3.5 };
+  const ci = (c.i0 + c.i1) / 2, cj = (c.j0 + c.j1) / 2;
+  return { w: { i: c.i0 - 3.5, j: cj }, e: { i: c.i1 + 3.5, j: cj }, n: { i: ci, j: c.j0 - 3.5 }, s: { i: ci, j: c.j1 + 3.5 } }[c.gate];
 }
 function regionAt(i, j) {
-  if (i < KERN_COLS && j < KERN_ROWS) return 'kern';
-  if (j < KERN_ROWS) return j <= 11 ? 'ostwald' : 'auen';
-  if (i < 15) return 'suedhuegel';
-  if (i < KERN_COLS) return 'markt';
-  return 'strasse';
+  if (j < KJ) return 'ostwald';
+  if (i < KI) return 'markt';
+  if (i >= KI + KERN_COLS) return j < KJ + KERN_ROWS ? 'auen' : 'strasse';
+  return j < KJ + KERN_ROWS ? 'kern' : 'suedhuegel';
 }
 // Mirrors the owned regions from the game state so that the plain helper functions below
 // (buildability, which trees a lumberjack may fell) can ask without threading it through.
@@ -336,7 +393,7 @@ function hillHeightAt(i, j) {
 function generateForestTrees() {
   const trees = [];
   let id = 0;
-  for (let j = 0; j <= 6; j++) for (let i = 24; i <= 29; i++) trees.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 5, felled: false, regrowDay: null });
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (regionAt(i, j) === 'kern' && TERRAIN[j][i] === 'forest') trees.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 5, felled: false, regrowDay: null });
   return [...trees, ...regionForestTrees()];
 }
 // Trees and rocks of the outer regions carry their region and a richer yield; ids start at
@@ -353,7 +410,7 @@ function regionForestTrees() {
 function generateHillRocks() {
   const rocks = [];
   let id = 0;
-  for (let j = 18; j <= 22; j++) for (let i = 0; i <= 5; i++) rocks.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 50, depleted: false });
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (regionAt(i, j) === 'kern' && TERRAIN[j][i] === 'hill') rocks.push({ id: id++, i: i + 0.5, j: j + 0.5, amount: 50, depleted: false });
   return [...rocks, ...regionHillRocks()];
 }
 function regionHillRocks() {
@@ -374,9 +431,14 @@ const VILLAGE_HOUSE_SPOTS = (() => {
   const spots = [];
   // Houses only ever stand on the lighter half of the checkerboard-shaded village plots (see
   // TileFace) — the darker tiles read as yards, gardens and paths between them instead.
-  for (let j = 18; j <= 22; j++) for (let i = 24; i <= 29; i++) if ((i + j) % 2 !== 0) spots.push({ i, j });
-  // The market town of Lindenau fills up once the heartland village is full.
-  for (let j = 27; j <= 31; j++) for (let i = 19; i <= 25; i++) if ((i + j) % 2 !== 0) spots.push({ i, j });
+  // Houses fill the village from the square outwards; the market town of Lindenau fills up
+  // once the heartland village is full.
+  const around = (c, region) => {
+    const list = [];
+    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (regionAt(i, j) === region && TERRAIN[j][i] === 'village' && (i + j) % 2 !== 0) list.push({ i, j });
+    return list.sort((a, b) => Math.hypot(a.i + 0.5 - c.i, a.j + 0.5 - c.j) - Math.hypot(b.i + 0.5 - c.i, b.j + 0.5 - c.j));
+  };
+  spots.push(...around(VILLAGE_CENTER, 'kern'), ...around(LINDENAU_CENTER, 'markt'));
   return spots;
 })();
 function terrainAt(i, j) {
@@ -467,9 +529,9 @@ function isKemenateAllowed(structures, i, j) {
   return (di === 1 && dj === 0) || (di === 0 && dj === 1);
 }
 
-const STONE_GATHER = { i: 2.5, j: 20 };
-const QUARRY_CRANE = { i: 4.6, j: 17.5 };
-const WOOD_GATHER = { i: 26.5, j: 3 };
+const STONE_GATHER = { i: 23.5, j: 38.2 };
+const QUARRY_CRANE = { i: 22.2, j: 35.7 };
+const WOOD_GATHER = { i: 47.5, j: 21.5 };
 // Where attackers march in from. While the realm is just the heartland they come out of the
 // forest (and, later, round by the quarry hills); as the realm grows, each front moves out to
 // the edge of the land the king holds — and holding the south brings a third front with it.
@@ -477,15 +539,15 @@ const WOOD_GATHER = { i: 26.5, j: 3 };
 function attackOrigins() {
   const o = OWNED_REGIONS;
   const main = o.has('ostwald')
-    ? { key: 'east', i: GRID_COLS, j: 5.5, in: [-1, 0], side: [0, 1] }
+    ? { key: 'north', i: 45.5, j: 0, in: [0, 1], side: [1, 0] }
     : { key: 'wood', i: WOOD_GATHER.i, j: WOOD_GATHER.j, in: [0, 1], side: [1, 0] };
   const flank = o.has('suedhuegel')
-    ? { key: 'south', i: 7.5, j: GRID_ROWS, in: [0, -1], side: [1, 0] }
+    ? { key: 'south', i: 36.5, j: GRID_ROWS, in: [0, -1], side: [1, 0] }
     : { key: 'stone', i: STONE_GATHER.i, j: STONE_GATHER.j, in: [0, -1], side: [1, 0] };
   let third = null;
   if (o.has('strasse')) third = { key: 'corner', i: GRID_COLS - 0.5, j: GRID_ROWS - 0.5, in: [-0.71, -0.71], side: [0.71, -0.71] };
-  else if (o.has('markt')) third = { key: 'markt', i: 22.5, j: GRID_ROWS, in: [0, -1], side: [1, 0] };
-  else if (o.has('auen')) third = { key: 'auen', i: GRID_COLS, j: 17.5, in: [-1, 0], side: [0, 1] };
+  else if (o.has('markt')) third = { key: 'markt', i: 0, j: 29.5, in: [1, 0], side: [0, 1] };
+  else if (o.has('auen')) third = { key: 'auen', i: GRID_COLS, j: 29, in: [-1, 0], side: [0, 1] };
   return { main, flank, third };
 }
 function originEntry(origin) {
@@ -528,18 +590,29 @@ const AMENITY_TYPES = {
 // The village's own buildings: they stand in the village (or on open grass near it) and act
 // on the people rather than on the castle.
 const VILLAGE_AMENITIES = ['vogtei', 'kirche', 'kloster', 'marktplatz'];
+// Vogtei, Kirche and Marktplatz belong in the village — on its square or between the houses;
+// the Kloster keeps to itself out in the country.
+function amenityTerrainOk(kind, t) {
+  if (kind === 'kloster') return t === 'grass';
+  if (VILLAGE_AMENITIES.includes(kind)) return t === 'grass' || t === 'village' || t === 'plaza';
+  return t === 'grass';
+}
 const AMENITY_IDS = Object.keys(AMENITY_TYPES);
-// Most buildings stand on one tile; the Turnierplatz is a long yard over two (along i). Such
-// a building is stored under the key of its first tile, with its centre in the middle of all.
+// Most buildings stand on one tile; the Turnierplatz is a long yard over two, along i or —
+// turned (rot 1) — along j. Such a building is stored under the key of its first tile, with
+// its centre in the middle of all.
 const AMENITY_WIDTH = { turnierplatz: 2 };
 function amenityWidth(kind) { return AMENITY_WIDTH[kind] || 1; }
-function amenityCenter(kind, ti, tj) { return { i: ti + amenityWidth(kind) / 2, j: tj + 0.5 }; }
-function amenityTiles(kind, ti, tj) { return Array.from({ length: amenityWidth(kind) }, (_, k) => [ti + k, tj]); }
+function amenityCenter(kind, ti, tj, rot = 0) {
+  const w = amenityWidth(kind);
+  return rot ? { i: ti + 0.5, j: tj + w / 2 } : { i: ti + w / 2, j: tj + 0.5 };
+}
+function amenityTiles(kind, ti, tj, rot = 0) { return Array.from({ length: amenityWidth(kind) }, (_, k) => (rot ? [ti, tj + k] : [ti + k, tj])); }
 // The tiles a keep or building covers.
 function structureTiles(s) {
   if (s.type === 'keep') return [[Math.floor(s.i), Math.floor(s.j)]];
   const w = amenityWidth(s.kind);
-  return amenityTiles(s.kind, Math.floor(s.i - w / 2 + 0.5), Math.floor(s.j));
+  return s.rot ? amenityTiles(s.kind, Math.floor(s.i), Math.floor(s.j - w / 2 + 0.5), 1) : amenityTiles(s.kind, Math.floor(s.i - w / 2 + 0.5), Math.floor(s.j));
 }
 // Which keep or building (its key) stands on a tile, if any.
 function structureKeyOnTile(structures, i, j) {
@@ -559,8 +632,8 @@ function edgeSplitsBuilding(structures, i1, j1, i2, j2) {
   const ka = structureKeyOnTile(structures, a[0], a[1]);
   return !!ka && ka === structureKeyOnTile(structures, b[0], b[1]);
 }
-function amenityCorners(kind, i, j) {
-  return amenityWidth(kind) > 1 ? orientedRect(i, j, 1, 0, amenityWidth(kind) / 2 - 0.04, 0.46) : sq(i, j, amenityHalf(kind));
+function amenityCorners(kind, i, j, rot = 0) {
+  return amenityWidth(kind) > 1 ? orientedRect(i, j, rot ? 0 : 1, rot ? 1 : 0, amenityWidth(kind) / 2 - 0.04, 0.46) : sq(i, j, amenityHalf(kind));
 }
 function hasDoneAmenity(structures, kind) {
   return Object.values(structures).some((s) => s.type === 'amenity' && s.kind === kind && s.stage === 'done');
@@ -670,8 +743,8 @@ const PROGRESS_GAIN_PER_WORKER_PER_TICK = 0.02;
 const QUARRY_RATE_PER_TICK = 0.06;
 const LUMBER_RATE_PER_TICK = 0.05;
 const LOAD_AMOUNT = 3;
-const DEPOT_I = 14;
-const DEPOT_J = 12;
+const DEPOT_I = KI + 14;
+const DEPOT_J = KJ + 12;
 
 const BUILD_COST = {
   wall: { wood: 3, stone: 10 },
@@ -2179,6 +2252,8 @@ const TERRAIN_TINTS = {
   villageYard: ['#9a8763', '#ad9a72'],
   water: ['#3d6f86', '#4b7f96'],
   bridge: ['#3d6f86', '#4b7f96'],
+  plaza: ['#a89c84', '#b5aa92'],
+  vineyard: ['#7f8a46', '#8c9750'],
   field: ['#b29a4e', '#c4ac5c'],
   road: ['#9c8763', '#ab966f'],
 };
@@ -2191,21 +2266,24 @@ function terrainTint(terrain, i, j) {
   return mixHex(a, b, t);
 }
 function isRiverTile(i, j) {
-  return i >= 0 && i < GRID_COLS && j >= 0 && j < GRID_ROWS && (TERRAIN[j][i] === 'water' || TERRAIN[j][i] === 'bridge') && Math.abs(i + 0.5 - riverCenter(j)) <= RIVER_HALF_WIDTH;
+  return i >= 0 && i < GRID_COLS && j >= 0 && j < GRID_ROWS && RIVER_MASK[j][i] && (TERRAIN[j][i] === 'water' || TERRAIN[j][i] === 'bridge');
 }
 // The river as one smooth band along its centre line (sandy banks, water, a lighter current),
-// with the timber bridges laid across it.
+// with the timber bridges laid across it. The banks are offset in grid space and then
+// projected, so the band keeps its true width whichever way it flows.
 const RiverOverlay = React.memo(function RiverOverlay() { // eslint-disable-line no-unused-vars
-  const pts = [];
-  for (let k = 0; k <= GRID_ROWS * 2; k++) {
-    const y = k / 2;
-    pts.push(gridToScreen(riverCenter(Math.min(GRID_ROWS - 1, Math.max(0, y - 0.5))) , y, 0));
-  }
-  const d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
-  // Screen width of a band RIVER_HALF_WIDTH*2 tiles wide across i, measured across the flow.
-  const a = gridToScreen(1, 0, 0), o = gridToScreen(0, 0, 0), b = gridToScreen(0, 1, 0);
-  const ui = { x: a.x - o.x, y: a.y - o.y }, uj = { x: b.x - o.x, y: b.y - o.y };
-  const W = (2 * RIVER_HALF_WIDTH + 0.1) * Math.abs(ui.x * uj.y - ui.y * uj.x) / Math.hypot(uj.x, uj.y);
+  const band = (w) => {
+    const left = [], right = [];
+    RIVER_LINE.forEach(([x, y], k) => {
+      const [ax, ay] = RIVER_LINE[Math.max(0, k - 1)], [bx, by] = RIVER_LINE[Math.min(RIVER_LINE.length - 1, k + 1)];
+      const l = Math.hypot(bx - ax, by - ay) || 1;
+      const nx = -(by - ay) / l, ny = (bx - ax) / l;
+      left.push(gridToScreen(x + nx * w, y + ny * w, 0));
+      right.push(gridToScreen(x - nx * w, y - ny * w, 0));
+    });
+    return ptsStr([...left, ...right.reverse()]);
+  };
+  const center = RIVER_LINE.map(([x, y], k) => { const p = gridToScreen(x, y, 0); return `${k ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`; }).join('');
   const corners = [[0, 0], [GRID_COLS, 0], [GRID_COLS, GRID_ROWS], [0, GRID_ROWS]].map(([ci, cj]) => gridToScreen(ci, cj, 0));
   const bridges = [];
   for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) if (TERRAIN[j][i] === 'bridge') bridges.push([i, j]);
@@ -2213,13 +2291,14 @@ const RiverOverlay = React.memo(function RiverOverlay() { // eslint-disable-line
     <g pointerEvents="none">
       <clipPath id="cbRiverClip"><polygon points={ptsStr(corners)} /></clipPath>
       <g clipPath="url(#cbRiverClip)">
-        <path d={d} fill="none" stroke="#a99a6c" strokeWidth={W + 9} strokeLinejoin="round" />
-        <path d={d} fill="none" stroke="#3f7189" strokeWidth={W} strokeLinejoin="round" />
-        <path d={d} fill="none" stroke="#4f86a0" strokeWidth={W * 0.55} strokeLinejoin="round" />
-        <path d={d} fill="none" stroke="rgba(214,236,242,0.35)" strokeWidth="1.4" strokeDasharray="7 19" strokeLinejoin="round" className="cb-river-flow" />
+        <polygon points={band(RIVER_HALF_WIDTH + 0.2)} fill="#a99a6c" />
+        <polygon points={band(RIVER_HALF_WIDTH)} fill="#3f7189" />
+        <polygon points={band(RIVER_HALF_WIDTH * 0.55)} fill="#4f86a0" />
+        <path d={center} fill="none" stroke="rgba(214,236,242,0.35)" strokeWidth="1.4" strokeDasharray="7 19" strokeLinejoin="round" className="cb-river-flow" />
       </g>
       {bridges.map(([i, j]) => {
-        const up = (u, v, e) => gridToScreen(i + u, j + v, e);
+        // The deck runs along the road: across i, or (dir 'j') across j.
+        const up = BRIDGE_DIR[`${i},${j}`] === 'j' ? (u, v, e) => gridToScreen(i + v, j + u, e) : (u, v, e) => gridToScreen(i + u, j + v, e);
         const E = 3;
         let planks = '';
         for (let k = 1; k < 8; k++) { const p = up(k / 8, 0.18, E), q = up(k / 8, 0.82, E); planks += `M${p.x.toFixed(1)} ${p.y.toFixed(1)}L${q.x.toFixed(1)} ${q.y.toFixed(1)}`; }
@@ -2310,6 +2389,24 @@ const TileFace = React.memo(function TileFace({ i, j }) {
         deco.push(<ellipse key="peb" cx={c.x} cy={c.y} rx="2.4" ry="1.4" fill="#9a9384" stroke="#5f5a50" strokeWidth="0.4" />);
       }
     }
+  } else if (terrain === 'plaza') {
+    // Cobbles on the village square.
+    let d = '';
+    for (let k = 0; k < 9; k++) {
+      const c = at(0.12 + rnd(40 + k) * 0.76, 0.12 + rnd(50 + k) * 0.76);
+      d += `M${(c.x - 2.2).toFixed(1)} ${c.y.toFixed(1)}a2.2 1.3 0 1 0 4.4 0a2.2 1.3 0 1 0 -4.4 0`;
+    }
+    deco.push(<path key="cobbles" d={d} fill="rgba(120,108,88,0.35)" stroke="rgba(70,60,46,0.35)" strokeWidth="0.5" />);
+  } else if (terrain === 'vineyard') {
+    // Rows of vines on their stakes.
+    for (let r = 0; r < 3; r++) {
+      const a = at(0.1, 0.2 + r * 0.3), b = at(0.9, 0.2 + r * 0.3);
+      deco.push(<line key={`vr${r}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#5a4a2a" strokeWidth="0.8" />);
+      for (let k = 0; k < 5; k++) {
+        const c = at(0.14 + k * 0.18, 0.2 + r * 0.3);
+        deco.push(<ellipse key={`vl${r}${k}`} cx={c.x} cy={c.y - 2.2} rx="2.4" ry="2" fill={k % 2 ? '#4f6a2c' : '#5d7a34'} />);
+      }
+    }
   } else if (terrain === 'field') {
     // Furrows of ripening grain.
     let d = '';
@@ -2367,6 +2464,15 @@ const TileFace = React.memo(function TileFace({ i, j }) {
     </g>
   );
 });
+
+// The ground and the outer regions' scenery don't change from one day to the next: wrapped in
+// memoised components, a re-render of the game passes them by untouched.
+const GroundLayer = React.memo(function GroundLayer({ viewRot }) { // eslint-disable-line no-unused-vars
+  const list = [];
+  for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push(<TileFace key={`t-${i}-${j}`} i={i} j={j} />);
+  return <g>{list}</g>;
+});
+const StaticLayer = React.memo(function StaticLayer({ nodes }) { return <g>{nodes}</g>; });
 
 // The board itself as a slab of earth: the two near edges of the map show a cut through the
 // ground (turf, topsoil, clay, bedrock) so the whole map reads as a tabletop diorama.
@@ -2571,17 +2677,22 @@ function CastleBanner({ i, j, elev, color }) {
 // The heartland's quarry: stone already cut back into steps, with squared blocks lying ready.
 const QuarryRockProp = React.memo(function QuarryRockProp({ i, j }) {
   const r = (k) => hash2(i, j, k);
-  const ci = i + 0.5 + (r(1) - 0.5) * 0.12, cj = j + 0.5 + (r(2) - 0.5) * 0.12;
-  const h1 = 5 + r(3) * 8, h2 = h1 + 5 + r(4) * 7;
-  const half = 0.24 + r(8) * 0.12;
+  const ci = i + 0.5 + (r(1) - 0.5) * 0.3, cj = j + 0.5 + (r(2) - 0.5) * 0.3;
+  // Cut faces at odd angles, of uneven size; some spots only hold rubble and loose blocks.
+  const ang = r(11) * Math.PI;
+  const ux = Math.cos(ang), uy = Math.sin(ang);
   const tone = r(9) * 0.18;
   const lo = { top: mixHex('#a39a86', '#7d7564', tone), left: mixHex('#857c6a', '#655e50', tone), right: mixHex('#6a6253', '#4f493e', tone) };
   const hi = { top: '#b3aa95', left: '#928975', right: '#746b5b' };
+  const rubble = r(12) < 0.3;
+  const h1 = 5 + r(3) * 9, h2 = h1 + 4 + r(4) * 7;
+  const a = 0.18 + r(8) * 0.17, b = 0.14 + r(13) * 0.14;
+  const chips = [0, 1, 2].filter((k) => r(20 + k) < (rubble ? 0.9 : 0.4)).map((k) => ({ i: i + 0.2 + r(30 + k) * 0.6, j: j + 0.2 + r(40 + k) * 0.6, s: 0.05 + r(50 + k) * 0.06, h: 2 + r(60 + k) * 3 }));
   return (
     <g pointerEvents="none">
-      <Block corners={sq(ci, cj, half)} baseElev={0} topElev={h1} topFill={lo.top} faceLeft={lo.left} faceRight={lo.right} texture="stone" seed={Math.floor(r(6) * 100)} />
-      {r(10) < 0.55 && <Block corners={sq(ci - 0.08, cj - 0.08, half * 0.6)} baseElev={h1} topElev={h2} topFill={hi.top} faceLeft={hi.left} faceRight={hi.right} texture="stone" seed={Math.floor(r(7) * 100)} />}
-      {r(5) < 0.6 && <Block corners={sq(ci + 0.3, cj + 0.32, 0.09)} baseElev={0} topElev={5} topFill={hi.top} faceLeft={hi.left} faceRight={hi.right} />}
+      {!rubble && <Block corners={orientedRect(ci, cj, ux, uy, a, b)} baseElev={0} topElev={h1} topFill={lo.top} faceLeft={lo.left} faceRight={lo.right} texture="stone" seed={Math.floor(r(6) * 100)} />}
+      {!rubble && r(10) < 0.5 && <Block corners={orientedRect(ci - 0.04, cj - 0.04, ux, uy, a * 0.6, b * 0.7)} baseElev={h1} topElev={h2} topFill={hi.top} faceLeft={hi.left} faceRight={hi.right} texture="stone" seed={Math.floor(r(7) * 100)} />}
+      {chips.map((c, k) => <Block key={k} corners={sq(c.i, c.j, c.s)} baseElev={0} topElev={c.h} topFill={hi.top} faceLeft={hi.left} faceRight={hi.right} />)}
     </g>
   );
 });
@@ -3812,13 +3923,13 @@ function Anvil({ x, y }) {
   );
 }
 
-function AmenityBody({ i, j, kind, level }) {
+function AmenityBody({ i, j, kind, level, rot = 0 }) {
   const L = Math.max(1, Math.min(AMENITY_MAX_LEVEL, level || 1));
   const half = amenityHalf(kind);
   const info = AMENITY_TYPES[kind];
   const seed = i * 11.3 + j * 3.7;
   const H = amenityWallHeight(kind, L);
-  const corners = amenityCorners(kind, i, j);
+  const corners = amenityCorners(kind, i, j, rot);
   const quads = computeFaceQuads(corners, 0, H);
   const P = (a, b, e = 0) => gridToScreen(a, b, e);
   const els = [];
@@ -4143,14 +4254,18 @@ function AmenityBody({ i, j, kind, level }) {
       // for the court along one side (a second one opposite from Stufe 2), banners at the
       // corners and a rack of lances.
       const hI = amenityWidth(kind) / 2 - 0.04, hJ = 0.46;
-      const R = (a, b2, e = 0) => P(i + a * hI, j + b2 * hJ, e);
+      // Local frame: a runs along the lists, b across them (swapped when the yard is turned).
+      const loc = (a, b2) => (rot ? [i + b2, j + a] : [i + a, j + b2]);
+      const ux = rot ? 0 : 1, uy = rot ? 1 : 0;
+      const R = (a, b2, e = 0) => P(...loc(a * hI, b2 * hJ), e);
       els.push(<Block key="sand" corners={corners} baseElev={0} topElev={1} topFill="#d8c79a" faceLeft="#b8a47a" faceRight="#9a8862" shadowHeight={0} />);
-      els.push(<Block key="tilt" corners={orientedRect(i, j, 1, 0, hI * 0.78, 0.025)} baseElev={1} topElev={6} topFill="#e8e0cc" faceLeft="#c0392b" faceRight="#8f2a20" shadowHeight={6} />);
+      els.push(<Block key="tilt" corners={orientedRect(i, j, ux, uy, hI * 0.78, 0.025)} baseElev={1} topElev={6} topFill="#e8e0cc" faceLeft="#c0392b" faceRight="#8f2a20" shadowHeight={6} />);
       els.push(<polygon key="fence" points={ptsStr([R(-1, -1, 4), R(1, -1, 4), R(1, 1, 4), R(-1, 1, 4)])} fill="none" stroke="#6b4d2e" strokeWidth="1.2" pointerEvents="none" />);
       const stand = (sideJ, colour, key) => {
-        const cj = j + sideJ * (hJ - 0.1);
-        els.push(<Block key={`${key}-b`} corners={orientedRect(i, cj, 1, 0, hI * 0.45, 0.09)} baseElev={0} topElev={9} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed + key.length} shadowHeight={14} />);
-        const cv = [[-0.47, -0.12], [0.47, -0.12], [0.47, 0.12], [-0.47, 0.12]].map(([a, b2]) => P(i + a * hI, cj + b2, 18));
+        const off = sideJ * (hJ - 0.1);
+        const [sci, scj] = loc(0, off);
+        els.push(<Block key={`${key}-b`} corners={orientedRect(sci, scj, ux, uy, hI * 0.45, 0.09)} baseElev={0} topElev={9} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed + key.length} shadowHeight={14} />);
+        const cv = [[-0.47, -0.12], [0.47, -0.12], [0.47, 0.12], [-0.47, 0.12]].map(([a, b2]) => P(...loc(a * hI, off + b2), 18));
         els.push(<polygon key={`${key}-c`} points={ptsStr(cv)} fill={colour} stroke="#3a1a12" strokeWidth="0.6" pointerEvents="none" />);
       };
       stand(-1, L >= 3 ? '#6a2a6a' : '#a83a2c', 'stand1');
@@ -4256,9 +4371,9 @@ function AmenityBody({ i, j, kind, level }) {
   return { node: <g>{els}</g>, top };
 }
 
-const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false, level = 1, upgrading = false }) {
+const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false, level = 1, upgrading = false, rot = 0 }) {
   const finalHeight = amenityWallHeight(kind, level);
-  const corners = amenityCorners(kind, i, j);
+  const corners = amenityCorners(kind, i, j, rot);
   const info = AMENITY_TYPES[kind];
   const seed = i * 11.3 + j * 3.7;
   const finalPal = ghost ? (ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost) : info;
@@ -4267,7 +4382,7 @@ const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBl
   if (upgrading && stage !== 'done' && !ruined) {
     // An expansion in progress: the existing building keeps standing, wrapped in scaffolding
     // up to its new height.
-    const prev = AmenityBody({ i, j, kind, level: Math.max(1, level - 1) });
+    const prev = AmenityBody({ i, j, kind, level: Math.max(1, level - 1), rot });
     const scaffoldH = Math.max(finalHeight, prev.top - 6) * (stage === 'scaffold' ? 0.4 + 0.6 * progress : 1);
     return (
       <g>
@@ -4295,7 +4410,7 @@ const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBl
       </g>
     );
   }
-  const body = AmenityBody({ i, j, kind, level });
+  const body = AmenityBody({ i, j, kind, level, rot });
   const labelP = gridToScreen(i, j, body.top + 10);
   const stars = level > 1 ? ` ${'★'.repeat(level)}` : '';
   const label = (kind === 'kirche' && level >= 3 ? 'Kathedrale' : kind === 'vogtei' && level >= 3 ? 'Rathaus' : info.label) + stars;
@@ -6887,7 +7002,7 @@ const MinimapTerrain = React.memo(function MinimapTerrain({ ownedKey }) { // esl
   const cells = [];
   for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) {
     const t = TERRAIN[j][i];
-    const base = t === 'water' ? '#4b7f96' : t === 'bridge' ? '#8f6a3f' : t === 'forest' ? '#3f5a30' : t === 'hill' ? '#8a7b5d' : t === 'village' ? '#9a8a5c' : t === 'field' ? '#b29a4e' : t === 'road' ? '#9c8763' : '#6f874b';
+    const base = t === 'water' ? '#4b7f96' : t === 'bridge' ? '#8f6a3f' : t === 'plaza' ? '#b0a58e' : t === 'vineyard' ? '#7d8a3e' : t === 'forest' ? '#3f5a30' : t === 'hill' ? '#8a7b5d' : t === 'village' ? '#9a8a5c' : t === 'field' ? '#b29a4e' : t === 'road' ? '#9c8763' : '#6f874b';
     const fill = isOwnedTile(i, j) ? base : mixHex(base, '#15170f', 0.55);
     const pts = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => gridToScreen(a, b, 0));
     cells.push(<polygon key={`${i}-${j}`} points={ptsStr(pts)} fill={fill} stroke={fill} strokeWidth="2" />);
@@ -10319,7 +10434,9 @@ export default function CastleBuilder() {
   const [wallOrientationOffset, setWallOrientationOffset] = useState(0);
   const wallOrientationOffsetRef = useRef(0);
   useEffect(() => { wallOrientationOffsetRef.current = wallOrientationOffset; }, [wallOrientationOffset]);
-  useEffect(() => { if (tool !== 'wall' && tool !== 'gate') setWallOrientationOffset(0); }, [tool]);
+  useEffect(() => { if (tool !== 'wall' && tool !== 'gate' && tool !== 'turnierplatz') setWallOrientationOffset(0); }, [tool]);
+  // A long building (the Turnierplatz) is turned with the same wheel / Tab as a wall piece.
+  const amenityRot = (wallOrientationOffset + (diagonalMode ? 1 : 0)) % 2;
   const [openPanel, setOpenPanel] = useState(null);
   const [garnisonTab, setGarnisonTab] = useState('truppen');
   const [toolsPanelOpen, setToolsPanelOpen] = useState(true);
@@ -10450,7 +10567,7 @@ export default function CastleBuilder() {
     // While placing a wall or gate, the wheel rotates the piece instead of zooming the map —
     // otherwise the two fought over the same gesture and zoomed the view every time someone
     // just wanted to rotate.
-    if (toolRef.current === 'wall' || toolRef.current === 'gate') {
+    if (toolRef.current === 'wall' || toolRef.current === 'gate' || toolRef.current === 'turnierplatz') {
       e.preventDefault();
       setWallOrientationOffset((v) => ((v + (e.deltaY < 0 ? 1 : -1)) % 4 + 4) % 4);
       return;
@@ -11395,23 +11512,21 @@ export default function CastleBuilder() {
   }, [ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const amenityKeys = Object.keys(structures).filter((k) => k.startsWith('amenity:')).join('|');
-  const props = useMemo(() => {
+  // Everything standing in the outer regions — their woods, rocks and cottages — lives in a
+  // layer of its own under the heartland's, redrawn only when it changes (a tree felled, land
+  // won). The heartland's props are sorted in with the buildings and people as before.
+  const outerProps = useMemo(() => {
     const list = [];
-    // Trees and rocks on land the realm doesn't hold yet stand in the haze of the fog.
     const foreign = (n) => !OWNED_REGIONS.has(n.region || 'kern');
     forestTrees.forEach((t) => {
-      if (t.felled) return;
+      if (t.felled || !t.region) return;
       const node = <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} />;
       list.push({ depth: viewDepth(t.i, t.j) + 0.5, node: foreign(t) ? <g key={`tree-${t.id}`} opacity="0.5">{node}</g> : node });
     });
     hillRocks.forEach((r) => {
-      if (r.depleted) return;
-      const node = r.region ? <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} /> : <QuarryRockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
+      if (r.depleted || !r.region) return;
+      const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
       list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
-    });
-    // One house per family (two people), leaving out spots where a village building stands.
-    VILLAGE_HOUSE_SPOTS.filter((spot) => !structureKeyOnTile(structures, spot.i, spot.j)).slice(0, Math.ceil(villagePop / 2)).forEach((spot, idx) => {
-      list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
     });
     // The outer lords' villages.
     Object.values(FOE_CASTLE_SITES).forEach((c) => c.village.forEach(([vi, vj], idx) => {
@@ -11425,6 +11540,22 @@ export default function CastleBuilder() {
         list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`lhouse-${idx}`} i={spot.i} j={spot.j} /> });
       });
     }
+    return list.sort((a, b) => a.depth - b.depth).map((d) => d.node);
+  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
+  const props = useMemo(() => {
+    const list = [];
+    forestTrees.forEach((t) => {
+      if (t.felled || t.region) return;
+      list.push({ depth: viewDepth(t.i, t.j) + 0.5, node: <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} /> });
+    });
+    hillRocks.forEach((r) => {
+      if (r.depleted || r.region) return;
+      list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: <QuarryRockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} /> });
+    });
+    // One house per family (two people), leaving out spots where a village building stands.
+    VILLAGE_HOUSE_SPOTS.filter((spot) => !structureKeyOnTile(structures, spot.i, spot.j)).slice(0, Math.ceil(villagePop / 2)).forEach((spot, idx) => {
+      list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
+    });
     return list;
   }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot, amenityKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -11612,25 +11743,25 @@ export default function CastleBuilder() {
     }
     if (AMENITY_IDS.includes(tool)) {
       if (!structuresRef.current.keep) return;
-      if (terrainAt(i, j) !== 'grass' && !(VILLAGE_AMENITIES.includes(tool) && terrainAt(i, j) === 'village')) return;
+      if (!amenityTerrainOk(tool, terrainAt(i, j))) return;
       if (tool === 'kemenate' && !isKemenateAllowed(structuresRef.current, i, j)) return;
       if (tool === 'palas' && !researchRef.current.done.includes('palas')) return;
       const current = structs[key];
       const removing = current && current.kind === tool;
       // Every tile of the new building must be free grass.
-      const okTerrain = (a, b) => terrainAt(a, b) === 'grass' || (VILLAGE_AMENITIES.includes(tool) && terrainAt(a, b) === 'village');
-      if (!removing && !amenityTiles(tool, i, j).every(([a, b]) => okTerrain(a, b) && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
+      const okTerrain = (a, b) => amenityTerrainOk(tool, terrainAt(a, b));
+      if (!removing && !amenityTiles(tool, i, j, amenityRot).every(([a, b]) => okTerrain(a, b) && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
       SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
         if (removing) delete next[key];
-        else next[key] = { type: 'amenity', kind: tool, ...amenityCenter(tool, i, j), stage: 'foundation', progress: 0 };
+        else next[key] = { type: 'amenity', kind: tool, ...amenityCenter(tool, i, j, amenityRot), ...(amenityWidth(tool) > 1 && amenityRot ? { rot: 1 } : {}), stage: 'foundation', progress: 0 };
         return next;
       });
     } else if (tool === 'delete') {
       if (hereKey) askDemolish([hereKey]);
     }
-  }, [tool, askDemolish]);
+  }, [tool, askDemolish, amenityRot]);
 
   const finishDrag = useCallback(() => {
     if (tool === 'delete' && dragStart && dragEnd && dragStart !== dragEnd) {
@@ -11773,11 +11904,6 @@ export default function CastleBuilder() {
   // Flat ground never overlaps anything standing on it, so it lives in its own layer drawn
   // once underneath everything else — that lets the cast shadows of buildings and trees lie
   // on top of the terrain instead of being painted over by the next row of tiles.
-  const groundLayer = useMemo(() => {
-    const list = [];
-    for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push(<TileFace key={`t-${i}-${j}`} i={i} j={j} />);
-    return list;
-  }, [viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const drawables = useMemo(() => {
     const list = [];
@@ -11864,7 +11990,7 @@ export default function CastleBuilder() {
       } else if (s.type === 'keep') {
         list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'amenity') {
-        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
+        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} rot={s.rot || 0} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       }
     });
 
@@ -11971,9 +12097,9 @@ export default function CastleBuilder() {
       if (hoverKey.startsWith('tile:') && AMENITY_IDS.includes(tool)) {
         const [ti, tj] = hoverKey.slice(5).split(',').map(Number);
         if (!structureKeyOnTile(structures, ti, tj)) {
-          const okBuild = !!structures.keep && amenityTiles(tool, ti, tj).every(([a, b]) => (terrainAt(a, b) === 'grass' || (VILLAGE_AMENITIES.includes(tool) && terrainAt(a, b) === 'village')) && isOwnedTile(a, b) && !structureKeyOnTile(structures, a, b)) && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
-          const c = amenityCenter(tool, ti, tj);
-          list.push({ depth: viewDepth(c.i, c.j) - 0.4, node: <AmenityNode key="ghost-t" i={c.i} j={c.j} kind={tool} ghost ghostBlocked={!okBuild} /> });
+          const okBuild = !!structures.keep && amenityTiles(tool, ti, tj, amenityRot).every(([a, b]) => amenityTerrainOk(tool, terrainAt(a, b)) && isOwnedTile(a, b) && !structureKeyOnTile(structures, a, b)) && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
+          const c = amenityCenter(tool, ti, tj, amenityRot);
+          list.push({ depth: viewDepth(c.i, c.j) - 0.4, node: <AmenityNode key="ghost-t" i={c.i} j={c.j} kind={tool} rot={amenityRot} ghost ghostBlocked={!okBuild} /> });
         }
       }
       // Abriss (delete): previously hovering a wall/tower/building with the demolish tool
@@ -12912,6 +13038,12 @@ export default function CastleBuilder() {
         </div>
       )}
 
+      {tool === 'turnierplatz' && (
+        <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', background: 'rgba(20,16,10,0.85)', border: '2px solid #C9A24B', borderRadius: 4, padding: '6px 14px', zIndex: 40, color: '#EAE0C4', fontFamily: "'Cinzel', serif", fontSize: '0.82rem', pointerEvents: 'none' }}>
+          🏇 Turnierplatz {amenityRot ? 'quer' : 'längs'} — Mausrad oder Tab zum Drehen
+        </div>
+      )}
+
       {battlePhase === 'siege' && siege && (() => {
         const mine = battleUnits.filter((u) => u.own && u.hp > 0 && !u.exited && !u.routed).length;
         const foes = battleUnits.filter((u) => u.foe && u.hp > 0).length;
@@ -13816,7 +13948,7 @@ export default function CastleBuilder() {
           <div className="cb-section-title" style={{ marginTop: 10 }}>Bauen</div>
           <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
             <div><span className="cb-key">Q</span> Mauer · <span className="cb-key">W</span> Turm · <span className="cb-key">E</span> Tor · <span className="cb-key">R</span> Graben · <span className="cb-key">F</span> Burgfried · <span className="cb-key">X</span> Abriss</div>
-            <div><span className="cb-key">Tab</span> gedrückt halten: diagonale Mauern · <span className="cb-key">Mausrad</span> beim Mauer-/Torbau: drehen</div>
+            <div><span className="cb-key">Tab</span> gedrückt halten: diagonale Mauern · <span className="cb-key">Mausrad</span> beim Mauer-/Torbau und beim Turnierplatz: drehen</div>
             <div><span className="cb-key">Esc</span> oder Rechtsklick: Werkzeug abwählen · Fenster schließen</div>
             <div>Fertige Gebäude und Türme anklicken: Info & <strong>Ausbau</strong>. Tore anklicken: öffnen/schließen, Rechtsklick: Info.</div>
             <div>📐 <strong>Baukunst</strong>: Ihr beginnt mit Motte und Holzpalisade. Steinbau, Wehrtürme, Wehrgang, Bastionen und den Palas erforscht Ihr dort — mit einem Baumeister am Hofe doppelt so schnell. Unter „Bauen als“ wählt Ihr die Stufe für neue Mauern, Tore und Türme.</div>
@@ -14611,7 +14743,7 @@ export default function CastleBuilder() {
                 <SceneDefs />
                 <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
                 <MapBase />
-                <g>{groundLayer}</g>
+                <GroundLayer viewRot={viewRot} />
                 <RiverOverlay key={`river-${viewRot}`} />
                 <g pointerEvents="none">
                   {REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
@@ -14620,6 +14752,7 @@ export default function CastleBuilder() {
                     return <polygon key={`fog-${id}`} points={ptsStr(pts)} fill="rgba(14,16,10,0.5)" stroke="rgba(201,162,75,0.35)" strokeWidth="2" strokeDasharray="10 8" />;
                   })}
                 </g>
+                <StaticLayer nodes={outerProps} />
                 <g>{drawables.map((d) => d.node)}</g>
                 <CloudShadows />
                 <g>
