@@ -243,27 +243,27 @@ const REGION_DEFS = {
   kern: { id: 'kern', name: 'Kernland', i0: KI, i1: KI + KERN_COLS - 1, j0: KJ, j1: KJ + KERN_ROWS - 1 },
   ostwald: {
     id: 'ostwald', acc: 'den Ostwald', holderDat: 'den Raubrittern vom Ostwald', short: 'Ostwald', name: 'Der Ostwald', icon: '🌲', i0: 0, i1: GRID_COLS - 1, j0: 0, j1: KJ - 1,
-    holder: 'die Raubritter vom Ostwald', lord: 'Der Ritter vom Ostwald', strength: 12, oath: { gold: 250, rep: 55 }, needs: [],
+    holder: 'die Raubritter vom Ostwald', lord: 'Der Ritter vom Ostwald', strength: 12, oath: { gold: 650, rep: 72 }, needs: [],
     perks: ['Altholz: die Bäume hier geben 60 % mehr Holz', 'Wildbret: +15 🌾 im Monat', '🦊 Pelze: +4 im Monat'],
   },
   auen: {
     id: 'auen', acc: 'die Auen', holderDat: 'einem abtrünnigen Vogt', short: 'Auen', plural: true, name: 'Die Auen', icon: '🌾', i0: KI + KERN_COLS, i1: GRID_COLS - 1, j0: KJ, j1: KJ + KERN_ROWS - 1,
-    holder: 'ein abtrünniger Vogt', lord: 'Der Vogt der Auen', strength: 16, oath: { gold: 350, rep: 58 }, needs: [],
+    holder: 'ein abtrünniger Vogt', lord: 'Der Vogt der Auen', strength: 16, oath: { gold: 900, rep: 75 }, needs: [],
     perks: ['Fruchtbare Felder: +30 % Ernte', 'Platz für 4 weitere Einwohner', '🍷 Wein: +5 im Monat'],
   },
   suedhuegel: {
     id: 'suedhuegel', acc: 'die Südhügel', holderDat: 'dem Bergvolk', short: 'Südhügel', plural: true, name: 'Die Südhügel', icon: '⛰️', i0: KI, i1: KI + KERN_COLS - 1, j0: KJ + KERN_ROWS, j1: GRID_ROWS - 1,
-    holder: 'das Bergvolk', lord: 'Der Älteste des Bergvolks', strength: 14, oath: { gold: 300, rep: 55 }, needs: [],
+    holder: 'das Bergvolk', lord: 'Der Älteste des Bergvolks', strength: 14, oath: { gold: 800, rep: 72 }, needs: [],
     perks: ['Reiche Steinbrüche: 60 % mehr Stein je Fels', 'Erzadern: +10 🪙 im Monat', '⛓️ Eisen: +5 im Monat'],
   },
   markt: {
     id: 'markt', acc: 'Lindenau', holderDat: 'einem fremden Grafen', short: 'Lindenau', name: 'Marktflecken Lindenau', icon: '🏘️', i0: 0, i1: KI - 1, j0: KJ, j1: GRID_ROWS - 1,
-    holder: 'ein fremder Graf', lord: 'Der Graf von Lindenau', strength: 20, oath: { gold: 450, rep: 62 }, needs: [],
+    holder: 'ein fremder Graf', lord: 'Der Graf von Lindenau', strength: 20, oath: { gold: 1200, rep: 80 }, needs: [],
     perks: ['Zweites Dorf: Platz für 10 weitere Einwohner', 'Markt: +25 🪙 im Monat', '🪟 Glas: +3 im Monat'],
   },
   strasse: {
     id: 'strasse', acc: 'die Königsstraße', holderDat: 'den Wegelagerern der Straße', short: 'Königsstraße', name: 'Die Königsstraße', icon: '🛣️', i0: KI + KERN_COLS, i1: GRID_COLS - 1, j0: KJ + KERN_ROWS, j1: GRID_ROWS - 1,
-    holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 600, rep: 68 }, needs: ['auen', 'suedhuegel'],
+    holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 1600, rep: 85 }, needs: ['auen', 'suedhuegel'],
     perks: ['Zoll: +40 🪙 im Monat', 'Platz für 3 weitere Einwohner, Ruf +5', '🐫 Fernhändler kommen öfter und 15 % billiger'],
   },
 };
@@ -288,7 +288,7 @@ function foeCastleStructures(id) {
 const FOE_CASTLES = Object.fromEntries(REGION_IDS.map((id) => [id, foeCastleStructures(id)]));
 // The lord's garrison: archers on the towers, the keep and any stone wall, the foot soldiers
 // drawn up just inside the gate. It grows with the region's strength.
-const FOE_GARRISON_SHARE = 0.6;
+const FOE_GARRISON_SHARE = 1;
 function foeGarrison(id, year) {
   const fc = FOE_CASTLES[id], c = FOE_CASTLE_SITES[id];
   const total = Math.max(4, Math.round(regionStrength(id, year) * FOE_GARRISON_SHARE));
@@ -363,7 +363,7 @@ function expeditionWinChance(power, strength) {
   return 1 / (1 + Math.exp(-4 * (power / strength - 1)));
 }
 function regionStrength(id, year) {
-  return Math.round(REGION_DEFS[id].strength * (1 + 0.03 * Math.max(0, year - START_YEAR)));
+  return Math.round(REGION_DEFS[id].strength * (1 + 0.05 * Math.max(0, year - START_YEAR)));
 }
 const TERRAIN = buildTerrain();
 // How deep inside a stretch of hills a tile lies (0..1): the hills are shaded by it so they
@@ -9229,11 +9229,20 @@ export default function CastleBuilder() {
   };
   const oathTerms = (id) => {
     const f = rulerFx(rulerRef.current);
-    return { gold: Math.round(REGION_DEFS[id].oath.gold * f.oathGoldMult), rep: REGION_DEFS[id].oath.rep - f.oathRepLess };
+    // Every region already in the realm makes the next lord harder to win over, and none swears
+    // to a king whose own garrison he could beat.
+    const held = ownedRegionsRef.current.length;
+    const year = getCalendarDate(dayRef.current).year;
+    return {
+      gold: Math.round(REGION_DEFS[id].oath.gold * f.oathGoldMult * (1 + 0.4 * held)),
+      rep: Math.min(95, REGION_DEFS[id].oath.rep - f.oathRepLess + 3 * held),
+      troops: Math.max(4, Math.round(regionStrength(id, year) * FOE_GARRISON_SHARE * 1.5)),
+    };
   };
   const swearOath = (id) => {
     const def = REGION_DEFS[id];
     const terms = oathTerms(id);
+    if (resources.gold < terms.gold || reputation < terms.rep || soldiers.soldier + soldiers.archer < terms.troops) return;
     setResources((r) => ({ ...r, gold: r.gold - terms.gold }));
     claimRegion(id, 'Lehnseid');
     setEventOutcome({ emoji: '📜', portrait: LORD_PORTRAITS[id], tone: 'good', title: 'Der Lehnseid', text: `${def.lord} kniet vor Euch nieder, legt seine Hände in die Euren und schwört Euch Treue. ${def.name} ${def.plural ? 'gehören' : 'gehört'} nun zum Reich — die ${terms.gold} 🪙 sind gut angelegt.` });
@@ -14075,7 +14084,7 @@ export default function CastleBuilder() {
                           const site = FOE_CASTLE_SITES[id];
                           const wallName = levelName('wall', site.wall);
                           const terms = oathTerms(id);
-                          const repOk = reputation >= terms.rep, goldOk = resources.gold >= terms.gold;
+                          const repOk = reputation >= terms.rep, goldOk = resources.gold >= terms.gold, troopsOk = soldiers.soldier + soldiers.archer >= terms.troops;
                           return (
                             <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 12, marginTop: 10 }}>
                               <div style={{ borderRight: '1px solid rgba(59,46,31,0.2)', paddingRight: 12 }}>
@@ -14111,8 +14120,9 @@ export default function CastleBuilder() {
                                   {d.lord} würde Euch die Treue schwören:
                                   <div style={{ color: repOk ? '#3d5a2c' : '#8a2d20' }}>{repOk ? '✔' : '✘'} Ruf mindestens {terms.rep} (jetzt {Math.round(reputation)})</div>
                                   <div style={{ color: goldOk ? '#3d5a2c' : '#8a2d20' }}>{goldOk ? '✔' : '✘'} {terms.gold} 🪙 als Geschenk</div>
+                                  <div style={{ color: troopsOk ? '#3d5a2c' : '#8a2d20' }}>{troopsOk ? '✔' : '✘'} mindestens {terms.troops} Soldaten und Bogenschützen daheim (jetzt {soldiers.soldier + soldiers.archer}) — er beugt sich nur der Stärke</div>
                                 </div>
-                                <button className="cb-btn is-active" disabled={!repOk || !goldOk || busy || (expedition && expedition.region === id)} onClick={() => { setOpenPanel(null); setReichFocus(null); swearOath(id); }}
+                                <button className="cb-btn is-active" disabled={!repOk || !goldOk || !troopsOk || busy || (expedition && expedition.region === id)} onClick={() => { setOpenPanel(null); setReichFocus(null); swearOath(id); }}
                                   style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem', marginTop: 8 }}>Lehnseid annehmen</button>
                               </div>
                             </div>
