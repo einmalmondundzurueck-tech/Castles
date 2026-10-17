@@ -399,6 +399,10 @@ const AMENITY_TYPES = {
   brunnen: { label: 'Brunnen', top: '#4a7a8c', left: '#7d7566', right: '#5f584a' },
   kapelle: { label: 'Kapelle', top: '#a8a296', left: '#84806f', right: '#635f52' },
   brauhaus: { label: 'Brauhaus', top: '#8c6a3f', left: '#6b4f2e', right: '#4a3620' },
+  palas: { label: 'Palas', top: '#a49d90', left: '#8f887a', right: '#6c665a' },
+  bogenmacher: { label: 'Bogenmacher', top: '#8a6a42', left: '#86643c', right: '#5d432a' },
+  falknerei: { label: 'Falknerei', top: '#7d6a4a', left: '#8a7350', right: '#5f4e34' },
+  turnierplatz: { label: 'Turnierplatz', top: '#c9b98a', left: '#8a6a42', right: '#5d432a' },
 };
 const AMENITY_IDS = Object.keys(AMENITY_TYPES);
 function hasDoneAmenity(structures, kind) {
@@ -441,6 +445,13 @@ function brauhausHappiness(structures) { const L = amenityLevel(structures, 'bra
 function kapelleHappiness(structures) { const L = amenityLevel(structures, 'kapelle'); return L ? 1 + 0.6 * (L - 1) : 0; }
 // Combat multiplier of the chapel's blessing (0 = no chapel).
 function kapelleCombatMult(structures) { const L = amenityLevel(structures, 'kapelle'); return L ? 1.15 + 0.07 * (L - 1) : 0; }
+// The new buildings of the Ausbau: the great hall, the bowyer, the mews and the lists.
+function palasCourtPerMonth(structures) { const L = amenityLevel(structures, 'palas'); return L ? 0.8 * L : 0; }
+function bowyerArcherMult(structures) { const L = amenityLevel(structures, 'bogenmacher'); return L ? 1.1 + 0.05 * (L - 1) : 1; }
+function falknereiFoodPerMonth(structures) { return 3 * amenityLevel(structures, 'falknerei'); }
+// Feasts, hunts and tournaments can be held this often (in days).
+const PALAS_FEAST_COOLDOWN = 360, HUNT_COOLDOWN = 90, TOURNAMENT_COOLDOWN = 360;
+const FEAST_COST = { gold: 60, food: 40 }, HUNT_COST = { gold: 25 }, TOURNAMENT_COST = { gold: 120 };
 function kemenateCourtMorale(structures) { const L = amenityLevel(structures, 'kemenate'); return L > 1 ? 0.9 * (L - 1) : 0; }
 function stallKnightHpMult(structures) { return 1 + 0.15 * Math.max(0, amenityLevel(structures, 'stallungen') - 1); }
 function smithyLevelDamageMult(structures) { return 1 + 0.05 * Math.max(0, amenityLevel(structures, 'schmied') - 1); }
@@ -454,6 +465,10 @@ const AMENITY_LEVEL_TEXT = {
   brunnen: ['+2 Nahrung pro Monat.', '+4 Nahrung pro Monat.', '+6 Nahrung pro Monat.'],
   kapelle: ['+15 % Kampfschaden, +1 Zufriedenheit/Monat.', '+22 % Kampfschaden, +1,6 Zufriedenheit/Monat.', '+29 % Kampfschaden, +2,2 Zufriedenheit/Monat.'],
   brauhaus: ['+4 Nahrung, +1,2 Zufriedenheit pro Monat.', '+7 Nahrung, +1,7 Zufriedenheit pro Monat.', '+10 Nahrung, +2,2 Zufriedenheit pro Monat.'],
+  palas: ['Feste feiern: Brautschau und Gäste an den Hof laden; +0,8 Stimmung bei Hofe pro Monat.', '+1,6 Stimmung bei Hofe pro Monat, prächtigere Feste.', '+2,4 Stimmung bei Hofe pro Monat, die prächtigsten Feste.'],
+  bogenmacher: ['Bogenschützen +10 % Schaden.', 'Bogenschützen +15 % Schaden.', 'Bogenschützen +20 % Schaden.'],
+  falknerei: ['Jagden veranstalten; +3 Nahrung pro Monat.', '+6 Nahrung pro Monat, reichere Jagd.', '+9 Nahrung pro Monat, die reichste Jagd.'],
+  turnierplatz: ['Eigene Turniere ausrichten: Ruhm, Erfahrung für Eure Ritter, neue Ritter.', 'Größere Turniere: mehr Ruhm.', 'Die großen Turniere des Reiches.'],
 };
 // Once at least one Lagerhaus stands, hauled goods go straight there instead of the open
 // depot marker — the nearest finished one to wherever the hauler currently is.
@@ -507,19 +522,21 @@ const BUILD_COST = {
   brunnen: { wood: 3, stone: 12 },
   kapelle: { wood: 6, stone: 18 },
   brauhaus: { wood: 9, stone: 11 },
+  palas: { wood: 14, stone: 32 },
+  bogenmacher: { wood: 10, stone: 4 },
+  falknerei: { wood: 9, stone: 4 },
+  turnierplatz: { wood: 16, stone: 2 },
   graben: { wood: 0, stone: 0 },
 };
 // How much work each kind of building takes, as a multiple of a plain stage of work: stone
 // fortifications are slow, heavy going; a ditch is only dug.
 const BUILD_WORK = { wall: 3, gate: 3, tower: 3.6, keep: 2.2, graben: 1.6, amenity: 1.8 };
 function buildWorkOf(site) {
+  if (STRUCT_LEVELS[site.type]) return STRUCT_LEVELS[site.type].work[Math.max(1, site.level || 1)];
   return BUILD_WORK[site.type] || 1;
 }
 function getBuildCost(site) {
-  if (site.type === 'tower' && (site.level || 1) > 1) {
-    const m = AMENITY_LEVEL_COST_MULT[site.level] || 1;
-    return { wood: Math.round(BUILD_COST.tower.wood * m), stone: Math.round(BUILD_COST.tower.stone * m) };
-  }
+  if (STRUCT_LEVELS[site.type]) return STRUCT_LEVELS[site.type].cost[Math.max(1, site.level || 1)];
   if (site.type !== 'amenity') return BUILD_COST[site.type];
   const base = BUILD_COST[site.kind];
   const m = AMENITY_LEVEL_COST_MULT[site.level || 1] || 1;
@@ -535,6 +552,7 @@ const CHAMPION_JOIN_COST = 70;
 const HIRE_COST_WORKER = 4;
 const HIRE_COST_SOLDIER = { soldier: 8, archer: 10 };
 const NOBLE_DAUGHTER_NAMES = ['Adelheid', 'Mathilde', 'Beatrix', 'Irmgard', 'Kunigunde', 'Richenza'];
+const NOBLE_GROOM_NAMES = ['Graf Albrecht', 'Herzog Bernhard', 'Graf Dietrich', 'Markgraf Gero', 'Graf Hermann', 'Pfalzgraf Siegfried'];
 // Sons and daughters get suggested names from separate pools (the player can always overwrite
 // the suggestion) — and sons take precedence in the line of succession, so keeping the two
 // genders as distinct lists also makes the succession logic straightforward.
@@ -2206,9 +2224,89 @@ function rimPoints(i, j, r, perSide, skipCorners = false) {
 
 // A finished tower at its Ausbaustufe: level 2 (Wehrturm) is taller and wider with a
 // corbelled parapet; level 3 (Bastion) taller still, with corner turrets and a banner.
+// Timber pieces of the early castle.
+const TIMBER_PAL = { top: '#7a5a34', left: '#86643c', right: '#5d432a' };
+// Pointed log tips along the top rim of a square footprint (a palisade crown).
+function LogCrown({ corners, elev, n = 5 }) {
+  const pts = [];
+  corners.forEach((c, k) => {
+    const d = corners[(k + 1) % corners.length];
+    for (let m = 0; m < n; m++) {
+      const u = m / n, um = (m + 0.5) / n;
+      pts.push(gridToScreen(c[0] + (d[0] - c[0]) * u, c[1] + (d[1] - c[1]) * u, elev));
+      pts.push(gridToScreen(c[0] + (d[0] - c[0]) * um, c[1] + (d[1] - c[1]) * um, elev + 4));
+    }
+  });
+  // Only the near half is seen in front of the platform; drawing all of it as one outline
+  // reads as a ring of stakes.
+  return <polygon points={ptsStr(pts)} fill="none" stroke="#5a4129" strokeWidth="1.6" strokeLinejoin="round" pointerEvents="none" />;
+}
+// Holzturm: a timber tower on four corner posts, planked, with an open fighting platform.
+function WoodTowerBody({ i, j, damageFrac = 0 }) {
+  const half = 0.27;
+  const seed = i * 17.3 + j * 5.1;
+  const H = towerHeightFor(1);
+  if (damageFrac >= 0.999) {
+    return (
+      <g>
+        <Block corners={sq(i, j, half)} baseElev={0} topElev={8} topFill="#2e2218" faceLeft="#3a2a1c" faceRight="#2a1e14" texture="wood" seed={seed} />
+        <RubbleDecor i={i} j={j} frac={1} />
+        <RuinSmoke i={i} j={j} elev={10} seed={seed} />
+      </g>
+    );
+  }
+  const topH = H * (1 - Math.min(0.3, damageFrac * 0.3));
+  const deck = topH - 6;
+  const body = sq(i, j, half);
+  const q = computeFaceQuads(body, 2, deck);
+  return (
+    <g>
+      <Block corners={sq(i, j, half * 1.12)} baseElev={0} topElev={2} topFill="#5a4a36" faceLeft="#6b5a42" faceRight="#4a3d2c" shadowHeight={topH + 6} />
+      <Block corners={body} baseElev={2} topElev={deck} topFill={TIMBER_PAL.top} faceLeft={TIMBER_PAL.left} faceRight={TIMBER_PAL.right} texture="wood" seed={seed} />
+      {/* cross-bracing on the visible faces */}
+      <path d={[q.faceA, q.faceB].map((f) => { const a = facePt(f, 0.05, 0.1), b = facePt(f, 0.95, 0.9), c = facePt(f, 0.95, 0.1), d = facePt(f, 0.05, 0.9); return `M${a.x} ${a.y}L${b.x} ${b.y}M${c.x} ${c.y}L${d.x} ${d.y}`; }).join('')} stroke="rgba(40,26,12,0.55)" strokeWidth="1.2" pointerEvents="none" />
+      <ArrowSlit face={q.faceA} u={0.5} v0={0.15} dv={0.18} />
+      <Block corners={sq(i, j, half * 1.28)} baseElev={deck} topElev={deck + 2} topFill="#6e5132" faceLeft="#7a5a34" faceRight="#553a22" shadowHeight={0} shade={false} />
+      <Block corners={sq(i, j, half * 1.24)} baseElev={deck + 2} topElev={topH} topFill="#5a4129" faceLeft="#8a6a42" faceRight="#634a2e" texture="wood" seed={seed + 3} shadowHeight={0} />
+      {damageFrac < 0.45 && <LogCrown corners={sq(i, j, half * 1.24)} elev={topH} />}
+      <CrackOverlay corners={body} baseElev={2} topElev={deck} frac={damageFrac} />
+      <RubbleDecor i={i} j={j} frac={damageFrac} />
+      {damageFrac > 0.55 && <RuinSmoke i={i} j={j} elev={topH} seed={seed} />}
+    </g>
+  );
+}
+// Motte: an earth mound with a timber tower on top, ringed by a little palisade.
+function MotteBody({ i, j }) {
+  const seed = i * 7.7 + j * 13.1;
+  const H = keepHeightFor(1);
+  const mound = 10, deck = H - 7;
+  const body = sq(i, j, 0.25);
+  const q = computeFaceQuads(body, mound, deck);
+  const flagBase = gridToScreen(i, j, H), flagTop = gridToScreen(i, j, H + 26);
+  return (
+    <g>
+      <Block corners={sq(i, j, 0.5)} baseElev={0} topElev={mound * 0.55} topFill="#6f7d3c" faceLeft="#7a6040" faceRight="#5a442a" shadowHeight={H + 10} />
+      <Block corners={sq(i, j, 0.4)} baseElev={mound * 0.55} topElev={mound} topFill="#7b8a44" faceLeft="#86693f" faceRight="#634b2d" shadowHeight={0} />
+      <LogCrown corners={sq(i, j, 0.38)} elev={mound} n={4} />
+      <Block corners={body} baseElev={mound} topElev={deck} topFill={TIMBER_PAL.top} faceLeft={TIMBER_PAL.left} faceRight={TIMBER_PAL.right} texture="wood" seed={seed} shadowHeight={0} />
+      <ArchOpening face={q.faceB} u={0.5} v0={0.55} dv={0.45} du={0.22} fill="#3a2614" />
+      <ArrowSlit face={q.faceA} u={0.35} v0={0.2} dv={0.2} />
+      <ArrowSlit face={q.faceA} u={0.7} v0={0.2} dv={0.2} />
+      <Block corners={sq(i, j, 0.32)} baseElev={deck} topElev={deck + 2} topFill="#6e5132" faceLeft="#7a5a34" faceRight="#553a22" shadowHeight={0} shade={false} />
+      <Block corners={sq(i, j, 0.31)} baseElev={deck + 2} topElev={H} topFill="#5a4129" faceLeft="#8a6a42" faceRight="#634a2e" texture="wood" seed={seed + 2} shadowHeight={0} />
+      <LogCrown corners={sq(i, j, 0.31)} elev={H} n={4} />
+      <line x1={flagBase.x} y1={flagBase.y} x2={flagTop.x} y2={flagTop.y} stroke="#2b2118" strokeWidth="1.4" />
+      <path d={`M ${flagTop.x} ${flagTop.y} l 14 3 l -14 5 z`} fill="#8f2a20" stroke="#3a120c" strokeWidth="0.7" />
+    </g>
+  );
+}
+
 function TowerBody({ i, j, level = 1, damageFrac = 0, doorA = false, doorB = false }) {
   const L = Math.max(1, Math.min(TOWER_MAX_LEVEL, level || 1));
-  const half = 0.32 + 0.02 * (L - 1);
+  if (L === 1) return <WoodTowerBody i={i} j={j} damageFrac={damageFrac} />;
+  // Stone towers: Wachturm, Wehrturm, Bastion are the stone styles 1..3.
+  const S = L - 1;
+  const half = 0.32 + 0.02 * (S - 1);
   const corners = sq(i, j, half);
   const seed = i * 17.3 + j * 5.1;
   const pal = PALETTE.tower;
@@ -2230,11 +2328,11 @@ function TowerBody({ i, j, level = 1, damageFrac = 0, doorA = false, doorB = fal
   const topH = H * (1 - Math.min(0.3, damageFrac * 0.3));
   const showMerlons = damageFrac < 0.45;
   const parBase = Math.max(8, topH - 7);
-  const ph = half * (L >= 2 ? 1.18 : 1.12);
+  const ph = half * (S >= 2 ? 1.18 : 1.12);
   const bodyQuads = computeFaceQuads(corners, 5, parBase);
   // Corbels under an overhanging parapet (level 2+): a row of small dark brackets.
   let corbels = '';
-  if (L >= 2) {
+  if (S >= 2) {
     const cq = computeFaceQuads(corners, parBase - 4, parBase);
     [cq.faceA, cq.faceB].forEach((f) => {
       for (let k = 1; k < 6; k++) {
@@ -2244,7 +2342,7 @@ function TowerBody({ i, j, level = 1, damageFrac = 0, doorA = false, doorB = fal
     });
   }
   const turretOff = ph * 0.95;
-  const turrets = L >= 3 && showMerlons ? [[i - turretOff, j - turretOff], [i + turretOff, j - turretOff], [i + turretOff, j + turretOff], [i - turretOff, j + turretOff]].sort((a, b) => viewDepth(a[0], a[1]) - viewDepth(b[0], b[1])) : [];
+  const turrets = S >= 3 && showMerlons ? [[i - turretOff, j - turretOff], [i + turretOff, j - turretOff], [i + turretOff, j + turretOff], [i - turretOff, j + turretOff]].sort((a, b) => viewDepth(a[0], a[1]) - viewDepth(b[0], b[1])) : [];
   const flagBase = gridToScreen(i, j, topH), flagTop = gridToScreen(i, j, topH + 24);
   return (
     <g>
@@ -2261,21 +2359,21 @@ function TowerBody({ i, j, level = 1, damageFrac = 0, doorA = false, doorB = fal
             {doorA && damageFrac < 0.45 ? <ArchOpening face={bodyQuads.faceA} u={0.5} v0={v0} dv={dv} du={0.3} fill="#2a2016" /> : <ArrowSlit face={bodyQuads.faceA} u={0.5} v0={0.12} dv={0.22} />}
             {doorB && damageFrac < 0.45 ? <ArchOpening face={bodyQuads.faceB} u={0.5} v0={v0} dv={dv} du={0.3} fill="#2a2016" /> : <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={0.12} dv={0.22} />}
             {!doorB && <ArrowSlit face={bodyQuads.faceB} u={0.5} v0={vSlit} dv={0.2} />}
-            {L >= 2 && <ArrowSlit face={bodyQuads.faceA} u={0.25} v0={0.1} dv={0.16} />}
-            {L >= 2 && <ArrowSlit face={bodyQuads.faceA} u={0.75} v0={0.1} dv={0.16} />}
+            {S >= 2 && <ArrowSlit face={bodyQuads.faceA} u={0.25} v0={0.1} dv={0.16} />}
+            {S >= 2 && <ArrowSlit face={bodyQuads.faceA} u={0.75} v0={0.1} dv={0.16} />}
           </>
         );
       })()}
       {corbels && <path d={corbels} stroke="rgba(20,14,8,0.55)" strokeWidth="1.6" pointerEvents="none" />}
       <Block corners={sq(i, j, ph)} baseElev={parBase - 1.5} topElev={parBase} topFill={shade(pal.top, -0.3)} faceLeft={shade(pal.left, -0.35)} faceRight={shade(pal.right, -0.35)} shadowHeight={0} shade={false} />
       <Block corners={sq(i, j, ph)} baseElev={parBase} topElev={topH} topFill={shade(pal.top, -0.22)} faceLeft={shade(pal.left, 0.04)} faceRight={shade(pal.right, 0.04)} texture="stone" seed={seed + 2} shadowHeight={0} />
-      {L >= 2 && showMerlons && (
+      {S >= 2 && showMerlons && (
         <g pointerEvents="none">
           <line x1={flagBase.x} y1={flagBase.y} x2={flagTop.x} y2={flagTop.y} stroke="#2b2118" strokeWidth="1.2" />
-          <path d={`M ${flagTop.x} ${flagTop.y} l 12 3 l -12 4 z`} fill={L >= 3 ? '#8f2a20' : '#C9A24B'} stroke="#2b2118" strokeWidth="0.7" />
+          <path d={`M ${flagTop.x} ${flagTop.y} l 12 3 l -12 4 z`} fill={S >= 3 ? '#8f2a20' : '#C9A24B'} stroke="#2b2118" strokeWidth="0.7" />
         </g>
       )}
-      {showMerlons && <Merlons centers={rimPoints(i, j, ph - 0.065, L >= 2 ? 2 : 1, L >= 3)} along={0.06} across={0.06} base={topH} height={MERLON_H * 0.85} pal={shadePal(pal, 0.04)} seed={seed} />}
+      {showMerlons && <Merlons centers={rimPoints(i, j, ph - 0.065, S >= 2 ? 2 : 1, S >= 3)} along={0.06} across={0.06} base={topH} height={MERLON_H * 0.85} pal={shadePal(pal, 0.04)} seed={seed} />}
       {turrets.map(([ti, tj], k) => (
         <g key={k}>
           <Cylinder i={ti} j={tj} r={0.09} base={topH - 9} h={15} side="#9c9484" top="#7d7566" />
@@ -2295,7 +2393,7 @@ const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, sta
   const finalH = towerHeightFor(level);
   const v = stageVisual(stage, progress, finalH, PALETTE.tower, ghost, ghostBlocked, ruined);
   const seed = i * 17.3 + j * 5.1;
-  if (ghost) return <GhostBlock corners={corners} height={TOWER_H} pal={v.pal} blocked={ghostBlocked} />;
+  if (ghost) return <GhostBlock corners={corners} height={finalH} pal={v.pal} blocked={ghostBlocked} />;
   if (upgrading && stage !== 'done' && !ruined) {
     // Expansion in progress: the old tower stands inside a scaffold reaching its new height.
     const scaffoldH = finalH * (stage === 'scaffold' ? 0.5 + 0.5 * progress : 1);
@@ -2329,12 +2427,27 @@ const TowerNode = React.memo(function TowerNode({ i, j, ghost, ghostBlocked, sta
   return <TowerBody i={i} j={j} level={level} damageFrac={damageFrac} doorA={doorA} doorB={doorB} />;
 });
 
-const KeepNode = React.memo(function KeepNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false }) {
+const KeepNode = React.memo(function KeepNode({ i, j, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false, level = 1, upgrading = false }) {
   const half = 0.48;
   const corners = sq(i, j, half);
-  const v = stageVisual(stage, progress, KEEP_H, PALETTE.keep, ghost, ghostBlocked, ruined);
+  const finalH = keepHeightFor(level);
+  const v = stageVisual(stage, progress, finalH, level === 1 ? TIMBER_PAL : PALETTE.keep, ghost, ghostBlocked, ruined);
   const seed = i * 7.7 + j * 13.1;
-  if (ghost) return <GhostBlock corners={corners} height={KEEP_H} pal={v.pal} blocked={ghostBlocked} />;
+  if (ghost) return <GhostBlock corners={corners} height={finalH} pal={v.pal} blocked={ghostBlocked} />;
+  if (upgrading && stage !== 'done' && !ruined) {
+    // Motte becoming a Burgfried: the timber keep stands on inside the scaffold of the new one.
+    const scH = finalH * (stage === 'scaffold' ? 0.5 + 0.5 * progress : 1);
+    const sc = expandCorners(corners, 0.04);
+    return (
+      <g>
+        <ScaffoldRig corners={sc} height={scH} part="back" seed={seed} />
+        <MotteBody i={i} j={j} />
+        <ScaffoldRig corners={sc} height={scH} part="front" seed={seed} />
+        <TreadwheelCrane corners={sc} height={scH} seed={seed} />
+        <ProgressLabel i={i} j={j} height={scH + 4} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+      </g>
+    );
+  }
   if (stage === 'foundation') {
     return (
       <g>
@@ -2351,6 +2464,7 @@ const KeepNode = React.memo(function KeepNode({ i, j, ghost, ghostBlocked, stage
       </g>
     );
   }
+  if (level === 1) return <MotteBody i={i} j={j} />;
   const pal = PALETTE.keep;
   const parBase = KEEP_H - 9;
   const ph = half * 1.08;
@@ -2511,7 +2625,8 @@ function DitchPit({ corners, depth, filled, ghost, ghostBlocked, seed, clipId })
 
 // Walls, gates and ditches are laid in long runs, so their site labels only show while the
 // mouse is over that piece (showLabel) instead of crowding every segment.
-const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, showLabel = false, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOut = null, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false }) {
+const WallNode = React.memo(function WallNode(allProps) {
+  const { i1, j1, i2, j2, kind, ghost, ghostBlocked, showLabel = false, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOut = null, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false, level = 1, upgrading = false } = allProps;
   const horizontal = j1 === j2;
   const diagonal = i1 !== i2 && j1 !== j2;
   const t = 0.12;
@@ -2546,6 +2661,21 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
   const midI = (i1 + i2) / 2, midJ = (j1 + j2) / 2;
   const seed = i1 * 13.1 + j1 * 7.3 + i2 * 3.7 + j2 * 1.9;
 
+  if (upgrading && stage !== 'done' && !ruined && !ghost && (kind === 'wall' || kind === 'gate')) {
+    // Being raised to the next level: the old wall or gate stands on, inside a scaffold.
+    const targetH = kind === 'gate' ? GATEHOUSE_H : wallHeightFor(level);
+    const scH = targetH * (stage === 'scaffold' ? 0.5 + 0.5 * progress : 1);
+    const sc = expandCorners(corners, 0.05);
+    return (
+      <g>
+        <ScaffoldRig corners={sc} height={scH} part="back" seed={seed} />
+        <WallNode {...allProps} stage="done" level={Math.max(1, level - 1)} upgrading={false} showLabel={false} />
+        <ScaffoldRig corners={sc} height={scH} part="front" seed={seed} />
+        {showLabel && <ProgressLabel i={midI} j={midJ} height={scH} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
+      </g>
+    );
+  }
+
   if (kind === 'graben') {
     const v = stageVisual(stage, progress, DITCH_DEPTH, PALETTE.ditch, ghost, ghostBlocked, ruined);
     const depth = stage === 'done' || ghost ? DITCH_DEPTH : Math.max(2, DITCH_DEPTH * (stage === 'foundation' ? 0.15 + 0.2 * progress : stage === 'scaffold' ? 0.35 + 0.3 * progress : 0.65 + 0.35 * progress));
@@ -2562,7 +2692,9 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
   if (kind === 'gate' && !ghost && stage === 'done') {
     const pal = PALETTE.tower;
     // The gatehouse stands a little prouder than the curtain wall either side of it.
-    const GH = GATEHOUSE_H;
+    // A Holztor (level 1) is a timber gate in the palisade: two posts and a beam, no arch.
+    const timber = level === 1;
+    const GH = timber ? 24 : GATEHOUSE_H;
     const woodPal = { top: '#8a6a3f', left: '#7a5a34', right: '#553a22' };
     const ph = 0.15;
     const gateBroken = damageFrac >= 0.999;
@@ -2629,8 +2761,10 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     const faceLit = (gvx * fs) > (gvy * fs);
     const lintelFill = faceLit ? pal.left : pal.right;
     const archPath = arc.map((p, k) => `${k ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
-    const pillar1 = <Block key="p1" corners={orientedRect(i1, j1, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={GH + MERLON_H} />;
-    const pillar2 = <Block key="p2" corners={orientedRect(i2, j2, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed + 9} shadowHeight={GH + MERLON_H} />;
+    const postPal = timber ? { top: '#7a5a34', left: '#7f5e39', right: '#5a4129' } : pal;
+    const pr = timber ? 0.08 : ph;
+    const pillar1 = <Block key="p1" corners={orientedRect(i1, j1, ux, uy, pr, pr)} baseElev={0} topElev={GH + (timber ? 4 : 0)} topFill={postPal.top} faceLeft={postPal.left} faceRight={postPal.right} texture={timber ? 'wood' : 'stone'} seed={seed} shadowHeight={GH + MERLON_H} />;
+    const pillar2 = <Block key="p2" corners={orientedRect(i2, j2, ux, uy, pr, pr)} baseElev={0} topElev={GH + (timber ? 4 : 0)} topFill={postPal.top} faceLeft={postPal.left} faceRight={postPal.right} texture={timber ? 'wood' : 'stone'} seed={seed + 9} shadowHeight={GH + MERLON_H} />;
     const p1First = viewDepth(i1, j1) <= viewDepth(i2, j2);
     const crenels = [];
     [[i1, j1], [i2, j2]].forEach(([ci, cj]) => {
@@ -2660,14 +2794,20 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
         {!gateBroken && <Block corners={leafCorners(i1 + ux * ph, j1 + uy * ph, leftToI, leftToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 3} shadowHeight={0} />}
         {!gateBroken && <Block corners={leafCorners(i2 - ux * ph, j2 - uy * ph, rightToI, rightToJ)} baseElev={0} topElev={leafHeight} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 4} shadowHeight={0} />}
         <g style={{ transform: effectiveClosed ? 'translateY(0px)' : `translateY(-${(GH * 0.55).toFixed(0)}px)`, transition: 'transform 1s ease-in-out' }} pointerEvents="none">
-          {!gateBroken && <path d={portcullis} stroke="#2b241c" strokeWidth="1.8" strokeLinecap="round" fill="none" />}
+          {!gateBroken && !timber && <path d={portcullis} stroke="#2b241c" strokeWidth="1.8" strokeLinecap="round" fill="none" />}
         </g>
-        <polygon points={ptsStr(lintelTop)} fill={shade(pal.top, -0.18)} stroke="rgba(30,22,14,0.4)" strokeWidth="1" pointerEvents="none" />
-        <polygon points={ptsStr(lintelFace)} fill={lintelFill} stroke="rgba(30,22,14,0.45)" strokeWidth="1" pointerEvents="none" />
-        <path d={archPath} fill="none" stroke={shade(pal.top, 0.2)} strokeWidth="2.6" strokeDasharray="3,1.2" pointerEvents="none" />
-        <path d={archPath} fill="none" stroke="rgba(30,22,14,0.55)" strokeWidth="0.7" pointerEvents="none" />
+        {timber ? (
+          <Block corners={orientedRect(midI, midJ, ux, uy, len / 2, 0.07)} baseElev={GH - 3} topElev={GH + 1} topFill={woodPal.top} faceLeft={woodPal.left} faceRight={woodPal.right} texture="wood" seed={seed + 7} shadowHeight={0} />
+        ) : (
+          <>
+            <polygon points={ptsStr(lintelTop)} fill={shade(pal.top, -0.18)} stroke="rgba(30,22,14,0.4)" strokeWidth="1" pointerEvents="none" />
+            <polygon points={ptsStr(lintelFace)} fill={lintelFill} stroke="rgba(30,22,14,0.45)" strokeWidth="1" pointerEvents="none" />
+            <path d={archPath} fill="none" stroke={shade(pal.top, 0.2)} strokeWidth="2.6" strokeDasharray="3,1.2" pointerEvents="none" />
+            <path d={archPath} fill="none" stroke="rgba(30,22,14,0.55)" strokeWidth="0.7" pointerEvents="none" />
+          </>
+        )}
         {p1First ? pillar2 : pillar1}
-        <Merlons centers={crenels} ux={ux} uy={uy} along={0.045} across={0.045} base={GH} height={MERLON_H * 0.8} pal={shadePal(pal, 0.04)} seed={seed} />
+        {!timber && <Merlons centers={crenels} ux={ux} uy={uy} along={0.045} across={0.045} base={GH} height={MERLON_H * 0.8} pal={shadePal(pal, 0.04)} seed={seed} />}
         {!effectiveClosed && (
           <g pointerEvents="none">
             <line x1={chainA0.x} y1={chainA0.y} x2={chainA1.x} y2={chainA1.y} stroke="#3a342c" strokeWidth="1" strokeDasharray="1.6,0.8" />
@@ -2682,7 +2822,7 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     );
   }
 
-  const finalH = kind === 'gate' ? GATE_H : WALL_H;
+  const finalH = kind === 'gate' ? GATE_H : wallHeightFor(level);
   const v = stageVisual(stage, progress, finalH, PALETTE.wall, ghost, ghostBlocked, ruined);
   if (ghost) return <GhostBlock corners={corners} height={finalH} pal={v.pal} blocked={ghostBlocked} />;
   if (stage === 'foundation') {
@@ -2737,6 +2877,31 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       crenels.push([ci - px * (t - 0.035), cj - py * (t - 0.035)]);
     }
   }
+  if (level === 1 && kind === 'wall') {
+    // Palisade: a fence of sharpened logs, their points standing proud of the top.
+    const sI = i1 + ux * a1, sJ = j1 + uy * a1, eI = i2 - ux * a2, eJ = j2 - uy * a2;
+    const pc = orientedRect((sI + eI) / 2, (sJ + eJ) / 2, ux, uy, Math.hypot(eI - sI, eJ - sJ) / 2, 0.06);
+    const n = Math.max(3, Math.round(Math.hypot(eI - sI, eJ - sJ) / 0.11));
+    const tips = [];
+    for (let k = 0; k <= n; k++) {
+      const u = k / n;
+      tips.push(gridToScreen(sI + (eI - sI) * u, sJ + (eJ - sJ) * u, crumbledHeight));
+      if (k < n) {
+        const um = (k + 0.5) / n;
+        tips.push(gridToScreen(sI + (eI - sI) * um, sJ + (eJ - sJ) * um, crumbledHeight + 5));
+      }
+    }
+    const back = [...tips].reverse().map((p) => ({ x: p.x, y: p.y + 1.2 }));
+    return (
+      <g>
+        <Block corners={pc} baseElev={0} topElev={crumbledHeight} topFill="#6e5132" faceLeft="#7f5e39" faceRight="#5a4129" texture="wood" seed={seed} />
+        <polygon points={ptsStr([...tips, ...back])} fill="#8a6a42" stroke="rgba(40,26,12,0.6)" strokeWidth="0.7" strokeLinejoin="round" pointerEvents="none" />
+        <CrackOverlay corners={pc} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />
+        <RubbleDecor i={midI} j={midJ} frac={damageFrac} />
+        {damageFrac > 0.55 && <RuinSmoke i={midI} j={midJ} elev={crumbledHeight} seed={seed} />}
+      </g>
+    );
+  }
   const pal = PALETTE.wall;
   // A low battered plinth along the foot of the wall, matching the towers' plinth so the two
   // meet at one continuous base line.
@@ -2746,6 +2911,29 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       <Block corners={plinth} baseElev={0} topElev={4} topFill={shade(pal.top, -0.12)} faceLeft={shade(pal.left, -0.12)} faceRight={shade(pal.right, -0.12)} texture="stone" seed={seed + 5} shadowHeight={crumbledHeight + (showCrenellation ? MERLON_H * 0.6 : 0)} />
       <Block corners={corners} baseElev={4} topElev={crumbledHeight} topFill={shade(pal.top, -0.15)} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} />
       {showCrenellation && <Merlons centers={crenels} ux={ux} uy={uy} along={0.05} across={0.035} base={crumbledHeight} height={MERLON_H * 0.8} pal={pal} seed={seed} />}
+      {level >= 3 && showCrenellation && (() => {
+        // Wehrmauer: a roofed wall-walk on posts over the battlements.
+        const sI = i1 + ux * a1, sJ = j1 + uy * a1, eI = i2 - ux * a2, eJ = j2 - uy * a2;
+        const px = -uy, py = ux, w = t * 1.25;
+        const E = crumbledHeight + MERLON_H * 0.8 + 3, R = E + 9;
+        const slope = (sg) => ({
+          pts: [gridToScreen(sI + px * w * sg, sJ + py * w * sg, E), gridToScreen(eI + px * w * sg, eJ + py * w * sg, E), gridToScreen(eI, eJ, R), gridToScreen(sI, sJ, R)],
+          near: viewDepth(px * sg, py * sg) - viewDepth(0, 0) > 0,
+          right: screenDxOf(px * sg, py * sg) > 0,
+        });
+        const sl = [slope(1), slope(-1)].sort((a, b) => (a.near ? 1 : 0) - (b.near ? 1 : 0));
+        const posts = [0.04, 0.5, 0.96].map((u) => {
+          const pi = sI + (eI - sI) * u, pj = sJ + (eJ - sJ) * u;
+          const a = gridToScreen(pi, pj, crumbledHeight), b = gridToScreen(pi, pj, E);
+          return `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+        }).join('');
+        return (
+          <g pointerEvents="none">
+            <path d={posts} stroke="#4a3420" strokeWidth="1.6" />
+            {sl.map((o, k) => <polygon key={k} points={ptsStr(o.pts)} fill={o.right ? '#7c4a32' : '#5e3624'} stroke="rgba(30,16,8,0.55)" strokeWidth="0.7" />)}
+          </g>
+        );
+      })()}
       <CrackOverlay corners={corners} baseElev={0} topElev={crumbledHeight} frac={damageFrac} />
       <RubbleDecor i={midI} j={midJ} frac={damageFrac} />
       {damageFrac > 0.55 && <RuinSmoke i={midI} j={midJ} elev={crumbledHeight} seed={seed} />}
@@ -3021,7 +3209,7 @@ const WallJunctionPost = React.memo(function WallJunctionPost({ i, j }) {
 // a glance at the courtyard tells how far the castle has been developed.
 const PLASTER_PAL = { top: '#e6dab8', left: '#e2d4ae', right: '#c0ae86' };
 const STONE_PAL = { top: '#a8a296', left: '#938c7c', right: '#6f695c' };
-const AMENITY_HALF = { brunnen: 0.22, kemenate: 0.48 };
+const AMENITY_HALF = { brunnen: 0.22, kemenate: 0.48, palas: 0.48, turnierplatz: 0.48 };
 function amenityHalf(kind) { return AMENITY_HALF[kind] || 0.36; }
 // Height of the walls (roof base) per kind and level — also what the construction stages
 // build up to.
@@ -3035,10 +3223,14 @@ function amenityWallHeight(kind, level) {
     case 'kapelle': return level >= 3 ? 25 : 20;
     case 'brauhaus': return level >= 2 ? 22 : 18;
     case 'stallungen': return level >= 2 ? 19 : 16;
+    case 'palas': return level >= 2 ? 30 : 26;
+    case 'bogenmacher': return 16;
+    case 'falknerei': return 15;
+    case 'turnierplatz': return 6;
     default: return AMENITY_H;
   }
 }
-const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood' };
+const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood', palas: 'stone', bogenmacher: 'wood', falknerei: 'wood', turnierplatz: 'wood' };
 
 function FlowerBox({ face, u, v }) {
   const a = facePt(face, u - 0.11, v), b = facePt(face, u + 0.11, v);
@@ -3382,6 +3574,76 @@ function AmenityBody({ i, j, kind, level }) {
         });
       }
       top = H + 12;
+      break;
+    }
+    case 'palas': {
+      // The great hall: a stone undercroft, the tall-windowed hall above, a steep roof.
+      const h1 = 11;
+      const lq = computeFaceQuads(corners, 0, h1), uq = computeFaceQuads(corners, h1, H);
+      els.push(<Block key="lo" corners={corners} baseElev={0} topElev={h1} topFill={info.top} faceLeft={shade(info.left, -0.06)} faceRight={shade(info.right, -0.06)} texture="stone" seed={seed} shadowHeight={H + 18} />);
+      els.push(<Block key="hall" corners={corners} baseElev={h1} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed + 3} shadowHeight={0} />);
+      els.push(<ArchOpening key="door" face={lq.faceB} u={0.5} v0={0.2} dv={0.8} du={0.14} fill="#3a2818" />);
+      [0.18, 0.39, 0.61, 0.82].forEach((u, k) => {
+        els.push(<ArchOpening key={`wa${k}`} face={uq.faceA} u={u} v0={0.18} dv={0.6} du={0.07} fill="#2a2016" glow />);
+        if (k % 2 === 0 || L >= 2) els.push(<ArchOpening key={`wb${k}`} face={uq.faceB} u={u} v0={0.18} dv={0.6} du={0.07} fill="#2a2016" glow />);
+      });
+      // A stone stair up to the hall door.
+      const st0 = facePt(lq.faceB, 0.62, 1), st1 = facePt(uq.faceB, 0.58, 1);
+      els.push(<line key="stair" x1={st0.x} y1={st0.y} x2={st1.x} y2={st1.y} stroke="#7d7566" strokeWidth="4" pointerEvents="none" />);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={18} color={L >= 3 ? '#4f5866' : '#6a4a3a'} wallPal={info} axis="i" overhang={0.06} />);
+      els.push(<ChimneyDecor key="ch" i={i + 0.25} j={j} smokeColor="#8a8074" elev={H + 12} />);
+      if (L >= 2) {
+        const pb = P(i - 0.35, j, H + 12), pt = P(i - 0.35, j, H + 32);
+        els.push(<g key="flag" pointerEvents="none"><line x1={pb.x} y1={pb.y} x2={pt.x} y2={pt.y} stroke="#2b2118" strokeWidth="1.3" /><path d={`M ${pt.x} ${pt.y} l 14 4 l -14 5 z`} fill="#c9a24b" stroke="#2b2118" strokeWidth="0.6" /></g>);
+      }
+      top = H + 18;
+      break;
+    }
+    case 'bogenmacher': {
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="wood" seed={seed} shadowHeight={H + 12} />);
+      els.push(<ArchOpening key="door" face={quads.faceB} u={0.35} v0={0.3} dv={0.7} du={0.16} fill="#3a2a1a" />);
+      els.push(<ArchOpening key="win" face={quads.faceA} u={0.5} v0={0.25} dv={0.35} du={0.14} fill="#2a1d12" />);
+      // A rack of unstrung bows against the wall and a straw target in the yard.
+      const rk = facePt(quads.faceB, 0.75, 0.15);
+      els.push(<g key="bows" pointerEvents="none">{[0, 1, 2, 3].slice(0, 2 + L).map((k) => <path key={k} d={`M ${rk.x - 6 + k * 4} ${rk.y} q -3 8 0 16`} stroke="#5a3a1c" strokeWidth="1.4" fill="none" />)}</g>);
+      const tg = P(i + half + 0.25, j + 0.15, 0), tc = P(i + half + 0.25, j + 0.15, 7);
+      els.push(<g key="target" pointerEvents="none"><line x1={tg.x - 3} y1={tg.y} x2={tc.x} y2={tc.y} stroke="#5a3a1c" strokeWidth="1" /><line x1={tg.x + 3} y1={tg.y} x2={tc.x} y2={tc.y} stroke="#5a3a1c" strokeWidth="1" /><circle cx={tc.x} cy={tc.y} r="5" fill="#e8d9a8" stroke="#6b4d2e" strokeWidth="0.7" /><circle cx={tc.x} cy={tc.y} r="3" fill="#c0392b" /><circle cx={tc.x} cy={tc.y} r="1.2" fill="#f1e6c8" /></g>);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={11} color="#7a5a34" wallPal={info} axis="j" overhang={0.08} />);
+      top = H + 11;
+      break;
+    }
+    case 'falknerei': {
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="wood" seed={seed} shadowHeight={H + 12} />);
+      // The mews: slatted openings for air, perches with hooded falcons out front.
+      [quads.faceA, quads.faceB].forEach((f, k) => {
+        let d = '';
+        for (let m = 0; m < 6; m++) { const a = facePt(f, 0.2 + m * 0.12, 0.2), c = facePt(f, 0.2 + m * 0.12, 0.55); d += `M${a.x} ${a.y}L${c.x} ${c.y}`; }
+        els.push(<path key={`sl${k}`} d={d} stroke="#2a1d12" strokeWidth="1.6" pointerEvents="none" />);
+      });
+      const birds = 1 + L;
+      for (let k = 0; k < birds; k++) {
+        const b0 = P(i + half + 0.18, j - 0.3 + k * 0.22, 0), b1 = P(i + half + 0.18, j - 0.3 + k * 0.22, 9);
+        els.push(<g key={`perch${k}`} pointerEvents="none"><line x1={b0.x} y1={b0.y} x2={b1.x} y2={b1.y} stroke="#5a3a1c" strokeWidth="1.2" /><line x1={b1.x - 3} y1={b1.y} x2={b1.x + 3} y2={b1.y} stroke="#5a3a1c" strokeWidth="1.2" /><ellipse cx={b1.x} cy={b1.y - 3} rx="2.2" ry="3.2" fill="#7a5a3a" stroke="#3a2614" strokeWidth="0.4" /><circle cx={b1.x + 0.6} cy={b1.y - 6.4} r="1.3" fill="#a0302a" /></g>);
+      }
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={10} color="#6e5136" wallPal={info} axis="i" overhang={0.08} />);
+      top = H + 10;
+      break;
+    }
+    case 'turnierplatz': {
+      // The lists: a sanded yard, the tilt barrier down the middle, banners and a stand.
+      els.push(<Block key="sand" corners={corners} baseElev={0} topElev={1} topFill="#d8c79a" faceLeft="#b8a47a" faceRight="#9a8862" shadowHeight={0} />);
+      els.push(<Block key="tilt" corners={orientedRect(i, j, 1, 0, half * 0.85, 0.025)} baseElev={1} topElev={6} topFill="#e8e0cc" faceLeft="#c0392b" faceRight="#8f2a20" shadowHeight={6} />);
+      const fence = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b2]) => P(i + a * half, j + b2 * half, 4));
+      els.push(<polygon key="fence" points={ptsStr(fence)} fill="none" stroke="#6b4d2e" strokeWidth="1.2" pointerEvents="none" />);
+      els.push(<Block key="stand" corners={orientedRect(i, j - half + 0.12, 1, 0, half * 0.6, 0.1)} baseElev={0} topElev={9} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed} shadowHeight={14} />);
+      const cv = [[-0.6, -0.04], [0.6, -0.04], [0.6, 0.18], [-0.6, 0.18]].map(([a, b2]) => P(i + a * half, j - half + 0.12 + b2, 17));
+      els.push(<polygon key="canopy" points={ptsStr(cv)} fill={L >= 2 ? '#2f5d8a' : '#a83a2c'} stroke="#3a1a12" strokeWidth="0.6" pointerEvents="none" />);
+      const cols = ['#c0392b', '#c9a24b', '#2f5d8a', '#3d6b3a'];
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b2], k) => {
+        const pb = P(i + a * half * 0.95, j + b2 * half * 0.95, 0), pt = P(i + a * half * 0.95, j + b2 * half * 0.95, 20);
+        els.push(<g key={`bn${k}`} pointerEvents="none"><line x1={pb.x} y1={pb.y} x2={pt.x} y2={pt.y} stroke="#3a2614" strokeWidth="1" /><path d={`M ${pt.x} ${pt.y} l 9 3 l -9 3 z`} fill={cols[k]} stroke="#2b2118" strokeWidth="0.4" /></g>);
+      });
+      top = 20;
       break;
     }
     default:
@@ -3897,25 +4159,103 @@ function computeGarrisonPositions(anchorI, anchorJ, soldierCount, archerCount) {
   return positions;
 }
 
-// Tower Ausbaustufen: each level raises the tower (more reach and cover for the archers on
-// top), adds a firing position and makes it sturdier against siege engines.
-const TOWER_MAX_LEVEL = 3;
-const TOWER_UPGRADE_GOLD = { 2: 50, 3: 120 };
-const TOWER_ARCHER_SLOTS = { 1: 2, 2: 3, 3: 4 };
+// ------------------------------------------------------------------- Baukunst ----------
+// The castle starts the way real ones did: a Motte (a timber tower on an earth mound) behind a
+// timber palisade. Stone, and the finer arts of fortification after it, have to be learned
+// first (see RESEARCH) — and every piece of the defences can then be raised level by level:
+// walls (Palisade, Steinmauer, Wehrmauer), gates (Holztor, Torhaus), towers (Holzturm,
+// Wachturm, Wehrturm, Bastion) and the keep (Motte, Burgfried). Each level states what it
+// costs to build, how much work it is, how much it takes in a siege and which research
+// (`needs`) unlocks it.
+const STRUCT_LEVELS = {
+  wall: {
+    names: ['Palisade', 'Steinmauer', 'Wehrmauer'], needs: [null, 'steinbau', 'wehrgang'], upgradeGold: { 2: 3, 3: 8 },
+    cost: { 1: { wood: 5, stone: 0 }, 2: { wood: 3, stone: 10 }, 3: { wood: 6, stone: 15 } },
+    work: { 1: 1.4, 2: 3, 3: 3.4 }, siegeHp: { 1: 5, 2: 9, 3: 12 }, def: { 1: 0.6, 2: 1, 3: 1.4 },
+    text: [
+      'Palisade: Holzpfähle — schnell gebaut, hält aber nicht lange stand.',
+      'Steinmauer: hält deutlich mehr aus; Bogenschützen können oben stehen.',
+      'Wehrmauer: höher und stärker, mit durchgehendem Wehrgang — die Bogenschützen laufen in der Schlacht dorthin, wo der Feind angreift.',
+    ],
+  },
+  gate: {
+    names: ['Holztor', 'Torhaus'], needs: [null, 'steinbau'], upgradeGold: { 2: 20 },
+    cost: { 1: { wood: 8, stone: 0 }, 2: { wood: 6, stone: 14 } },
+    work: { 1: 1.6, 2: 3 }, siegeHp: { 1: 4, 2: 6 }, def: { 1: 0.6, 2: 1 },
+    text: ['Holztor in der Palisade, mit Zugbrücke.', 'Steinernes Torhaus mit Fallgitter und Zinnen.'],
+  },
+  tower: {
+    names: ['Holzturm', 'Wachturm', 'Wehrturm', 'Bastion'], needs: [null, 'steinbau', 'wehrturm', 'bastion'], upgradeGold: { 2: 25, 3: 50, 4: 120 },
+    cost: { 1: { wood: 10, stone: 0 }, 2: { wood: 7, stone: 26 }, 3: { wood: 10, stone: 39 }, 4: { wood: 14, stone: 52 } },
+    work: { 1: 2, 2: 3.6, 3: 3.6, 4: 3.6 }, siegeHp: { 1: 7, 2: 11, 3: 16, 4: 21 }, def: { 1: 0.6, 2: 1, 3: 1.5, 4: 2 },
+    slots: { 1: 2, 2: 2, 3: 3, 4: 4 }, height: { 1: 32, 2: 42, 3: 54, 4: 68 },
+    text: [
+      'Holzturm: 2 Bogenschützen-Plätze, brennt aber leicht.',
+      'Wachturm aus Stein: 2 Plätze, deutlich stabiler.',
+      'Wehrturm: höher (+Reichweite, mehr Deckung), 3 Plätze, +20 % Schaden.',
+      'Bastion: noch höher, 4 Plätze, +40 % Schaden, sehr stabil.',
+    ],
+  },
+  keep: {
+    names: ['Motte', 'Burgfried'], needs: [null, 'steinbau'], upgradeGold: { 2: 60 },
+    cost: { 1: { wood: 16, stone: 0 }, 2: { wood: 12, stone: 30 } },
+    work: { 1: 1.6, 2: 2.2 }, siegeHp: { 1: 16, 2: 24 }, def: { 1: 0.6, 2: 1 }, height: { 1: 46, 2: KEEP_H },
+    text: ['Motte: ein Holzturm auf einem aufgeschütteten Erdhügel.', 'Burgfried aus Stein: höher, stärker, mit Ecktürmchen.'],
+  },
+};
+function maxLevelOf(type) { return STRUCT_LEVELS[type].names.length; }
+function levelName(type, level) { return STRUCT_LEVELS[type].names[Math.max(1, level || 1) - 1]; }
+const TOWER_MAX_LEVEL = 4;
 const TOWER_SIEGE_HP_PER_LEVEL = 5;
-// Archers firing from an upgraded tower (better loopholes, hoardings) hit harder.
+// Archers firing from a Wehrturm or a Bastion (better loopholes, hoardings) hit harder.
 const TOWER_LEVEL_DMG_BONUS = 0.2;
+function towerDmgMult(level) { return 1 + TOWER_LEVEL_DMG_BONUS * Math.max(0, (level || 1) - 2); }
 const KEEP_ARCHER_SLOTS = 4;
-const TOWER_LEVEL_TEXT = [
-  'Wachturm: 2 Bogenschützen-Plätze.',
-  'Wehrturm: höher (+Reichweite, mehr Deckung), 3 Plätze, +20 % Schaden, stabiler.',
-  'Bastion: noch höher, 4 Plätze, +40 % Schaden, deutlich stabiler.',
-];
-function towerHeightFor(level) { return TOWER_H + 8 * ((level || 1) - 1); }
+function towerHeightFor(level) { return STRUCT_LEVELS.tower.height[Math.max(1, Math.min(4, level || 1))]; }
+function keepHeightFor(level) { return STRUCT_LEVELS.keep.height[Math.max(1, Math.min(2, level || 1))]; }
+function wallHeightFor(level) { return [18, WALL_H, WALL_H + 7][Math.max(1, Math.min(3, level || 1)) - 1]; }
+function siegeHpOf(s, level) { return STRUCT_LEVELS[s.type].siegeHp[level]; }
+
+// ---- Forschung: what the court's builders learn, one project at a time ----------------------
+// A project takes `days` with a Baumeister at court; without one, the king's clerks puzzle it
+// out alone and need twice as long.
+const RESEARCH = {
+  steinbau: { name: 'Steinbau', icon: '🧱', gold: 80, days: 60, needs: [], text: 'Steinmauern, Wachtürme und Torhäuser aus Stein, der Burgfried statt der Motte.' },
+  wehrturm: { name: 'Wehrtürme', icon: '🗼', gold: 140, days: 90, needs: ['steinbau'], text: 'Türme auf Stufe 3: höher, 3 Schützenplätze, +20 % Schaden.' },
+  wehrgang: { name: 'Wehrgang', icon: '🏹', gold: 180, days: 120, needs: ['steinbau'], text: 'Wehrmauern: Die Bogenschützen laufen auf dem Wehrgang dorthin, wo der Feind angreift.' },
+  palas: { name: 'Palasbau', icon: '🏛️', gold: 150, days: 100, needs: ['steinbau'], text: 'Der Palas — die große Halle für Feste, Brautschau und Gäste.' },
+  bastion: { name: 'Bastionen', icon: '🏰', gold: 260, days: 150, needs: ['wehrturm'], text: 'Türme auf Stufe 4: noch höher, 4 Schützenplätze, +40 % Schaden.' },
+};
+const RESEARCH_IDS = Object.keys(RESEARCH);
+const RESEARCH_SLOW_MULT = 2; // without a Baumeister
+// Everything an older save already had (stone walls and towers up to the Bastion) counts as
+// researched there.
+const LEGACY_RESEARCH = ['steinbau', 'wehrturm', 'bastion'];
+// The highest level of a structure the realm knows how to build.
+function maxKnownLevel(type, known) {
+  const needs = STRUCT_LEVELS[type].needs;
+  let l = 1;
+  for (let k = 1; k < needs.length; k++) if (known.includes(needs[k])) l = k + 1; else break;
+  return l;
+}
+
 // A building being expanded keeps standing (and keeps blocking, and a tower keeps its archers)
 // at its previous level until the work is done.
 function standsFinished(s) { return s.stage === 'done' || (!!s.upgrading && !s.ruined); }
+// The keep counts as standing while it's being raised from Motte to Burgfried, too.
+function keepStands(structures) { return !!structures.keep && standsFinished(structures.keep); }
 function standingLevel(s) { return s.stage === 'done' ? (s.level || 1) : Math.max(1, (s.level || 1) - 1); }
+// Old saves predate the timber start: what they built was stone, so every wall, gate and the
+// keep is level 2 and towers move up one step (their old Wachturm is now level 2).
+function migrateLegacyStructures(structures) {
+  const out = {};
+  Object.entries(structures).forEach(([k, s]) => {
+    if (s.type === 'wall' || s.type === 'gate' || s.type === 'keep') out[k] = { ...s, level: Math.max(2, s.level || 2) };
+    else if (s.type === 'tower') out[k] = { ...s, level: (s.level || 1) + 1 };
+    else out[k] = s;
+  });
+  return out;
+}
 
 // Battle stations. Archers man the keep and the towers first (each tower holds as many as its
 // level allows, the ones facing the usual approach first), then spread out along the wall-walks;
@@ -3931,7 +4271,7 @@ function activeFronts(y) {
   return [{ ...originEntry(f.main), share: 1 }];
 }
 function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knightIds, year = 1) {
-  const keep = structures.keep && structures.keep.stage === 'done' ? structures.keep : null;
+  const keep = keepStands(structures) ? structures.keep : null;
   const fronts = activeFronts(year);
   // How close a spot is to the nearest front: archers and the soldiers' lines go there first.
   const frontDist = (pt) => Math.min(...fronts.map((f) => distance(pt, f)));
@@ -3942,18 +4282,22 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
     .map((t) => ({ t: { ...t, level: standingLevel(t) }, dist: frontDist({ i: t.i, j: t.j }) }))
     .sort((a, b) => a.dist - b.dist);
   // Round-robin so every tower gets its first archer before any gets a second.
-  const maxSlots = Math.max(KEEP_ARCHER_SLOTS, ...towers.map(({ t }) => TOWER_ARCHER_SLOTS[t.level || 1] || 2));
+  const slotsOf = (t) => STRUCT_LEVELS.tower.slots[t.level || 1] || 2;
+  const maxSlots = Math.max(KEEP_ARCHER_SLOTS, ...towers.map(({ t }) => slotsOf(t)));
+  const keepTop = keep ? keepHeightFor(keep.level) : 0;
   for (let k = 0; k < maxSlots; k++) {
     towers.forEach(({ t }) => {
-      if (k < (TOWER_ARCHER_SLOTS[t.level || 1] || 2)) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: 1 + TOWER_LEVEL_DMG_BONUS * ((t.level || 1) - 1) });
+      if (k < slotsOf(t)) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level) });
     });
-    if (keep && k < KEEP_ARCHER_SLOTS) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: KEEP_H + 3 });
+    if (keep && k < KEEP_ARCHER_SLOTS) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: keepTop + 3 });
   }
+  // A palisade has no walk to stand on; stone walls do, and a Wehrmauer's archers can move
+  // along it in battle (onWallWalk).
   Object.values(structures)
-    .filter((s) => s.type === 'wall' && s.stage === 'done')
-    .map((w) => ({ i: (w.i1 + w.i2) / 2, j: (w.j1 + w.j2) / 2 }))
+    .filter((s) => s.type === 'wall' && standsFinished(s) && standingLevel(s) >= 2)
+    .map((w) => ({ i: (w.i1 + w.i2) / 2, j: (w.j1 + w.j2) / 2, level: standingLevel(w) }))
     .sort((a, b) => frontDist(a) - frontDist(b))
-    .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: WALL_H + 2 }));
+    .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: wallHeightFor(m.level) + 2, onWallWalk: m.level >= 3 }));
 
   const positions = [];
   for (let k = 0; k < soldiers.archer; k++) {
@@ -4880,7 +5224,10 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
         const cost = getBuildCost(site);
         if (avail.wood >= cost.wood) {
           avail.wood -= cost.wood;
-          structures[key] = { ...site, stage: 'masonry', progress: 0, crew, blocked: false, ruined: false };
+          // Timber work (palisade, Holzturm, Motte) needs no mason: it's finished right here.
+          structures[key] = cost.stone > 0
+            ? { ...site, stage: 'masonry', progress: 0, crew, blocked: false, ruined: false }
+            : { ...site, stage: 'done', progress: 0, crew, blocked: false, ruined: false, upgrading: false };
         } else {
           structures[key] = { ...site, progress: 0.99, crew, blocked: true, ruined: false };
         }
@@ -4907,11 +5254,8 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
 
 function structureLabel(site) {
   if (!site) return '';
-  if (site.type === 'wall') return 'Mauer';
-  if (site.type === 'gate') return 'Tor';
-  if (site.type === 'tower') return ['Wachturm', 'Wehrturm', 'Bastion'][(site.level || 1) - 1] || 'Turm';
+  if (STRUCT_LEVELS[site.type]) return levelName(site.type, site.level);
   if (site.type === 'graben') return 'Graben';
-  if (site.type === 'keep') return 'Burgfried';
   if (site.type === 'amenity') return AMENITY_TYPES[site.kind].label + ((site.level || 1) > 1 ? ` (Stufe ${site.level})` : '');
   return site.type;
 }
@@ -4931,11 +5275,12 @@ function personActivity(entity) {
 
 function computeDefense(structures, soldiers) {
   const values = Object.values(structures);
-  const wallsDone = values.filter((s) => s.type === 'wall' && s.stage === 'done').length;
-  // Upgraded towers count for more (level 2: ×1.5, level 3: ×2).
-  const towersDone = values.filter((s) => s.type === 'tower' && s.stage === 'done').reduce((sum, t) => sum + 1 + 0.5 * ((t.level || 1) - 1), 0);
+  // Stronger levels count for more (a palisade for little, a Bastion for double).
+  const weight = (x) => STRUCT_LEVELS[x.type].def[x.level || 1] || 1;
+  const wallsDone = values.filter((s) => (s.type === 'wall') && s.stage === 'done').reduce((sum, w) => sum + weight(w), 0);
+  const towersDone = values.filter((s) => s.type === 'tower' && s.stage === 'done').reduce((sum, t) => sum + weight(t), 0);
   const grabenDone = values.filter((s) => s.type === 'graben' && s.stage === 'done').length;
-  const keepDone = structures.keep && structures.keep.stage === 'done';
+  const keepDone = keepStands(structures);
   return wallsDone * DEF_WALL + towersDone * DEF_TOWER + grabenDone * DEF_GRABEN + (keepDone ? DEF_KEEP : 0) + soldiers.soldier * DEF_SOLDIER + soldiers.archer * DEF_ARCHER;
 }
 
@@ -5049,12 +5394,20 @@ function isCastleEnclosed(structures) {
 function buildBattleObstacles(structures) {
   const obstacles = [];
   Object.entries(structures).forEach(([key, s]) => {
-    if ((s.type === 'wall' || s.type === 'gate' || s.type === 'graben') && s.stage === 'done') {
-      const maxHp = s.type === 'gate' ? GATE_SIEGE_HP : s.type === 'graben' ? DITCH_SIEGE_HP : WALL_SIEGE_HP;
+    if ((s.type === 'wall' || s.type === 'gate') && standsFinished(s)) {
+      // A wall or gate being raised to the next level still stands at its old one meanwhile.
+      const level = standingLevel(s);
+      const maxHp = siegeHpOf(s, level);
+      obstacles.push({
+        key, structureKey: key, type: s.type, isPoint: false, level,
+        i1: s.i1, j1: s.j1, i2: s.i2, j2: s.j2,
+        hp: maxHp, maxHp, breached: false,
+      });
+    } else if (s.type === 'graben' && s.stage === 'done') {
       obstacles.push({
         key, structureKey: key, type: s.type, isPoint: false,
         i1: s.i1, j1: s.j1, i2: s.i2, j2: s.j2,
-        hp: maxHp, maxHp, breached: false,
+        hp: DITCH_SIEGE_HP, maxHp: DITCH_SIEGE_HP, breached: false,
       });
     } else if (s.type === 'tower' && standsFinished(s)) {
       // Towers don't stand in anyone's path (they're firing platforms, not a wall segment),
@@ -5062,19 +5415,82 @@ function buildBattleObstacles(structures) {
       obstacles.push({
         key, structureKey: key, type: 'tower', isPoint: true,
         i: s.i, j: s.j,
-        hp: TOWER_SIEGE_HP + TOWER_SIEGE_HP_PER_LEVEL * (standingLevel(s) - 1), maxHp: TOWER_SIEGE_HP + TOWER_SIEGE_HP_PER_LEVEL * (standingLevel(s) - 1), breached: false,
+        hp: siegeHpOf(s, standingLevel(s)), maxHp: siegeHpOf(s, standingLevel(s)), breached: false,
       });
-    } else if (s.type === 'keep' && s.stage === 'done') {
+    } else if (s.type === 'keep' && standsFinished(s)) {
       // Also a point target, like a tower — but reaching it (rather than merely standing
       // near it) is what triggers the assault; see the "no living defender" branch below.
       obstacles.push({
         key, structureKey: key, type: 'keep', isPoint: true,
         i: s.i, j: s.j,
-        hp: KEEP_SIEGE_HP, maxHp: KEEP_SIEGE_HP, breached: false,
+        hp: siegeHpOf(s, standingLevel(s)), maxHp: siegeHpOf(s, standingLevel(s)), breached: false,
       });
     }
   });
   return obstacles;
+}
+
+// ---- Wehrgang: archers on a Wehrmauer walk along it to wherever the enemy attacks ---------
+function closestOnSeg(pt, o) {
+  const abi = o.i2 - o.i1, abj = o.j2 - o.j1;
+  const l2 = abi * abi + abj * abj || 1;
+  const t = Math.max(0, Math.min(1, ((pt.i - o.i1) * abi + (pt.j - o.j1) * abj) / l2));
+  return { i: o.i1 + abi * t, j: o.j1 + abj * t };
+}
+function wallWalkNetwork(obstacles) {
+  const segs = obstacles.filter((o) => o.type === 'wall' && (o.level || 1) >= 3 && !o.breached && o.hp > 0);
+  const adj = new Map();
+  segs.forEach((o) => {
+    [[o.i1, o.j1, o.i2, o.j2], [o.i2, o.j2, o.i1, o.j1]].forEach(([a, b, c, d]) => {
+      const k = `${a},${b}`;
+      if (!adj.has(k)) adj.set(k, []);
+      adj.get(k).push([c, d]);
+    });
+  });
+  return { segs, adj };
+}
+// One step of an archer along the walk toward the spot on it nearest to `goal`.
+function wallWalkStep(u, goal, net, speed) {
+  if (!net.segs.length) return;
+  const nearest = (pt) => {
+    let best = null, bd = Infinity;
+    net.segs.forEach((o) => { const q = closestOnSeg(pt, o); const d = distance2(q, pt); if (d < bd) { bd = d; best = { o, q, d } }; });
+    return best;
+  };
+  const here = nearest(u), there = nearest(goal);
+  if (!here || here.d > 0.35) return; // not standing on the walk (any more)
+  let waypoint = there.q;
+  if (here.o !== there.o) {
+    const goalKeys = new Set([`${there.o.i1},${there.o.j1}`, `${there.o.i2},${there.o.j2}`]);
+    let best = null;
+    [[here.o.i1, here.o.j1], [here.o.i2, here.o.j2]].forEach((start) => {
+      // Breadth-first over the walk's joints.
+      const sk = `${start[0]},${start[1]}`;
+      const prev = new Map([[sk, null]]);
+      const queue = [start];
+      let found = null;
+      while (queue.length && !found) {
+        const [ci, cj] = queue.shift();
+        const ck = `${ci},${cj}`;
+        if (goalKeys.has(ck)) { found = ck; break; }
+        (net.adj.get(ck) || []).forEach(([ni, nj]) => { const nk = `${ni},${nj}`; if (!prev.has(nk)) { prev.set(nk, ck); queue.push([ni, nj]); } });
+      }
+      if (!found) return;
+      const path = [];
+      for (let k = found; k; k = prev.get(k)) path.unshift(k.split(',').map(Number));
+      const cost = distance2(u, { i: start[0], j: start[1] }) + path.length;
+      if (!best || cost < best.cost) best = { cost, path };
+    });
+    if (!best) return;
+    const [fi, fj] = best.path[0];
+    if (distance2(u, { i: fi, j: fj }) > 0.03) waypoint = { i: fi, j: fj };
+    else waypoint = best.path[1] ? { i: best.path[1][0], j: best.path[1][1] } : there.q;
+  }
+  const d = distance2(u, waypoint);
+  if (d < 0.01) return;
+  const step = Math.min(1, speed / d);
+  u.i += (waypoint.i - u.i) * step;
+  u.j += (waypoint.j - u.j) * step;
 }
 
 function obstacleMidpoint(o) {
@@ -5188,13 +5604,13 @@ function scoutReport(y, count) {
 }
 function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKnightIds, forcedAttackers) {
   const units = [];
-  const keepDone = structures.keep && structures.keep.stage === 'done';
+  const keepDone = keepStands(structures);
   const anchorI = keepDone ? structures.keep.i : DEPOT_I;
   const anchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
   computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds, year || 1).forEach((p) => {
     const isChampion = p.type === 'champion';
     const maxHp = isChampion ? Math.round(CHAMPION_MAX_HP * stallKnightHpMult(structures)) : UNIT_MAX_HP;
-    units.push({ id: battleUnitIdSeq++, side: 'defender', type: p.type, knightId: p.knightId || null, i: p.i, j: p.j, hp: maxHp, maxHp, elev: p.elev || 0, targetId: null, dmgMult: p.dmgMult || 1 });
+    units.push({ id: battleUnitIdSeq++, side: 'defender', type: p.type, knightId: p.knightId || null, i: p.i, j: p.j, hp: maxHp, maxHp, elev: p.elev || 0, targetId: null, dmgMult: (p.dmgMult || 1) * (p.type === 'archer' ? bowyerArcherMult(structures) : 1), wallWalk: !!p.onWallWalk });
   });
   const obstacles = buildBattleObstacles(structures);
   const keepPos = structures.keep ? { i: structures.keep.i, j: structures.keep.j } : { i: anchorI, j: anchorJ };
@@ -5471,6 +5887,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     }
   });
 
+  const walkNet = wallWalkNetwork(obstacles);
   // Pass 2: move / fight / breach / flee.
   units.forEach((u) => {
     if (u.hp <= 0 || u.exited) return;
@@ -5637,6 +6054,11 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
 
     // Defenders — always fight at full strength (except the temporary "sold verweigert"
     // morale debuff), and never break.
+    if (u.wallWalk && u.type === 'archer') {
+      // On a Wehrmauer: if the enemy is out of bow range, walk the wall toward them.
+      const foe = u.targetId != null ? units.find((o) => o.id === u.targetId) : null;
+      if (foe && foe.hp > 0 && distance2(u, foe) > archerRangeFor(u.elev) * 0.85) wallWalkStep(u, foe, walkNet, UNIT_SPEED_PER_TICK * 0.9);
+    }
     if (u.targetId == null) return;
     const target = units.find((o) => o.id === u.targetId);
     if (!target || target.hp <= 0) return;
@@ -5788,9 +6210,9 @@ const UI_CSS = `
   .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
   @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
   @media (max-width: 2100px) { .cb-nav-label { display: none; } }
-  @media (max-width: 1500px) { .cb-navbtn { padding: 5px 5px !important; } .cb-topbar { gap: 5px !important; } .cb-chip { padding: 2px 6px; gap: 3px; } }
+  @media (max-width: 1500px) { .cb-navbtn { padding: 5px 4px !important; } .cb-topbar { gap: 5px !important; } .cb-chip { padding: 2px 6px; gap: 3px; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
-  @media (max-width: 1400px) { .cb-chip .cb-cap { display: none; } }
+  @media (max-width: 1480px) { .cb-chip .cb-cap { display: none; } }
   @media (max-width: 1300px) { .cb-date-sub { display: none; } .cb-topbar { gap: 4px !important; } }
 `;
 
@@ -5890,9 +6312,9 @@ const ACT_DEFS = {
     complete: 'Der Sachsenfürst ist geschlagen und zieht sich hinter den Wald zurück. Aus der Grenzburg ist eine Festung geworden, von der man in den Nachbartälern spricht.',
     reward: { gold: 150, rep: 8 },
     goals: [
-      { id: 'keep', icon: '🏰', label: 'Den Burgfried vollenden', target: 1, value: (s) => (s.keepDone ? 1 : 0), reward: { gold: 40 } },
+      { id: 'keep', icon: '🏰', label: 'Den Burgsitz (Motte) errichten', target: 1, value: (s) => (s.keepDone ? 1 : 0), reward: { gold: 40 } },
       { id: 'walls', icon: '🧱', label: 'Mauerstücke errichten', target: 8, value: (s) => s.walls, reward: { gold: 50 } },
-      { id: 'gate', icon: '🚪', label: 'Ein Torhaus bauen', target: 1, value: (s) => s.gates, reward: { gold: 30 } },
+      { id: 'gate', icon: '🚪', label: 'Ein Tor bauen', target: 1, value: (s) => s.gates, reward: { gold: 30 } },
       { id: 'towers', icon: '🗼', label: 'Türme errichten', target: 3, value: (s) => s.towers, reward: { gold: 60 } },
       { id: 'pop', icon: '👥', label: 'Bewohner im Dorf', target: 8, value: (s) => s.pop, reward: { rep: 5 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 10, value: (s) => s.defenders, reward: { gold: 50 } },
@@ -5908,7 +6330,7 @@ const ACT_DEFS = {
       { id: 'ring', icon: '⭕', label: 'Einen geschlossenen Mauerring bauen', target: 1, value: (s) => (s.enclosed ? 1 : 0), reward: { gold: 80 } },
       { id: 'moat', icon: '🕳️', label: 'Grabenstücke ausheben', target: 8, value: (s) => s.graben, reward: { gold: 60 } },
       { id: 'land', icon: '🗺️', label: 'Einen Landstrich gewinnen', target: 1, value: (s) => s.regions, reward: { gold: 80 } },
-      { id: 'tower2', icon: '🗼', label: 'Türme auf Stufe 2', target: 2, value: (s) => s.towersAtLeast(2), reward: { gold: 70 } },
+      { id: 'tower2', icon: '🗼', label: 'Wehrtürme (Turm-Stufe 3)', target: 2, value: (s) => s.towersAtLeast(3), reward: { gold: 70 } },
       { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 60, value: (s) => s.reputation, reward: { gold: 60 } },
       { id: 'heir', icon: '👶', label: 'Einen Erben haben', target: 1, value: (s) => s.children, reward: { rep: 6 } },
     ],
@@ -5920,7 +6342,7 @@ const ACT_DEFS = {
     complete: 'Der lange Winter ist vorüber, und die Burg steht noch. Die Belagerer sind abgezogen, der Pass ist Euer. Von nun an kommen die Fürsten zu Euch, nicht umgekehrt.',
     reward: { gold: 350, rep: 10 },
     goals: [
-      { id: 'tower3', icon: '🗼', label: 'Türme auf Stufe 3', target: 2, value: (s) => s.towersAtLeast(3), reward: { gold: 100 } },
+      { id: 'tower3', icon: '🗼', label: 'Bastionen (Turm-Stufe 4)', target: 2, value: (s) => s.towersAtLeast(4), reward: { gold: 100 } },
       { id: 'buildings', icon: '🏛️', label: 'Gebäude in der Burg', target: 7, value: (s) => s.amenities, reward: { gold: 80 } },
       { id: 'amenity2', icon: '⬆️', label: 'Gebäude auf Stufe 2 oder höher', target: 3, value: (s) => s.amenitiesAtLeast(2), reward: { gold: 80 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 24, value: (s) => s.defenders, reward: { gold: 100 } },
@@ -6929,8 +7351,8 @@ const TOOLS = [
   { id: 'wall', label: 'Mauer', emoji: '🧱', hint: 'Klicke auf eine Kante für eine einzelne Mauer, oder ziehe von Punkt zu Punkt für eine ganze Reihe. Einen Turm anklicken und danach einen beliebigen Punkt verbindet beide automatisch (nutzt diagonale Stücke, wo sie kürzer sind). Mausrad dreht die Ausrichtung im Uhrzeigersinn (gerade ↔ beide Diagonalen), Tab schaltet zusätzlich schnell auf diagonal um. Rechtsklick auf eine bestehende Mauer zeigt Infos & Abriss.' },
   { id: 'tower', label: 'Turm', emoji: '🗼', hint: 'Klicke auf einen Rasterpunkt auf Grasland für einen Turm.' },
   { id: 'gate', label: 'Tor', emoji: '🚪', hint: 'Klicke oder ziehe für ein Torhaus mit Bogen, Türflügeln, Fallgitter und Zugbrücke. Mausrad dreht die Ausrichtung im Uhrzeigersinn (gerade ↔ beide Diagonalen), Tab schaltet zusätzlich schnell auf diagonal um. Ohne Werkzeug: Klick auf ein fertiges Tor öffnet/schließt es, Rechtsklick zeigt Infos & Abriss. Bei einem Sachsen-Angriff schließt es sich automatisch.' },
-  { id: 'keep', label: 'Burgfried', emoji: '🏰', hint: 'Klicke auf ein Feld im Grasland für den Burgfried. Es gibt nur einen.' },
-  { id: 'kemenate', label: 'Kemenate', emoji: '🛏️', hint: 'Anbau an den Burgfried — klicke auf ein Grasfeld direkt neben dem Burgfried. Ohne Burgfried nicht möglich.' },
+  { id: 'keep', label: 'Burgsitz', emoji: '🏰', hint: 'Klicke auf ein Feld im Grasland für Euren Burgsitz — zuerst eine Motte aus Holz, nach der Erforschung des Steinbaus ausbaubar zum Burgfried. Es gibt nur einen.' },
+  { id: 'kemenate', label: 'Kemenate', emoji: '🛏️', hint: 'Anbau an den Burgsitz — klicke auf ein Grasfeld direkt neben Motte oder Burgfried. Ohne Burgsitz nicht möglich.' },
   { id: 'stallungen', label: 'Stallungen', emoji: '🐴', hint: 'Klicke auf ein Feld im Grasland für Stallungen.' },
   { id: 'schmied', label: 'Schmiede', emoji: '🔨', hint: 'Klicke auf ein Feld im Grasland für die Schmiede.' },
   { id: 'baeckerei', label: 'Bäckerei', emoji: '🍞', hint: 'Klicke auf ein Feld im Grasland für die Bäckerei.' },
@@ -6938,6 +7360,10 @@ const TOOLS = [
   { id: 'brunnen', label: 'Brunnen', emoji: '💧', hint: 'Klicke auf ein Feld im Grasland für den Brunnen.' },
   { id: 'kapelle', label: 'Kapelle', emoji: '⛪', hint: 'Klicke auf ein Feld im Grasland für die Kapelle. Hebt die Moral der Kämpfer und die Zufriedenheit im Dorf. Voraussetzung, damit der Bischof an Eurem Hof vorspricht.' },
   { id: 'brauhaus', label: 'Brauhaus', emoji: '🍺', hint: 'Klicke auf ein Feld im Grasland für das Brauhaus. Bringt zusätzliche Nahrung und hebt die Zufriedenheit im Dorf.' },
+  { id: 'palas', label: 'Palas', emoji: '🏛️', hint: 'Die große Halle. Hier feiert Ihr Feste: Brautschau für Euch oder Eure Kinder, oder Gäste an den Hof laden. Erst nach der Erforschung des Palasbaus (Baukunst).' },
+  { id: 'bogenmacher', label: 'Bogenmacher', emoji: '🏹', hint: 'Klicke auf ein Feld im Grasland für den Bogenmacher. Seine Bögen machen Eure Bogenschützen stärker.' },
+  { id: 'falknerei', label: 'Falknerei', emoji: '🦅', hint: 'Klicke auf ein Feld im Grasland für die Falknerei. Ermöglicht Jagden, die Nahrung bringen und den Hof erfreuen.' },
+  { id: 'turnierplatz', label: 'Turnierplatz', emoji: '🏇', hint: 'Klicke auf ein Feld im Grasland für den Turnierplatz. Eigene Turniere bringen Ruhm, stärken Eure Ritter und locken neue an.' },
   { id: 'graben', label: 'Graben', emoji: '🕳️', hint: 'Klicke auf eine Kante oder ziehe eine Reihe, um einen Burggraben auszuheben. Mit gedrückter Tab-Taste geht er auch diagonal, entlang schräger Mauern. Erst möglich, wenn eine Mauer fertig ist. Ein Graben, der eine Wasserkachel berührt (oder mit einem anderen wassergefüllten Graben verbunden ist), füllt sich mit Wasser.' },
   { id: 'delete', label: 'Abriss', emoji: '⛏️', hint: 'Klicke auf eine Baustelle oder ein fertiges Bauwerk, um es abzureißen — oder ziehe mit gedrückter Maustaste ein Rechteck auf: alle Mauern, Tore, Gräben und Türme darin werden auf einmal abgerissen.' },
 ];
@@ -7275,7 +7701,8 @@ export default function CastleBuilder() {
       const prev = rulerRef.current;
       const legacy = prev && prev.skills.length ? prev.skills[prev.skills.length - 1] : null;
       setRuler(newRuler(heir.trait || randomTrait(0.3), legacy));
-      setRoyalFamily({ married: false, spouseName: null, marriedOnDay: null, children: kids.filter((c) => c !== heir) });
+      // An heir betrothed at a feast in the Palas comes to the throne already married.
+      setRoyalFamily({ married: !!heir.spouseName, spouseName: heir.spouseName || null, marriedOnDay: heir.spouseName ? dayRef.current : null, children: kids.filter((c) => c !== heir) });
       setKingAge(Math.max(1, dyingYear - heir.bornYear));
       // The new king starts fresh — his predecessor's ailing health (or illness) doesn't
       // carry over.
@@ -7316,6 +7743,18 @@ export default function CastleBuilder() {
   const contractsRef = useRef([]);
   useEffect(() => { contractsRef.current = contracts; }, [contracts]);
   const [baumeisterHired, setBaumeisterHired] = useState(false);
+  // Baukunst: finished research and the project under way ({ id, progress 0..1 }).
+  const [research, setResearch] = useState({ done: [], current: null });
+  const researchRef = useRef(research);
+  useEffect(() => { researchRef.current = research; }, [research]);
+  // Which level new walls, gates, towers and the keep are built at (default: the best known).
+  const [buildLevel, setBuildLevel] = useState({});
+  const buildLevelRef = useRef(buildLevel);
+  useEffect(() => { buildLevelRef.current = buildLevel; }, [buildLevel]);
+  const levelFor = (type) => Math.min(buildLevelRef.current[type] || 99, maxKnownLevel(type, researchRef.current.done));
+  const lastResearchDayRef = useRef(null);
+  // When the last feast, hunt and tournament were held (day numbers).
+  const [estateLast, setEstateLast] = useState({});
   const baumeisterHiredRef = useRef(false);
   useEffect(() => { baumeisterHiredRef.current = baumeisterHired; }, [baumeisterHired]);
   // Mercenaries hired for the next battle only, and a multiplier on the size of the next
@@ -7340,7 +7779,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
+    saveSnapshotRef.current = { research, estateLast, structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -7401,7 +7840,7 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
+    const saveSetters = { research: setResearch, estateLast: setEstateLast, structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
     if (!('act' in st)) {
       const y = getCalendarDate(st.day).year;
@@ -7409,6 +7848,12 @@ export default function CastleBuilder() {
       setAct(a);
       setActFinaleYear(Math.max(y, START_YEAR + a * ACT_YEARS - 1));
     }
+    if (!('research' in st)) {
+      // A save from before the Baukunst: it was built in stone all along.
+      setStructures(migrateLegacyStructures(st.structures || {}));
+      setResearch({ done: [...LEGACY_RESEARCH], current: null });
+    }
+    lastResearchDayRef.current = null;
     setActEvent(null);
     setSkillOffer(null);
     if (!st.ruler && st.kingName) setRuler(newRuler(randomTrait(0)));
@@ -7495,6 +7940,111 @@ export default function CastleBuilder() {
     setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
   }, []);
   const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
+  // ---- Baukunst: research advances day by day -------------------------------------------------
+  useEffect(() => {
+    const prev = lastResearchDayRef.current;
+    lastResearchDayRef.current = day;
+    if (prev == null || day <= prev) return;
+    const cur = researchRef.current.current;
+    if (!cur) return;
+    const def = RESEARCH[cur.id];
+    const progress = cur.progress + (day - prev) / (def.days * (baumeisterHiredRef.current ? 1 : RESEARCH_SLOW_MULT));
+    if (progress >= 1) {
+      setResearch((r) => ({ done: r.done.includes(cur.id) ? r.done : [...r.done, cur.id], current: null }));
+      setBuildLevel({}); // new walls and towers go up at the newly learned level from now on
+      logEvent('📐', `Baukunst: ${def.name} erforscht — ${def.text}`, 'good');
+    } else {
+      setResearch((r) => (r.current ? { ...r, current: { ...r.current, progress } } : r));
+    }
+  }, [day]); // eslint-disable-line react-hooks/exhaustive-deps
+  const startResearch = (id) => {
+    const def = RESEARCH[id];
+    if (research.current || research.done.includes(id) || resources.gold < def.gold) return;
+    if (!def.needs.every((n) => research.done.includes(n))) return;
+    setResources((r) => ({ ...r, gold: r.gold - def.gold }));
+    setResearch((r) => ({ ...r, current: { id, progress: 0 } }));
+    SOUND.play('coin');
+  };
+  // Raise every finished structure of a type by one level (as far as the realm knows how).
+  const upgradeAllOf = (type) => {
+    const known = maxKnownLevel(type, research.done);
+    const keys = Object.keys(structures).filter((k) => { const st = structures[k]; return st.type === type && st.stage === 'done' && (st.level || 1) < known; });
+    const gold = keys.reduce((sum, k) => sum + STRUCT_LEVELS[type].upgradeGold[(structures[k].level || 1) + 1], 0);
+    if (!keys.length || resources.gold < gold) return;
+    setResources((r) => ({ ...r, gold: r.gold - gold }));
+    setStructures((prev) => {
+      const next = { ...prev };
+      keys.forEach((k) => { if (next[k] && next[k].stage === 'done') next[k] = { ...next[k], level: (next[k].level || 1) + 1, stage: 'scaffold', progress: 0, blocked: false, upgrading: true }; });
+      return next;
+    });
+    SOUND.play('place');
+  };
+  // ---- Palas, Falknerei, Turnierplatz: feasts, hunts and tournaments --------------------------
+  const estateReadyIn = (kind, cooldown) => Math.max(0, (estateLast[kind] != null ? estateLast[kind] : -99999) + cooldown - day);
+  const holdFeast = (purpose, child = null) => {
+    const L = amenityLevel(structures, 'palas');
+    if (!L || estateReadyIn('feast', PALAS_FEAST_COOLDOWN) > 0 || resources.gold < FEAST_COST.gold || resources.food < FEAST_COST.food) return;
+    setResources((r) => ({ ...r, gold: r.gold - FEAST_COST.gold, food: r.food - FEAST_COST.food }));
+    setEstateLast((e) => ({ ...e, feast: day }));
+    setCourtMorale((m) => Math.min(100, m + 8 + 4 * L));
+    setReputation((r) => Math.min(100, r + 1 + L));
+    setInfoTarget(null);
+    SOUND.play('bell');
+    const year = getCalendarDate(day).year;
+    if (purpose === 'king') {
+      logEvent('🎉', 'Fest im Palas: Brautschau für den König', 'good');
+      const ev = buildPetitionEvent('hochzeit', year);
+      if (ev) setPetitionEvent(ev);
+      return;
+    }
+    if (purpose === 'child' && child) {
+      const pool = child.gender === 'f' ? NOBLE_GROOM_NAMES : NOBLE_DAUGHTER_NAMES;
+      const spouse = pool[Math.floor(Math.random() * pool.length)];
+      setRoyalFamily((f) => ({ ...f, children: f.children.map((c) => (c.name === child.name && c.bornYear === child.bornYear ? { ...c, spouseName: spouse } : c)) }));
+      logEvent('💍', `${child.name} ist mit ${spouse} verlobt`, 'good');
+      setEventOutcome({ emoji: '💍', tone: 'good', title: 'Verlobung im Palas', text: `Beim Fest im Palas wurde ${child.name} mit ${spouse} verlobt. Besteigt ${child.gender === 'f' ? 'sie' : 'er'} einst den Thron, ist die Ehe schon geschlossen — und die Erbfolge gesichert.` });
+      return;
+    }
+    // Gäste: someone of rank who isn't at court yet asks to be heard in a few days.
+    const guests = [['hofnarr', hofnarrHired], ['maurischer', moorishHired], ['moench', monkHired], ['hofdame', ladyHired], ['falkner', falconerHired], ['medicus', medicusHired], ['baumeister', baumeisterHired]]
+      .filter(([, hired]) => !hired).map(([t]) => t);
+    const type = guests.length ? guests[Math.floor(Math.random() * guests.length)] : 'gilde';
+    setStoryQueue((q) => [...q, { type, day: day + 4 }]);
+    logEvent('🎉', 'Fest im Palas: Gäste aus dem ganzen Land', 'good');
+    setEventOutcome({ emoji: '🎉', tone: 'good', title: 'Ein Fest im Palas', text: 'Gäste aus dem ganzen Land feiern in Eurer großen Halle — es wird getanzt, gesungen und verhandelt. Einer der Gäste bittet darum, in den nächsten Tagen vor Euch sprechen zu dürfen.' });
+  };
+  const holdHunt = () => {
+    const L = amenityLevel(structures, 'falknerei');
+    if (!L || estateReadyIn('hunt', HUNT_COOLDOWN) > 0 || resources.gold < HUNT_COST.gold) return;
+    const food = Math.round((30 + 15 * L) * (falconerHired ? 1.5 : 1));
+    setResources((r) => ({ ...r, gold: r.gold - HUNT_COST.gold, food: r.food + food }));
+    setEstateLast((e) => ({ ...e, hunt: day }));
+    setCourtMorale((m) => Math.min(100, m + 5 + L));
+    setInfoTarget(null);
+    SOUND.play('horn');
+    logEvent('🦅', `Jagd mit den Falken: +${food} 🌾`, 'good');
+    setEventOutcome({ emoji: '🦅', tone: 'good', title: 'Die Falkenjagd', text: `Mit Falken und Hunden zieht der Hof hinaus in die Wälder.${falconerHired ? ' Euer Falkner führt die Jagd an.' : ''} Die Beute füllt die Vorratskammern (+${food} 🌾), und am Abend wird noch lange am Feuer erzählt.` });
+  };
+  const holdTournament = () => {
+    const L = amenityLevel(structures, 'turnierplatz');
+    if (!L || estateReadyIn('tournament', TOURNAMENT_COOLDOWN) > 0 || resources.gold < TOURNAMENT_COST.gold) return;
+    setResources((r) => ({ ...r, gold: r.gold - TOURNAMENT_COST.gold }));
+    setEstateLast((e) => ({ ...e, tournament: day }));
+    const rep = 3 + 2 * L;
+    setReputation((r) => Math.min(100, r + rep));
+    setCourtMorale((m) => Math.min(100, m + 6));
+    // Every knight in the king's service rides in the lists and gains experience.
+    const mine = KNIGHT_IDS.filter((id) => recruitedKnights[id]);
+    if (mine.length) setKnightProgress((kp) => { const next = { ...kp }; mine.forEach((id) => { next[id] = { ...(next[id] || {}), xp: ((next[id] && next[id].xp) || 0) + 1 }; }); return next; });
+    // ... and a wandering knight may like what he sees.
+    const free = KNIGHT_IDS.filter((id) => !recruitedKnights[id]);
+    const lured = free.length > 0 && Math.random() < 0.45 + 0.15 * L;
+    if (lured) setStoryQueue((q) => [...q, { type: 'ritter', day: day + 8 }]);
+    setInfoTarget(null);
+    SOUND.play('warhorn');
+    logEvent('🏇', `Turnier ausgerichtet — Ruf +${rep}`, 'good');
+    setEventOutcome({ emoji: '🏇', tone: 'good', title: 'Das Turnier', text: `Ritter aus dem ganzen Land brechen auf Eurem Turnierplatz die Lanzen. Ruf +${rep}.${mine.length ? ' Eure eigenen Ritter gewinnen Erfahrung im Lanzenstechen.' : ''}${lured ? ' Einer der fremden Ritter möchte bald bei Euch vorsprechen.' : ''}` });
+  };
   // ---- Landgewinn ----------------------------------------------------------------------------
   const claimRegion = (id, how) => {
     const def = REGION_DEFS[id];
@@ -7561,7 +8111,9 @@ export default function CastleBuilder() {
     const finished = Object.keys(done).filter((k) => !(k in prev) || done[k] > prev[k]);
     // Walls come in long runs — summarise them instead of one line per segment.
     const named = finished.filter((k) => !['wall', 'graben', 'gate'].includes(structures[k].type));
-    const walls = finished.filter((k) => structures[k].type === 'wall').length;
+    const walls = finished.filter((k) => structures[k].type === 'wall' && !(k in prev)).length;
+    const raised = finished.filter((k) => structures[k].type === 'wall' && (k in prev));
+    if (raised.length) logEvent('🧱', `${raised.length === 1 ? 'Ein Mauerstück' : `${raised.length} Mauerstücke`} zur ${levelName('wall', structures[raised[0]].level)} ausgebaut`, 'good');
     const ditches = finished.filter((k) => structures[k].type === 'graben').length;
     const gates = finished.filter((k) => structures[k].type === 'gate').length;
     named.slice(0, 3).forEach((k) => {
@@ -7569,7 +8121,7 @@ export default function CastleBuilder() {
       logEvent(st.type === 'tower' ? '🗼' : st.type === 'keep' ? '🏰' : '🏗️', (prev[k] ? `${structureLabel(st)} ausgebaut` : `${structureLabel(st)} fertiggestellt`), 'good');
     });
     if (walls) logEvent('🧱', walls === 1 ? 'Ein Mauerstück fertiggestellt' : `${walls} Mauerstücke fertiggestellt`, 'good');
-    if (gates) logEvent('🚪', 'Torhaus fertiggestellt', 'good');
+    if (gates) logEvent('🚪', `${levelName('gate', structures[finished.find((k) => structures[k].type === 'gate')].level)} fertiggestellt`, 'good');
     if (ditches) logEvent('🕳️', ditches === 1 ? 'Ein Grabenstück ausgehoben' : `${ditches} Grabenstücke ausgehoben`, 'good');
   }, [structures, logEvent]);
   const prevPopRef = useRef(null);
@@ -8408,7 +8960,7 @@ export default function CastleBuilder() {
         options: [
           {
             label: `Anstellen (${cost} 🪙)`,
-            desc: `Alle Baustellen kommen dauerhaft 35 % schneller voran. Kostet ${BAUMEISTER_WAGE.toFixed(2)} 🪙 Lohn pro Tag.`,
+            desc: `Alle Baustellen kommen dauerhaft 35 % schneller voran, und die Baukunst-Forschung geht doppelt so schnell. Kostet ${BAUMEISTER_WAGE.toFixed(2)} 🪙 Lohn pro Tag.`,
             disabled: gold < cost,
             apply: () => { setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost) })); setBaumeisterHired(true); },
           },
@@ -8601,7 +9153,8 @@ export default function CastleBuilder() {
     eligible.push('alchemist', 'wilderer', 'unwetter', 'seuche');
     if (reputation >= 30) eligible.push('fluechtlinge');
     if (reignYear >= 2 && contracts.length < 2) eligible.push('gilde');
-    if (!baumeisterHired) eligible.push('baumeister');
+    // The Baumeister leads the Baukunst research, so he turns up more often in the early years.
+    if (!baumeisterHired) eligible.push('baumeister', ...(reignYear <= 4 ? ['baumeister', 'baumeister'] : []));
     if (reignYear >= 3) eligible.push('spion', 'turnier');
     if (daysUntilYearEnd(day) <= 150 && mercenaryCount === 0) eligible.push('soeldner', 'soeldner');
     if (workerUnits.some((w) => w.type === 'quarrier')) eligible.push('silberfund');
@@ -9029,7 +9582,7 @@ export default function CastleBuilder() {
         const baeckereiMultForecast = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
         const brunnenBonusForecast = brunnenFoodPerMonth(structuresRef.current);
         const brauhausBuiltForecast = hasDoneAmenity(structuresRef.current, 'brauhaus');
-        const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+        const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
         const ffx = rulerFx(rulerRef.current);
         const farmFoodPerDayForecast = (onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast * regionFarmMult(ownedRegionsRef.current) * ffx.farmMult + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH) + (regionFoodPerMonth(ownedRegionsRef.current) + ffx.foodPerMonth) / MONTH_LENGTH;
         const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * ffx.taxMult + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
@@ -9072,7 +9625,7 @@ export default function CastleBuilder() {
           const baeckereiMult = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
           const brunnenBonusPerMonth = brunnenFoodPerMonth(structuresRef.current);
           const brauhausBuiltNow = hasDoneAmenity(structuresRef.current, 'brauhaus');
-          const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+          const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
           const owned = ownedRegionsRef.current;
           const rfx = rulerFx(rulerRef.current);
           const farmFoodPerDay = (onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult * regionFarmMult(owned) * rfx.farmMult + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH) + (regionFoodPerMonth(owned) + rfx.foodPerMonth) / MONTH_LENGTH;
@@ -9121,7 +9674,7 @@ export default function CastleBuilder() {
           const strikePenalty = onStrikeNow ? 2.5 : 0;
           const currentYearNow2 = getCalendarDate(newDay).year;
           const churchUnrestPenalty2 = (churchUnrestUntilYear && currentYearNow2 < churchUnrestUntilYear) ? 2.5 : 0;
-          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + rulerFx(rulerRef.current).courtPerMonth + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
+          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + rulerFx(rulerRef.current).courtPerMonth + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) + palasCourtPerMonth(structuresRef.current) - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, m + delta));
         });
 
@@ -9713,6 +10266,31 @@ export default function CastleBuilder() {
     });
   }, [siegeActive]);
 
+  // Abriss always asks first — except for a bare construction site nobody has started on.
+  const [demolishAsk, setDemolishAsk] = useState(null);
+  const boxAskAtRef = useRef(0);
+  const askDemolish = useCallback((keys, fromBox = false) => {
+    // The click that ends a rectangle drag must not replace the rectangle's question.
+    if (fromBox) boxAskAtRef.current = Date.now();
+    else if (Date.now() - boxAskAtRef.current < 400) return;
+    const structs = structuresRef.current;
+    const found = keys.filter((k) => structs[k]);
+    if (!found.length) return;
+    const untouched = found.every((k) => structs[k].stage === 'foundation' && !structs[k].progress && !structs[k].ruined && !structs[k].upgrading);
+    if (untouched) { removeStructures(found); return; }
+    const counts = {};
+    found.forEach((k) => { const l = structureLabel(structs[k]); counts[l] = (counts[l] || 0) + 1; });
+    setDemolishAsk({ keys: found, summary: Object.entries(counts).map(([l, n]) => (n > 1 ? `${n}× ${l}` : l)).join(', ') });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const removeStructures = (keys) => {
+    SOUND.play('crumble');
+    setStructures((prev) => {
+      const next = { ...prev };
+      keys.forEach((k) => { delete next[k]; });
+      return next;
+    });
+  };
+
   const handleEdgeClick = useCallback((key, info) => {
     const existing = structuresRef.current[key];
     // A finished gate always responds to a click by toggling its doors, no matter which
@@ -9742,6 +10320,7 @@ export default function CastleBuilder() {
       effInfo = rotated;
       effKey = wallEdgeKeyFor(rotated);
     }
+    if (tool === 'delete') { askDemolish([key]); return; }
     if ((tool === 'wall' || tool === 'gate') && !structuresRef.current.keep) return;
     if ((tool === 'wall' || tool === 'gate') && !isBuildableEdge(effInfo.i1, effInfo.j1, effInfo.i2, effInfo.j2)) return;
     if (tool === 'graben' && !moatUnlocked) return;
@@ -9752,11 +10331,11 @@ export default function CastleBuilder() {
       const next = { ...prev };
       if (tool === 'wall') {
         if (current && current.type === 'wall') delete next[effKey];
-        else if (!current) next[effKey] = { type: 'wall', ...effInfo, stage: 'foundation', progress: 0, diagonal: !!effInfo.diagonal };
+        else if (!current) next[effKey] = { type: 'wall', ...effInfo, stage: 'foundation', progress: 0, level: levelFor('wall'), diagonal: !!effInfo.diagonal };
         // if current is a gate, do nothing — use "Abriss" to remove it first
       } else if (tool === 'gate') {
         if (current && current.type === 'gate') delete next[effKey];
-        else if (!current) next[effKey] = { type: 'gate', ...effInfo, stage: 'foundation', progress: 0, doorOpen: true, diagonal: !!effInfo.diagonal };
+        else if (!current) next[effKey] = { type: 'gate', ...effInfo, stage: 'foundation', progress: 0, level: levelFor('gate'), doorOpen: true, diagonal: !!effInfo.diagonal };
         // if current is a wall, do nothing — previously this silently overwrote the
         // wall with a fresh, unfinished gate; use "Abriss" to remove the wall first
       } else if (tool === 'graben') {
@@ -9764,12 +10343,10 @@ export default function CastleBuilder() {
         else if (!current) next[key] = { type: 'graben', ...info, stage: 'foundation', progress: 0 };
         // a graben shares the same edge grid as walls/gates, so it can't be dug where
         // one of those already stands — remove it first with "Abriss"
-      } else if (tool === 'delete') {
-        delete next[key];
       }
       return next;
     });
-  }, [tool, moatUnlocked, siegeActive, diagonalMode]);
+  }, [tool, moatUnlocked, siegeActive, diagonalMode, askDemolish]);
 
   const handleVertexClick = useCallback((key) => {
     if (tool === null) {
@@ -9799,7 +10376,7 @@ export default function CastleBuilder() {
           pathEdges.forEach((e) => {
             if (next[e.key]) return; // leave whatever's already built (or a different structure) alone
             if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2)) return;
-            next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, diagonal: !!e.diagonal };
+            next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, level: levelFor('wall'), diagonal: !!e.diagonal };
           });
           return next;
         });
@@ -9807,18 +10384,17 @@ export default function CastleBuilder() {
       }
       if (isTowerHere) { setWallChainAnchor(key); return; }
     }
+    if (tool === 'delete') { askDemolish([`v:${key}`]); return; }
     SOUND.play('place');
     setStructures((prev) => {
       const next = { ...prev };
       if (tool === 'tower') {
         if (next[`v:${key}`]) delete next[`v:${key}`];
-        else next[`v:${key}`] = { type: 'tower', i, j, stage: 'foundation', progress: 0 };
-      } else if (tool === 'delete') {
-        if (next[`v:${key}`]) delete next[`v:${key}`];
+        else next[`v:${key}`] = { type: 'tower', i, j, stage: 'foundation', progress: 0, level: levelFor('tower') };
       }
       return next;
     });
-  }, [tool, wallChainAnchor]);
+  }, [tool, wallChainAnchor, askDemolish]);
 
   const handleTileClick = useCallback((i, j) => {
     const key = `amenity:${i},${j}`;
@@ -9836,7 +10412,7 @@ export default function CastleBuilder() {
       setStructures((prev) => {
         const next = { ...prev };
         if (next.keep && Math.floor(next.keep.i) === i && Math.floor(next.keep.j) === j) delete next.keep;
-        else next.keep = { type: 'keep', i: i + 0.5, j: j + 0.5, stage: 'foundation', progress: 0 };
+        else next.keep = { type: 'keep', i: i + 0.5, j: j + 0.5, stage: 'foundation', progress: 0, level: levelFor('keep') };
         return next;
       });
       return;
@@ -9845,6 +10421,7 @@ export default function CastleBuilder() {
       if (!structuresRef.current.keep) return;
       if (terrainAt(i, j) !== 'grass') return;
       if (tool === 'kemenate' && !isKemenateAllowed(structuresRef.current, i, j)) return;
+      if (tool === 'palas' && !researchRef.current.done.includes('palas')) return;
       SOUND.play('place');
       setStructures((prev) => {
         const current = prev[key];
@@ -9854,31 +10431,14 @@ export default function CastleBuilder() {
         return next;
       });
     } else if (tool === 'delete') {
-      if (keepHere) {
-        setStructures((prev) => { const next = { ...prev }; delete next.keep; return next; });
-        return;
-      }
-      setStructures((prev) => {
-        if (!prev[key]) return prev;
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
+      askDemolish([keepHere ? 'keep' : key]);
     }
-  }, [tool]);
+  }, [tool, askDemolish]);
 
   const finishDrag = useCallback(() => {
     if (tool === 'delete' && dragStart && dragEnd && dragStart !== dragEnd) {
       // Abriss per Rechteck: everything on the wall grid inside the box goes at once.
-      const box = dragBox(dragStart, dragEnd);
-      SOUND.play('place');
-      setStructures((prev) => {
-        const hit = structuresInBox(prev, box);
-        if (!hit.length) return prev;
-        const next = { ...prev };
-        hit.forEach((k) => { delete next[k]; });
-        return next;
-      });
+      askDemolish(structuresInBox(structuresRef.current, dragBox(dragStart, dragEnd)), true);
       setDragStart(null);
       setDragEnd(null);
       return;
@@ -9903,9 +10463,9 @@ export default function CastleBuilder() {
           if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2, tool === 'graben')) return;
           const current = next[e.key];
           if (tool === 'wall') {
-            if (!current) next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0 };
+            if (!current) next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, level: levelFor('wall') };
           } else if (tool === 'gate') {
-            if (!current || current.type !== 'gate') next[e.key] = { type: 'gate', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, doorOpen: true };
+            if (!current || current.type !== 'gate') next[e.key] = { type: 'gate', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, level: levelFor('gate'), doorOpen: true };
           } else if (tool === 'graben') {
             if (!current) next[e.key] = { type: 'graben', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0 };
           }
@@ -9915,7 +10475,7 @@ export default function CastleBuilder() {
     }
     setDragStart(null);
     setDragEnd(null);
-  }, [dragStart, dragEnd, tool, moatUnlocked]);
+  }, [dragStart, dragEnd, tool, moatUnlocked, askDemolish]);
 
   useEffect(() => {
     if (!dragStart) return;
@@ -10068,7 +10628,7 @@ export default function CastleBuilder() {
         // the tower's own base instead of poking out past it.
         if (towerAt1) gateDepth = Math.min(gateDepth, viewDepth(s.i1, s.j1) + 0.6 - 0.05);
         if (towerAt2) gateDepth = Math.min(gateDepth, viewDepth(s.i2, s.j2) + 0.6 - 0.05);
-        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOut={bridgeOut} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} /> });
+        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOut={bridgeOut} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'graben') {
         list.push({ depth: (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
       } else if (s.type === 'tower') {
@@ -10079,7 +10639,7 @@ export default function CastleBuilder() {
         const doorB = wallTo(fromViewVec(0, 1));
         list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <TowerNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} damageFrac={battleDamageByKey[key] || 0} ruined={!!s.ruined} doorA={doorA} doorB={doorB} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'keep') {
-        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
+        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'amenity') {
         list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       }
@@ -10107,7 +10667,7 @@ export default function CastleBuilder() {
       list.push({ depth: viewDepth(w.curI, w.curJ) + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI + workerLane(w).i} j={w.curJ + workerLane(w).j} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
     });
 
-    const keepDone = structures.keep && structures.keep.stage === 'done';
+    const keepDone = keepStands(structures);
     const garrisonAnchorI = keepDone ? structures.keep.i : DEPOT_I;
     const garrisonAnchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
     const garrisonPositions = siegeActive
@@ -10139,7 +10699,7 @@ export default function CastleBuilder() {
           const okBuild = tool === 'graben'
             ? (!isDiag && moatUnlocked && isBuildableEdge(i1, j1, i2, j2, true))
             : (!!structures.keep && isBuildableEdge(i1, j1, i2, j2));
-          list.push({ depth: (viewDepth(i1, j1) + viewDepth(i2, j2)) / 2 + 0.4, node: <WallNode key="ghost-e" i1={i1} j1={j1} i2={i2} j2={j2} kind={tool} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: (viewDepth(i1, j1) + viewDepth(i2, j2)) / 2 + 0.4, node: <WallNode key="ghost-e" i1={i1} j1={j1} i2={i2} j2={j2} kind={tool} level={tool === 'graben' ? 1 : levelFor(tool)} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('v:') && tool === 'tower') {
@@ -10147,7 +10707,7 @@ export default function CastleBuilder() {
         if (!isVertexOccupied(key)) {
           const [i, j] = key.split(',').map(Number);
           const okBuild = !!structures.keep && isBuildableVertex(i, j);
-          list.push({ depth: viewDepth(i, j) + 0.6, node: <TowerNode key="ghost-v" i={i} j={j} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: viewDepth(i, j) + 0.6, node: <TowerNode key="ghost-v" i={i} j={j} level={levelFor('tower')} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('tile:') && tool === 'keep') {
@@ -10155,7 +10715,7 @@ export default function CastleBuilder() {
         const keepHere = structures.keep && Math.floor(structures.keep.i) === ti && Math.floor(structures.keep.j) === tj;
         if (!keepHere) {
           const okBuild = terrainAt(ti, tj) === 'grass';
-          list.push({ depth: viewDepth(ti + 0.5, tj + 0.5) - 0.4, node: <KeepNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: viewDepth(ti + 0.5, tj + 0.5) - 0.4, node: <KeepNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} level={levelFor('keep')} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('tile:') && AMENITY_IDS.includes(tool)) {
@@ -10283,7 +10843,7 @@ export default function CastleBuilder() {
 
   const peopleHitTargets = useMemo(() => {
     const list = workerUnits.map((w) => ({ i: w.curI, j: w.curJ, kind: 'worker', data: w }));
-    const keepDone = structures.keep && structures.keep.stage === 'done';
+    const keepDone = keepStands(structures);
     const garrisonAnchorI = keepDone ? structures.keep.i : DEPOT_I;
     const garrisonAnchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
     const positions = siegeActive
@@ -10299,7 +10859,7 @@ export default function CastleBuilder() {
   const doneTowers = values.filter((s) => s.type === 'tower' && s.stage === 'done').length;
   const doneGraben = values.filter((s) => s.type === 'graben' && s.stage === 'done').length;
   const doneAmenities = values.filter((s) => s.type === 'amenity' && s.stage === 'done').length;
-  const keepDone = structures.keep && structures.keep.stage === 'done';
+  const keepDone = keepStands(structures);
   const inProgress = values.filter((s) => s.stage && s.stage !== 'done').length;
   const blockedCount = values.filter((s) => s.blocked).length;
 
@@ -10535,7 +11095,7 @@ export default function CastleBuilder() {
   const foodPerDayTotal = (hired.laborer + hired.arbeiter + hired.carpenter + hired.mason + hired.quarrier + hired.lumberjack) * FOOD_PER_WORKER
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
   const contractsPerMonth = contracts.reduce((sum, c) => sum + (day <= c.untilDay ? c.perMonth : 0), 0);
-  const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
+  const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + falknereiFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
   const goldNetPerMonth = villageGoldPerMonth + regionGoldNow + contractsPerMonth - wagePerDay * MONTH_LENGTH;
   const foodNetPerMonth = farmFoodPerMonth + brauhausFoodNow - foodPerDayTotal * MONTH_LENGTH;
   const unreadChronicle = Math.max(0, chronicle.length - chronicleSeen);
@@ -10980,7 +11540,7 @@ export default function CastleBuilder() {
             Klicke einen Verteidiger an, dann ein Zielfeld, um ihn umzustellen. Die Zeit steht bis zum Kampfbeginn still.
           </p>
           <button onClick={() => {
-            const keepDone = structures.keep && structures.keep.stage === 'done';
+            const keepDone = keepStands(structures);
             const anchorI = keepDone ? structures.keep.i : DEPOT_I;
             const anchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
             const positions = computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds, pendingBattleYear != null ? pendingBattleYear - START_YEAR + 1 : getCalendarDate(day).year - START_YEAR + 1);
@@ -11143,6 +11703,7 @@ export default function CastleBuilder() {
             { id: 'garnison', icon: '🛡️', label: 'Garnison', alert: warningActive },
             { id: 'dynastie', icon: '👑', label: 'Dynastie' },
             { id: 'hof', icon: '🎭', label: 'Hof' },
+            { id: 'baukunst', icon: '📐', label: 'Baukunst', alert: !research.current && RESEARCH_IDS.some((id) => !research.done.includes(id) && RESEARCH[id].needs.every((n) => research.done.includes(n)) && resources.gold >= RESEARCH[id].gold) },
             { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
             { id: 'reich', icon: '🗺️', label: 'Reich' },
             { id: 'speicher', icon: '💾', label: 'Spielstände' },
@@ -11172,6 +11733,20 @@ export default function CastleBuilder() {
           <button onClick={() => setDesertionForecast(null)} style={{ padding: '8px 22px', borderRadius: 4, border: '2px solid #5C554A', background: '#EAE0C4', fontFamily: "'Cinzel', serif", cursor: 'pointer', marginTop: 4 }}>
             Verstanden
           </button>
+        </Modal>
+      )}
+
+      {demolishAsk && (
+        <Modal title="⛏️ Wirklich abreißen?" onClose={() => setDemolishAsk(null)} maxWidth={400} zIndex={70}>
+          <p style={{ fontSize: '0.92rem', lineHeight: 1.5, marginBottom: 6 }}>
+            Soll{demolishAsk.keys.length > 1 ? 'en' : ''} <strong>{demolishAsk.summary}</strong> wirklich abgerissen werden?
+          </p>
+          <p style={{ fontSize: '0.8rem', color: '#5A5044', fontStyle: 'italic', marginBottom: 12 }}>Verbautes Holz und Stein sind damit verloren.</p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="cb-btn" style={{ flex: 1, padding: '8px 0', borderColor: '#7a2318', color: '#7a2318' }}
+              onClick={() => { removeStructures(demolishAsk.keys); setDemolishAsk(null); }}>⛏️ Ja, abreißen</button>
+            <button className="cb-btn" style={{ flex: 1, padding: '8px 0' }} onClick={() => setDemolishAsk(null)}>Abbrechen</button>
+          </div>
         </Modal>
       )}
 
@@ -11215,23 +11790,30 @@ export default function CastleBuilder() {
                   {infoTarget.data.priority ? '⭐ Priorität aktiv — zuerst versorgt' : '☆ Priorität setzen'}
                 </button>
               )}
-              {(infoTarget.data.type === 'amenity' || infoTarget.data.type === 'tower') && (() => {
+              {(infoTarget.data.type === 'amenity' || STRUCT_LEVELS[infoTarget.data.type]) && (() => {
                 // Ausbau: show what this building does now, what the next level adds, and
-                // offer the expansion if it's finished and not yet at the top level.
+                // offer the expansion if it's finished, not yet at the top level, and the
+                // realm already knows how to build the next level (Baukunst).
                 const st = infoTarget.data;
-                const isTower = st.type === 'tower';
+                const lv = STRUCT_LEVELS[st.type];
                 const lvl = st.level || 1;
-                const texts = isTower ? TOWER_LEVEL_TEXT : (AMENITY_LEVEL_TEXT[st.kind] || []);
+                const maxL = lv ? lv.names.length : AMENITY_MAX_LEVEL;
+                const texts = lv ? lv.text : (AMENITY_LEVEL_TEXT[st.kind] || []);
                 const nextLvl = lvl + 1;
-                const goldCost = (isTower ? TOWER_UPGRADE_GOLD : AMENITY_UPGRADE_GOLD)[nextLvl];
-                const matCost = getBuildCost({ type: st.type, kind: st.kind, level: nextLvl });
-                const canUpgrade = st.stage === 'done' && lvl < AMENITY_MAX_LEVEL && infoTarget.structKey && !(isTower && battlePhase);
+                const goldCost = (lv ? lv.upgradeGold : AMENITY_UPGRADE_GOLD)[nextLvl];
+                const matCost = lvl < maxL ? getBuildCost({ type: st.type, kind: st.kind, level: nextLvl }) : null;
+                const needs = lv && lvl < maxL ? lv.needs[nextLvl - 1] : null;
+                const unknown = needs && !research.done.includes(needs);
+                const canUpgrade = st.stage === 'done' && lvl < maxL && infoTarget.structKey && !(lv && battlePhase) && !unknown;
                 const affordable = canUpgrade && resources.gold >= goldCost;
                 return (
                   <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>
-                      🏗️ Ausbaustufe {'★'.repeat(lvl)}{'☆'.repeat(AMENITY_MAX_LEVEL - lvl)}
+                      🏗️ Ausbaustufe {'★'.repeat(lvl)}{'☆'.repeat(maxL - lvl)}
                     </div>
+                    {unknown && st.stage === 'done' && (
+                      <div style={{ fontSize: '0.8rem', color: '#7a5a20', marginBottom: 6 }}>📐 Für Stufe {nextLvl} muss zuerst „{RESEARCH[needs].name}“ erforscht werden (Baukunst).</div>
+                    )}
                     {st.upgrading && st.stage !== 'done' && (
                       <div style={{ fontSize: '0.82rem', color: '#7a5a20', marginBottom: 6 }}>Wird auf Stufe {lvl} ausgebaut — die Wirkung ruht, bis der Ausbau fertig ist.</div>
                     )}
@@ -11273,13 +11855,7 @@ export default function CastleBuilder() {
               {infoTarget.structKey && (
                 <button
                   onClick={() => {
-                    const k = infoTarget.structKey;
-                    setStructures((prev) => {
-                      if (!prev[k]) return prev;
-                      const next = { ...prev };
-                      delete next[k];
-                      return next;
-                    });
+                    askDemolish([infoTarget.structKey]);
                     setInfoTarget(null);
                   }}
                   style={{
@@ -11346,6 +11922,52 @@ export default function CastleBuilder() {
                   )}
                 </div>
               )}
+              {infoTarget.data.type === 'amenity' && ['palas', 'falknerei', 'turnierplatz'].includes(infoTarget.data.kind) && infoTarget.data.stage === 'done' && (() => {
+                const kind = infoTarget.data.kind;
+                const btn = (key, label, onClick, ok) => (
+                  <button key={key} className="cb-btn" disabled={!ok} onClick={onClick}
+                    style={{ width: '100%', marginBottom: 6, padding: '7px 10px', fontSize: '0.86rem', textAlign: 'left', opacity: ok ? 1 : 0.5 }}>{label}</button>
+                );
+                const wait = (k, cd) => estateReadyIn(k, cd);
+                const waitNote = (k, cd) => (wait(k, cd) > 0 ? <p style={{ fontSize: '0.76rem', color: '#7a5a20', margin: '0 0 6px' }}>Wieder möglich in {wait(k, cd)} Tagen.</p> : null);
+                if (kind === 'palas') {
+                  const canPay = resources.gold >= FEAST_COST.gold && resources.food >= FEAST_COST.food && wait('feast', PALAS_FEAST_COOLDOWN) === 0;
+                  const year = calDate.year;
+                  const bannedMarriage = churchUnrestUntilYear && year < churchUnrestUntilYear;
+                  const kids = royalFamily.children.filter((c) => !c.spouseName && !c.imprisoned && year - c.bornYear >= 16);
+                  return (
+                    <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>🎉 Ein Fest im Palas ({FEAST_COST.gold} 🪙, {FEAST_COST.food} 🌾)</div>
+                      <p style={{ fontSize: '0.76rem', color: '#5A5044', margin: '0 0 6px' }}>Hebt die Stimmung bei Hofe und Euren Ruf. Einmal im Jahr.</p>
+                      {waitNote('feast', PALAS_FEAST_COOLDOWN)}
+                      {!royalFamily.married && btn('king', `💍 Brautschau für ${kingName || 'den König'}`, () => holdFeast('king'), canPay && !bannedMarriage)}
+                      {kids.map((c) => btn(`c-${c.name}-${c.bornYear}`, `💍 Brautschau für ${c.gender === 'f' ? 'Prinzessin' : 'Prinz'} ${c.name} (${year - c.bornYear} J.)`, () => holdFeast('child', c), canPay && !bannedMarriage))}
+                      {btn('guests', '🎭 Gäste aus dem ganzen Land laden — neue Höflinge kennenlernen', () => holdFeast('guests'), canPay)}
+                      {bannedMarriage && <p style={{ fontSize: '0.74rem', color: '#7a2318', margin: 0 }}>Unter dem Kirchenbann wird nicht geheiratet.</p>}
+                    </div>
+                  );
+                }
+                if (kind === 'falknerei') {
+                  const ok = resources.gold >= HUNT_COST.gold && wait('hunt', HUNT_COOLDOWN) === 0;
+                  return (
+                    <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>🦅 Jagd</div>
+                      <p style={{ fontSize: '0.76rem', color: '#5A5044', margin: '0 0 6px' }}>Bringt Wildbret für die Vorräte und erfreut den Hof{falconerHired ? ' — mit Eurem Falkner noch reicher' : ''}. Einmal im Vierteljahr.</p>
+                      {waitNote('hunt', HUNT_COOLDOWN)}
+                      {btn('hunt', `🦅 Jagd veranstalten (${HUNT_COST.gold} 🪙)`, holdHunt, ok)}
+                    </div>
+                  );
+                }
+                const ok = resources.gold >= TOURNAMENT_COST.gold && wait('tournament', TOURNAMENT_COOLDOWN) === 0;
+                return (
+                  <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>🏇 Turnier</div>
+                    <p style={{ fontSize: '0.76rem', color: '#5A5044', margin: '0 0 6px' }}>Bringt Ruhm, Eure Ritter gewinnen Erfahrung, und fremde Ritter werden auf Euch aufmerksam. Einmal im Jahr.</p>
+                    {waitNote('tournament', TOURNAMENT_COOLDOWN)}
+                    {btn('tour', `🏇 Turnier ausrichten (${TOURNAMENT_COST.gold} 🪙)`, holdTournament, ok)}
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <div style={{ fontSize: '0.9rem', lineHeight: 1.8 }}>
@@ -11355,6 +11977,70 @@ export default function CastleBuilder() {
           )}
         </Modal>
       )}
+
+      {openPanel === 'baukunst' && (() => {
+        const cur = research.current;
+        const speed = baumeisterHired ? 1 : RESEARCH_SLOW_MULT;
+        const upgradable = ['wall', 'gate', 'tower', 'keep'].map((type) => {
+          const known = maxKnownLevel(type, research.done);
+          const list = Object.values(structures).filter((st) => st.type === type && st.stage === 'done' && (st.level || 1) < known);
+          const gold = list.reduce((sum, st) => sum + STRUCT_LEVELS[type].upgradeGold[(st.level || 1) + 1], 0);
+          return { type, known, list, gold };
+        }).filter((u) => u.list.length);
+        return (
+          <Modal title="📐 Baukunst" onClose={() => setOpenPanel(null)} maxWidth={560}>
+            <p style={{ fontSize: '0.82rem', color: '#5A5044', lineHeight: 1.5, marginTop: 0 }}>
+              Eure Burg beginnt als Motte mit Holzpalisade. Steinbau und die Kunst der Befestigung müssen erst erlernt werden — immer ein Vorhaben nach dem anderen.
+              {' '}{baumeisterHired
+                ? <strong style={{ color: '#3d5a2c' }}>Euer Baumeister leitet die Forschung: volle Geschwindigkeit.</strong>
+                : <strong style={{ color: '#7a5a20' }}>Ohne Baumeister am Hofe brüten Eure Schreiber allein darüber — alles dauert doppelt so lang. Ein Baumeister kann als Bittsteller vorsprechen.</strong>}
+            </p>
+            {cur && (
+              <div style={{ margin: '8px 0 12px', padding: '8px 10px', border: '1px solid rgba(92,85,74,0.35)', borderRadius: 4, background: 'rgba(201,162,75,0.1)' }}>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700 }}>{RESEARCH[cur.id].icon} {RESEARCH[cur.id].name} wird erforscht…</div>
+                <div className="cb-meter" style={{ marginTop: 6 }}><div style={{ width: `${Math.round(cur.progress * 100)}%`, background: '#c9a24b' }} /></div>
+                <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4 }}>noch etwa {Math.ceil((1 - cur.progress) * RESEARCH[cur.id].days * speed)} Tage</div>
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {RESEARCH_IDS.map((id) => {
+                const def = RESEARCH[id];
+                const done = research.done.includes(id);
+                const missing = def.needs.filter((n) => !research.done.includes(n));
+                const can = !done && !cur && !missing.length && resources.gold >= def.gold;
+                return (
+                  <div key={id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 8px', borderRadius: 4, border: '1px solid rgba(92,85,74,0.3)', opacity: done ? 0.75 : 1 }}>
+                    <div style={{ fontSize: '1.4rem' }}>{def.icon}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{def.name}{done ? ' ✔' : ''}</div>
+                      <div style={{ fontSize: '0.78rem', color: '#5A5044', lineHeight: 1.35 }}>{def.text}</div>
+                      {!done && missing.length > 0 && <div style={{ fontSize: '0.74rem', color: '#7a5a20' }}>Erst: {missing.map((n) => RESEARCH[n].name).join(', ')}</div>}
+                    </div>
+                    {!done && !(cur && cur.id === id) && (
+                      <button className="cb-btn" disabled={!can} onClick={() => startResearch(id)}
+                        style={{ padding: '6px 10px', fontSize: '0.8rem', whiteSpace: 'nowrap', opacity: can ? 1 : 0.5 }}>
+                        {def.gold} 🪙 · {def.days * speed} Tage
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {upgradable.length > 0 && (
+              <>
+                <div className="cb-section-title" style={{ marginTop: 14 }}>Bestehendes ausbauen</div>
+                {upgradable.map((u) => (
+                  <button key={u.type} className="cb-btn" disabled={resources.gold < u.gold || !!battlePhase} onClick={() => upgradeAllOf(u.type)}
+                    style={{ width: '100%', marginBottom: 6, padding: '7px 10px', fontSize: '0.84rem', textAlign: 'left', opacity: resources.gold < u.gold ? 0.55 : 1 }}>
+                    {u.list.length}× {levelName(u.type, u.list[0].level)} → {levelName(u.type, Math.min(u.known, (u.list[0].level || 1) + 1))} ausbauen — {u.gold} 🪙 jetzt, Holz und Stein beim Bau
+                  </button>
+                ))}
+                <p style={{ fontSize: '0.74rem', color: '#5A5044', fontStyle: 'italic', margin: 0 }}>Während des Ausbaus steht das alte Bauwerk weiter und verteidigt die Burg.</p>
+              </>
+            )}
+          </Modal>
+        );
+      })()}
 
       {openPanel === 'chronik' && (
         <Modal title="📜 Chronik des Reiches" onClose={() => { setChronicleSeen(chronicle.length); setOpenPanel(null); }} maxWidth={480}>
@@ -11738,6 +12424,8 @@ export default function CastleBuilder() {
             <div><span className="cb-key">Tab</span> gedrückt halten: diagonale Mauern · <span className="cb-key">Mausrad</span> beim Mauer-/Torbau: drehen</div>
             <div><span className="cb-key">Esc</span> oder Rechtsklick: Werkzeug abwählen · Fenster schließen</div>
             <div>Fertige Gebäude und Türme anklicken: Info & <strong>Ausbau</strong>. Tore anklicken: öffnen/schließen, Rechtsklick: Info.</div>
+            <div>📐 <strong>Baukunst</strong>: Ihr beginnt mit Motte und Holzpalisade. Steinbau, Wehrtürme, Wehrgang, Bastionen und den Palas erforscht Ihr dort — mit einem Baumeister am Hofe doppelt so schnell. Unter „Bauen als“ wählt Ihr die Stufe für neue Mauern, Tore und Türme.</div>
+            <div>🏛️ Palas: Feste, Brautschau, Gäste · 🦅 Falknerei: Jagden · 🏇 Turnierplatz: Turniere — jeweils über das Info-Fenster des Gebäudes.</div>
           </div>
           <div className="cb-section-title" style={{ marginTop: 10 }}>Karte</div>
           <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
@@ -12103,6 +12791,7 @@ export default function CastleBuilder() {
                     <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.84rem', padding: '5px 0', borderBottom: '1px dashed rgba(92,85,74,0.2)' }}>
                       <strong style={{ minWidth: 96 }}>{c.name}{c === heir ? ' 👑' : ''}</strong>
                       <span style={{ color: '#5A5044', minWidth: 58 }}>{age} Jahre</span>
+                      {c.spouseName && <span style={{ color: '#7a2f5c' }}>💍 {c.spouseName}</span>}
                       {c.trait ? (
                         <span>🎓 {RULER_TRAITS[c.trait].icon} {RULER_TRAITS[c.trait].name} — {RULER_TRAITS[c.trait].text}</span>
                       ) : c.tutor ? (
@@ -12677,8 +13366,10 @@ export default function CastleBuilder() {
             {(() => {
               // Tool cards grouped by purpose, each with its material cost (red when the store
               // can't cover it yet) and its hotkey.
+              const chosenLevel = (type) => Math.min(buildLevel[type] || 99, maxKnownLevel(type, research.done));
               const card = (t, extraDisabled = false, why = '') => {
-                const cost = BUILD_COST[t.id];
+                const lv = STRUCT_LEVELS[t.id];
+                const cost = lv ? lv.cost[chosenLevel(t.id)] : BUILD_COST[t.id];
                 const disabled = extraDisabled;
                 const shortW = cost && resources.wood < cost.wood;
                 const shortS = cost && resources.stone < cost.stone;
@@ -12687,7 +13378,7 @@ export default function CastleBuilder() {
                     onClick={() => !disabled && setTool((cur) => (cur === t.id ? null : t.id))}
                     className={`cb-btn cb-toolcard${tool === t.id ? ' is-active' : ''}`}>
                     <span className="cb-tool-emoji">{t.emoji}</span>
-                    <span className="cb-tool-name">{t.label}</span>
+                    <span className="cb-tool-name">{lv ? levelName(t.id, chosenLevel(t.id)) : t.label}</span>
                     <span className="cb-tool-cost">
                       {why ? <em>{why}</em> : cost && (cost.wood || cost.stone)
                         ? <><span className={shortW ? 'is-short' : ''}>🪵{cost.wood}</span> <span className={shortS ? 'is-short' : ''}>🪨{cost.stone}</span></>
@@ -12704,7 +13395,7 @@ export default function CastleBuilder() {
                     <div className="cb-section-title">Bauen</div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>{card(byId('keep'))}</div>
                     <p style={{ fontSize: '0.8rem', color: '#7a2318', fontStyle: 'italic', margin: '8px 0 0', lineHeight: 1.4 }}>
-                      Baue zuerst den Burgfried — er schaltet alle anderen Bauten frei.
+                      Baue zuerst die Motte, Euren Burgsitz — sie schaltet alle anderen Bauten frei.
                     </p>
                   </>
                 );
@@ -12717,6 +13408,17 @@ export default function CastleBuilder() {
                     {card(byId('graben'), !moatUnlocked, !moatUnlocked ? 'erst nach einer Mauer' : '')}
                     {!structures.keep && card(byId('keep'))}
                   </div>
+                  {STRUCT_LEVELS[tool] && maxKnownLevel(tool, research.done) > 1 && (
+                    // Which level to build at: cheap timber, or the stronger kinds already learned.
+                    <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.76rem', color: '#5A5044' }}>Bauen als:</span>
+                      {STRUCT_LEVELS[tool].names.slice(0, maxKnownLevel(tool, research.done)).map((nm, idx) => (
+                        <button key={nm} className={`cb-btn${chosenLevel(tool) === idx + 1 ? ' is-active' : ''}`}
+                          onClick={() => setBuildLevel((b) => ({ ...b, [tool]: idx + 1 }))}
+                          style={{ padding: '3px 7px', fontSize: '0.76rem' }}>{nm}</button>
+                      ))}
+                    </div>
+                  )}
                   {moatUnlocked && (
                     <button className="cb-btn" style={{ width: '100%', marginTop: 6, padding: '6px 8px', fontSize: '0.86rem', textAlign: 'left' }}
                       title="Legt einen Graben einen Schritt vor alle fertigen Mauern und Tore"
@@ -12737,7 +13439,7 @@ export default function CastleBuilder() {
                     <>
                       <div className="cb-section-title" style={{ marginTop: 12 }}>Gebäude</div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                        {AMENITY_IDS.map((id) => card(byId(id)))}
+                        {AMENITY_IDS.map((id) => (id === 'palas' && !research.done.includes('palas') ? card(byId(id), true, 'erst Palasbau erforschen') : card(byId(id))))}
                       </div>
                     </>
                   )}
@@ -12769,7 +13471,7 @@ export default function CastleBuilder() {
               <span>🗼 Türme <strong>{doneTowers}</strong></span>
               <span>🚪 Tore <strong>{doneGates}</strong></span>
               <span>🕳️ Gräben <strong>{doneGraben}</strong></span>
-              <span>🏰 {keepDone ? 'Burgfried ✔' : structures.keep ? 'Burgfried im Bau' : 'kein Burgfried'}</span>
+              <span>🏰 {keepDone ? `${levelName('keep', structures.keep.level)} ✔` : structures.keep ? 'Burgsitz im Bau' : 'kein Burgsitz'}</span>
               <span>🏛️ Gebäude <strong>{doneAmenities}</strong></span>
             </div>
             {inProgress > 0 && (
