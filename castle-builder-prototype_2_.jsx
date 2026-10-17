@@ -160,7 +160,7 @@ const REGION_DEFS = {
   auen: {
     id: 'auen', acc: 'die Auen', holderDat: 'einem abtrünnigen Vogt', short: 'Auen', plural: true, name: 'Die Auen', icon: '🌾', i0: KERN_COLS, i1: GRID_COLS - 1, j0: 12, j1: KERN_ROWS - 1,
     holder: 'ein abtrünniger Vogt', lord: 'Der Vogt der Auen', strength: 16, oath: { gold: 350, rep: 58 }, needs: [],
-    perks: ['Fruchtbare Felder: +30 % Ernte', 'Platz für 3 weitere Bauern'],
+    perks: ['Fruchtbare Felder: +30 % Ernte', 'Platz für 4 weitere Einwohner'],
   },
   suedhuegel: {
     id: 'suedhuegel', acc: 'die Südhügel', holderDat: 'dem Bergvolk', short: 'Südhügel', plural: true, name: 'Die Südhügel', icon: '⛰️', i0: 0, i1: 14, j0: KERN_ROWS, j1: GRID_ROWS - 1,
@@ -170,12 +170,12 @@ const REGION_DEFS = {
   markt: {
     id: 'markt', acc: 'Lindenau', holderDat: 'einem fremden Grafen', short: 'Lindenau', name: 'Marktflecken Lindenau', icon: '🏘️', i0: 15, i1: KERN_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
     holder: 'ein fremder Graf', lord: 'Der Graf von Lindenau', strength: 20, oath: { gold: 450, rep: 62 }, needs: [],
-    perks: ['Zweites Dorf: Platz für 8 weitere Bauern', 'Markt: +25 🪙 im Monat'],
+    perks: ['Zweites Dorf: Platz für 10 weitere Einwohner', 'Markt: +25 🪙 im Monat'],
   },
   strasse: {
     id: 'strasse', acc: 'die Königsstraße', holderDat: 'den Wegelagerern der Straße', short: 'Königsstraße', name: 'Die Königsstraße', icon: '🛣️', i0: KERN_COLS, i1: GRID_COLS - 1, j0: KERN_ROWS, j1: GRID_ROWS - 1,
     holder: 'die Wegelagerer der Straße', lord: 'Der Zollherr der Straße', strength: 26, oath: { gold: 600, rep: 68 }, needs: ['auen', 'markt'],
-    perks: ['Zoll: +40 🪙 im Monat', 'Platz für 2 weitere Bauern, Ruf +5'],
+    perks: ['Zoll: +40 🪙 im Monat', 'Platz für 3 weitere Einwohner, Ruf +5'],
   },
 };
 const REGION_IDS = ['ostwald', 'auen', 'suedhuegel', 'markt', 'strasse'];
@@ -197,7 +197,7 @@ function regionReachable(id, owned) {
 }
 // The economic side of the realm's land.
 function regionPopBonus(owned) {
-  return (owned.includes('auen') ? 3 : 0) + (owned.includes('markt') ? 8 : 0) + (owned.includes('strasse') ? 2 : 0);
+  return (owned.includes('auen') ? 4 : 0) + (owned.includes('markt') ? 10 : 0) + (owned.includes('strasse') ? 3 : 0);
 }
 function regionGoldPerMonth(owned) {
   return (owned.includes('suedhuegel') ? 10 : 0) + (owned.includes('markt') ? 25 : 0) + (owned.includes('strasse') ? 40 : 0);
@@ -403,7 +403,14 @@ const AMENITY_TYPES = {
   bogenmacher: { label: 'Bogenmacher', top: '#8a6a42', left: '#86643c', right: '#5d432a' },
   falknerei: { label: 'Falknerei', top: '#7d6a4a', left: '#8a7350', right: '#5f4e34' },
   turnierplatz: { label: 'Turnierplatz', top: '#c9b98a', left: '#8a6a42', right: '#5d432a' },
+  vogtei: { label: 'Vogtei', top: '#a49d90', left: '#938c7c', right: '#6f695c' },
+  kirche: { label: 'Kirche', top: '#b0aa9c', left: '#9a9484', right: '#757062' },
+  kloster: { label: 'Kloster', top: '#a8a296', left: '#938c7c', right: '#6f695c' },
+  marktplatz: { label: 'Marktplatz', top: '#b8a888', left: '#8a6a42', right: '#5d432a' },
 };
+// The village's own buildings: they stand in the village (or on open grass near it) and act
+// on the people rather than on the castle.
+const VILLAGE_AMENITIES = ['vogtei', 'kirche', 'kloster', 'marktplatz'];
 const AMENITY_IDS = Object.keys(AMENITY_TYPES);
 // Most buildings stand on one tile; the Turnierplatz is a long yard over two (along i). Such
 // a building is stored under the key of its first tile, with its centre in the middle of all.
@@ -485,6 +492,9 @@ function falknereiFoodPerMonth(structures) { return 3 * amenityLevel(structures,
 // Feasts, hunts and tournaments can be held this often (in days).
 const PALAS_FEAST_COOLDOWN = 360, HUNT_COOLDOWN = 90, TOURNAMENT_COOLDOWN = 360;
 const FEAST_COST = { gold: 60, food: 40 }, HUNT_COST = { gold: 25 }, TOURNAMENT_COST = { gold: 120 };
+function kircheHappiness(structures) { return 0.8 * amenityLevel(structures, 'kirche'); }
+function klosterResearchMult(structures) { return 1 + 0.2 * amenityLevel(structures, 'kloster'); }
+function klosterFoodPerMonth(structures) { return 2 * amenityLevel(structures, 'kloster'); }
 function kemenateCourtMorale(structures) { const L = amenityLevel(structures, 'kemenate'); return L > 1 ? 0.9 * (L - 1) : 0; }
 function stallKnightHpMult(structures) { return 1 + 0.15 * Math.max(0, amenityLevel(structures, 'stallungen') - 1); }
 function smithyLevelDamageMult(structures) { return 1 + 0.05 * Math.max(0, amenityLevel(structures, 'schmied') - 1); }
@@ -502,6 +512,10 @@ const AMENITY_LEVEL_TEXT = {
   bogenmacher: ['Bogenschützen +10 % Schaden.', 'Bogenschützen +15 % Schaden.', 'Bogenschützen +20 % Schaden.'],
   falknerei: ['Jagden veranstalten; +3 Nahrung pro Monat.', '+6 Nahrung pro Monat, reichere Jagd.', '+9 Nahrung pro Monat, die reichste Jagd.'],
   turnierplatz: ['Eigene Turniere ausrichten: Ruhm, Erfahrung für Eure Ritter, neue Ritter.', 'Größere Turniere: mehr Ruhm.', 'Die großen Turniere des Reiches.'],
+  vogtei: ['Steuern +10 %, Platz für 4 Dorfbewohner mehr. Nötig für die Stadt.', 'Steuern +20 %, +8 Plätze.', 'Rathaus: Steuern +30 %, +12 Plätze.'],
+  kirche: ['Zufriedenheit +0,8/Monat, Wachstum +5 %, +3 Plätze. Nötig für die Stadt.', 'Zufriedenheit +1,6/Monat, Wachstum +10 %, +6 Plätze.', 'Kathedrale: Zufriedenheit +2,4/Monat, Wachstum +15 %, +9 Plätze.'],
+  kloster: ['Baukunst-Forschung +20 %, +2 Nahrung/Monat, +2 Plätze.', 'Forschung +40 %, +4 Nahrung, +4 Plätze.', 'Forschung +60 %, +6 Nahrung, +6 Plätze.'],
+  marktplatz: ['Bürger zahlen +15 % Steuern, mehr Bauern werden Bürger, +6 Plätze. Macht das Dorf zum Marktflecken.', 'Bürgersteuer +30 %, +12 Plätze.', 'Bürgersteuer +45 %, +18 Plätze.'],
 };
 // Once at least one Lagerhaus stands, hauled goods go straight there instead of the open
 // depot marker — the nearest finished one to wherever the hauler currently is.
@@ -559,6 +573,10 @@ const BUILD_COST = {
   bogenmacher: { wood: 10, stone: 4 },
   falknerei: { wood: 9, stone: 4 },
   turnierplatz: { wood: 16, stone: 2 },
+  vogtei: { wood: 12, stone: 14 },
+  kirche: { wood: 8, stone: 26 },
+  kloster: { wood: 12, stone: 22 },
+  marktplatz: { wood: 14, stone: 6 },
   graben: { wood: 0, stone: 0 },
 };
 // How much work each kind of building takes, as a multiple of a plain stage of work: stone
@@ -718,9 +736,52 @@ function dayCountForDate(year, monthIdx, dayOfMonth) {
   return count + dayOfMonth;
 }
 const MONTH_LENGTH = 30;
-const VILLAGE_GOLD_PER_CAPITA_AT_100 = 15;
-const MAX_VILLAGE_POP = 15;
+const MAX_VILLAGE_POP = 16;
 const FOOD_PER_FARMER_PER_MONTH = 7;
+
+// --------------------------------------------------------------------------- Bevölkerung --
+// The village is made of two estates. Bauern (peasants) work the fields, owe Frondienst and
+// pay little; they are also where the soldiers come from. Bürger (townsfolk) are the realm's
+// craftsmen — every woodcutter, stonecutter, carpenter, mason and day labourer is one of them
+// — pay far more tax, but want wages for their work. Nobody appears out of thin air: whoever
+// falls in battle is missing from the village until it grows again.
+// villagePop counts all civilians (Bauern + Bürger); soldiers are counted separately.
+const TAX_PER_BAUER = 3;     // gold a month at 100 % tax
+const TAX_PER_BUERGER = 12;
+const FOOD_PER_BUERGER = 0.05; // a day; Bauern feed themselves
+// The settlement grows from hamlet to town; each stage lets a larger share become Bürger.
+const VILLAGE_STAGES = [
+  { id: 'weiler', name: 'Weiler', icon: '🛖', minPop: 0, buergerShare: 0.25, taxMult: 1 },
+  { id: 'dorf', name: 'Dorf', icon: '🏘️', minPop: 12, buergerShare: 0.32, taxMult: 1 },
+  { id: 'markt', name: 'Marktflecken', icon: '🏪', minPop: 22, needs: ['marktplatz'], buergerShare: 0.45, taxMult: 1.1 },
+  { id: 'stadt', name: 'Stadt', icon: '🏙️', minPop: 40, needs: ['marktplatz', 'vogtei', 'kirche'], buergerShare: 0.6, taxMult: 1.2 },
+];
+function villageStage(pop, structures) {
+  let st = VILLAGE_STAGES[0];
+  VILLAGE_STAGES.forEach((v) => { if (pop >= v.minPop && (v.needs || []).every((k) => hasDoneAmenity(structures, k))) st = v; });
+  return st;
+}
+function villageCapFor(owned, structures) {
+  return MAX_VILLAGE_POP + regionPopBonus(owned)
+    + 4 * amenityLevel(structures, 'vogtei') + 3 * amenityLevel(structures, 'kirche')
+    + 2 * amenityLevel(structures, 'kloster') + 6 * amenityLevel(structures, 'marktplatz');
+}
+// Monthly taxes from the village.
+function villageTaxPerMonth(pop, buerger, taxRate, structures, taxMult = 1) {
+  const bauern = Math.max(0, pop - buerger);
+  const marketMult = 1 + 0.15 * amenityLevel(structures, 'marktplatz');
+  const vogteiMult = 1 + 0.1 * amenityLevel(structures, 'vogtei');
+  return (bauern * TAX_PER_BAUER + buerger * TAX_PER_BUERGER * marketMult) * (taxRate / 100) * villageStage(pop, structures).taxMult * vogteiMult * taxMult;
+}
+// Chances, each month, that a child is born / a family moves in, and that a Bauer earns his
+// Bürgerrecht.
+function villageGrowthChance(happiness, reputation, structures) {
+  if (happiness < 40) return 0;
+  return Math.max(0.04, Math.min(0.55, 0.16 + (happiness - 50) / 250 + (reputation - 50) / 250 + 0.05 * amenityLevel(structures, 'kirche')));
+}
+function promotionChance(structures) { return 0.18 + 0.15 * amenityLevel(structures, 'marktplatz'); }
+const CITIZENSHIP_GOLD = 20; // granting the Bürgerrecht by decree
+const MILITIA_HP_MULT = 0.7, MILITIA_DMG_MULT = 0.6;
 const GROWTH_INTERVAL_DAYS = 360;
 const STRIKE_THRESHOLD = 20;
 const HAPPINESS_RECOVERY_PER_MONTH = 4;
@@ -3242,7 +3303,7 @@ const WallJunctionPost = React.memo(function WallJunctionPost({ i, j }) {
 // a glance at the courtyard tells how far the castle has been developed.
 const PLASTER_PAL = { top: '#e6dab8', left: '#e2d4ae', right: '#c0ae86' };
 const STONE_PAL = { top: '#a8a296', left: '#938c7c', right: '#6f695c' };
-const AMENITY_HALF = { brunnen: 0.22, kemenate: 0.48, palas: 0.48, turnierplatz: 0.48 };
+const AMENITY_HALF = { brunnen: 0.22, kemenate: 0.48, palas: 0.48, turnierplatz: 0.48, kirche: 0.4, kloster: 0.46, marktplatz: 0.48 };
 function amenityHalf(kind) { return AMENITY_HALF[kind] || 0.36; }
 // Height of the walls (roof base) per kind and level — also what the construction stages
 // build up to.
@@ -3260,10 +3321,14 @@ function amenityWallHeight(kind, level) {
     case 'bogenmacher': return 16;
     case 'falknerei': return 15;
     case 'turnierplatz': return 6;
+    case 'vogtei': return level >= 3 ? 30 : 24;
+    case 'kirche': return level >= 3 ? 28 : 20;
+    case 'kloster': return 16;
+    case 'marktplatz': return 2;
     default: return AMENITY_H;
   }
 }
-const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood', palas: 'stone', bogenmacher: 'wood', falknerei: 'wood', turnierplatz: 'wood' };
+const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood', palas: 'stone', bogenmacher: 'wood', falknerei: 'wood', turnierplatz: 'wood', vogtei: 'stone', kirche: 'stone', kloster: 'stone', marktplatz: 'wood' };
 
 function FlowerBox({ face, u, v }) {
   const a = facePt(face, u - 0.11, v), b = facePt(face, u + 0.11, v);
@@ -3691,6 +3756,89 @@ function AmenityBody({ i, j, kind, level }) {
       top = 22;
       break;
     }
+    case 'vogtei': {
+      // The bailiff's house: stone ground floor, timber-framed upper storey, a stair turret
+      // from Stufe 2, the town hall's arcade and bell turret at Stufe 3.
+      const h1 = 11;
+      const lq = computeFaceQuads(corners, 0, h1), upper = sq(i, j, half + 0.02), uq = computeFaceQuads(upper, h1, H);
+      els.push(<Block key="lo" corners={corners} baseElev={0} topElev={h1} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 14} />);
+      if (L >= 3) [0.2, 0.5, 0.8].forEach((u, k) => { els.push(<ArchOpening key={`ar${k}`} face={lq.faceB} u={u} v0={0.15} dv={0.85} du={0.1} fill="#3a2a1a" />); });
+      else els.push(<ArchOpening key="door" face={lq.faceB} u={0.5} v0={0.25} dv={0.75} du={0.14} fill="#4a3220" />);
+      els.push(<Block key="up" corners={upper} baseElev={h1} topElev={H} topFill={PLASTER_PAL.top} faceLeft={PLASTER_PAL.left} faceRight={PLASTER_PAL.right} shadowHeight={0} />);
+      els.push(<TimberFrameDecor key="tf" corners={upper} baseElev={h1} topElev={H} />);
+      [[uq.faceA, 0.3], [uq.faceA, 0.7], [uq.faceB, 0.3], [uq.faceB, 0.7]].forEach(([f, u], k) => els.push(<ArchOpening key={`w${k}`} face={f} u={u} v0={0.25} dv={0.4} du={0.09} fill="#2a2016" glow={k % 2 === 1} />));
+      els.push(<GableRoof key="roof" i={i} j={j} half={half + 0.02} baseElev={H} roofH={13} color="#7a3b2a" wallPal={PLASTER_PAL} axis="j" overhang={0.06} />);
+      if (L >= 2) {
+        els.push(<Cylinder key="stair" i={i + half} j={j - half} r={0.1} base={0} h={H + 6} side="#9c9484" top="#7d7566" courses />);
+        els.push(<ConeRoof key="stairRoof" i={i + half} j={j - half} r={0.13} base={H + 6} h={12} color="#55606c" />);
+      }
+      const sg = facePt(lq.faceA, 0.5, 0.15);
+      els.push(<HangingSign key="sign" x={sg.x} y={sg.y} icon="⚖️" />);
+      top = H + 13;
+      break;
+    }
+    case 'kirche': {
+      // A nave with a west tower; at Stufe 3 a Kathedrale with a taller nave and twin towers.
+      const big = L >= 3;
+      const nave = orientedRect(i + 0.06, j, 1, 0, half * 0.95, half * 0.62);
+      const nq = computeFaceQuads(nave, 0, H);
+      els.push(<Block key="nave" corners={nave} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 30} />);
+      [0.2, 0.4, 0.6, 0.8].forEach((u, k) => {
+        els.push(<ArchOpening key={`wa${k}`} face={nq.faceA} u={u} v0={0.2} dv={0.55} du={0.06} fill="#3a4a66" glow={big} />);
+        els.push(<ArchOpening key={`wb${k}`} face={nq.faceB} u={u} v0={0.2} dv={0.55} du={0.06} fill="#3a4a66" glow={big} />);
+      });
+      els.push(<GableRoof key="roof" i={i + 0.06} j={j} half={half * 0.95} halfJ={half * 0.62} baseElev={H} roofH={big ? 16 : 12} color={big ? '#4f5866' : '#6a4a3a'} wallPal={info} axis="i" overhang={0.04} />);
+      const towers = big ? [[i - half * 0.8, j - half * 0.4], [i - half * 0.8, j + half * 0.4]] : [[i - half * 0.85, j]];
+      towers.forEach(([ti, tj], k) => {
+        const tH = H + (big ? 22 : 16);
+        const tc = sq(ti, tj, 0.13);
+        els.push(<Block key={`t${k}`} corners={tc} baseElev={0} topElev={tH} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed + 5 + k} shadowHeight={0} />);
+        const tq = computeFaceQuads(tc, 0, tH);
+        els.push(<ArchOpening key={`tb${k}`} face={tq.faceA} u={0.5} v0={0.12} dv={0.12} du={0.25} fill="#241c14" />);
+        els.push(<PyramidRoof key={`ts${k}`} corners={sq(ti, tj, 0.15)} baseElev={tH} apexElev={tH + (big ? 24 : 18)} color="#55606c" />);
+        const cb = P(ti, tj, tH + (big ? 24 : 18)), ct = P(ti, tj, tH + (big ? 30 : 24));
+        els.push(<g key={`cr${k}`} pointerEvents="none"><line x1={cb.x} y1={cb.y} x2={ct.x} y2={ct.y} stroke="#c9a24b" strokeWidth="1.2" /><line x1={ct.x - 2.5} y1={ct.y + 2} x2={ct.x + 2.5} y2={ct.y + 2} stroke="#c9a24b" strokeWidth="1.2" /></g>);
+      });
+      els.push(<ArchOpening key="portal" face={nq.faceB} u={0.08} v0={0.45} dv={0.55} du={0.07} fill="#4a3220" />);
+      top = H + (big ? 46 : 34);
+      break;
+    }
+    case 'kloster': {
+      // A cloister range around a small garden, a refectory and a bell gable.
+      const range = orientedRect(i, j - half * 0.45, 1, 0, half, half * 0.5);
+      const rq = computeFaceQuads(range, 0, H);
+      // Garden first (in front of the range when seen from the usual side).
+      const bed = (a, b2) => { const pts = [[-0.8, -0.2], [0.8, -0.2], [0.8, 0.2], [-0.8, 0.2]].map(([x, y]) => P(i + x * half, j + half * 0.5 + (y + b2) * 0.35, 0.5)); return ptsStr(pts); };
+      els.push(<polygon key="garden" points={bed(0, 0)} fill="#5e7d3a" stroke="#3d5a2c" strokeWidth="0.6" pointerEvents="none" />);
+      let rows = '';
+      for (let k = 0; k < 4; k++) { const a = P(i - 0.7 * half, j + half * 0.38 + k * 0.07, 1), c = P(i + 0.7 * half, j + half * 0.38 + k * 0.07, 1); rows += `M${a.x} ${a.y}L${c.x} ${c.y}`; }
+      els.push(<path key="rows" d={rows} stroke="#7a9a4a" strokeWidth="1.4" strokeDasharray="2,1.5" pointerEvents="none" />);
+      els.push(<Block key="range" corners={range} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 10} />);
+      [0.15, 0.32, 0.5, 0.68, 0.85].forEach((u, k) => els.push(<ArchOpening key={`ar${k}`} face={rq.faceB} u={u} v0={0.35} dv={0.65} du={0.06} fill="#2a2016" />));
+      els.push(<GableRoof key="roof" i={i} j={j - half * 0.45} half={half} halfJ={half * 0.5} baseElev={H} roofH={10} color="#7a3b2a" wallPal={info} axis="i" overhang={0.05} />);
+      const bg = P(i + half * 0.7, j - half * 0.45, H + 10), bt = P(i + half * 0.7, j - half * 0.45, H + 18);
+      els.push(<g key="bell" pointerEvents="none"><line x1={bg.x} y1={bg.y} x2={bt.x} y2={bt.y} stroke="#6f695c" strokeWidth="3" /><circle cx={bt.x} cy={bt.y + 4} r="2" fill="#c9a24b" /></g>);
+      if (L >= 2) { const sk = P(i - half * 0.6, j + half * 0.8); els.push(<Sacks key="sacks" x={sk.x} y={sk.y} n={2 + L} />); }
+      top = H + 18;
+      break;
+    }
+    case 'marktplatz': {
+      // A paved square with market stalls under striped awnings round a market cross.
+      els.push(<Block key="pave" corners={corners} baseElev={0} topElev={1.5} topFill="#b8ad96" faceLeft="#9a8f78" faceRight="#7a705e" shadowHeight={0} />);
+      const cross0 = P(i, j, 1.5), cross1 = P(i, j, 16);
+      els.push(<g key="cross" pointerEvents="none"><line x1={cross0.x} y1={cross0.y} x2={cross1.x} y2={cross1.y} stroke="#8a8274" strokeWidth="2.4" /><line x1={cross1.x - 4} y1={cross1.y + 4} x2={cross1.x + 4} y2={cross1.y + 4} stroke="#8a8274" strokeWidth="2" /></g>);
+      const stalls = [[-0.55, -0.55], [0.55, -0.55], [-0.55, 0.55], [0.55, 0.55], [0, -0.6], [0, 0.6]].slice(0, 2 + 2 * L);
+      const awning = ['#c0392b', '#2f5d8a', '#c9a24b', '#3d6b3a', '#7a2f5c', '#c0392b'];
+      stalls.sort((a, b2) => viewDepth(i + a[0] * half, j + a[1] * half) - viewDepth(i + b2[0] * half, j + b2[1] * half)).forEach(([a, b2], k) => {
+        const ci = i + a * half, cj = j + b2 * half;
+        els.push(<Block key={`st${k}`} corners={sq(ci, cj, 0.1)} baseElev={1.5} topElev={6} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" shadowHeight={0} />);
+        els.push(<PyramidRoof key={`aw${k}`} corners={sq(ci, cj, 0.14)} baseElev={11} apexElev={15} color={awning[k % awning.length]} />);
+        const g = P(ci + 0.06, cj + 0.12, 6);
+        els.push(<circle key={`gd${k}`} cx={g.x} cy={g.y} r="1.8" fill={['#e8c94a', '#c0392b', '#7a9a4a'][k % 3]} pointerEvents="none" />);
+      });
+      top = 16;
+      break;
+    }
     default:
       els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} />);
   }
@@ -3739,7 +3887,7 @@ const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBl
   const body = AmenityBody({ i, j, kind, level });
   const labelP = gridToScreen(i, j, body.top + 10);
   const stars = level > 1 ? ` ${'★'.repeat(level)}` : '';
-  const label = info.label + stars;
+  const label = (kind === 'kirche' && level >= 3 ? 'Kathedrale' : kind === 'vogtei' && level >= 3 ? 'Rathaus' : info.label) + stars;
   const labelW = Math.max(60, label.length * 6.2 + 16);
   return (
     <g>
@@ -4287,6 +4435,7 @@ const AMENITY_TRADE = {
   baeckerei: 'wirtschaft', brauhaus: 'wirtschaft', brunnen: 'wirtschaft', lagerhaus: 'wirtschaft',
   schmied: 'krieg', stallungen: 'krieg', bogenmacher: 'krieg', turnierplatz: 'krieg',
   kemenate: 'hof', kapelle: 'hof', palas: 'hof', falknerei: 'hof',
+  vogtei: 'wirtschaft', marktplatz: 'wirtschaft', kirche: 'hof', kloster: 'hof',
 };
 const TRADE_RESEARCH = { wirtschaft: { 2: 'handwerk', 3: 'zunftwesen' }, krieg: { 2: 'kriegshandwerk', 3: 'ritterwesen' }, hof: { 2: 'hofkultur', 3: 'prachtbau' } };
 function amenityUpgradeNeeds(kind, level) { return (TRADE_RESEARCH[AMENITY_TRADE[kind]] || {})[level] || null; }
@@ -5315,6 +5464,8 @@ function structureLabel(site) {
   if (!site) return '';
   if (STRUCT_LEVELS[site.type]) return levelName(site.type, site.level);
   if (site.type === 'graben') return 'Graben';
+  if (site.type === 'amenity' && site.kind === 'kirche' && (site.level || 1) >= 3) return 'Kathedrale';
+  if (site.type === 'amenity' && site.kind === 'vogtei' && (site.level || 1) >= 3) return 'Rathaus';
   if (site.type === 'amenity') return AMENITY_TYPES[site.kind].label + ((site.level || 1) > 1 ? ` (Stufe ${site.level})` : '');
   return site.type;
 }
@@ -6375,7 +6526,7 @@ const ACT_DEFS = {
       { id: 'walls', icon: '🧱', label: 'Mauerstücke errichten', target: 8, value: (s) => s.walls, reward: { gold: 50 } },
       { id: 'gate', icon: '🚪', label: 'Ein Tor bauen', target: 1, value: (s) => s.gates, reward: { gold: 30 } },
       { id: 'towers', icon: '🗼', label: 'Türme errichten', target: 3, value: (s) => s.towers, reward: { gold: 60 } },
-      { id: 'pop', icon: '👥', label: 'Bewohner im Dorf', target: 8, value: (s) => s.pop, reward: { rep: 5 } },
+      { id: 'pop', icon: '👥', label: 'Einwohner im Dorf', target: 20, value: (s) => s.pop, reward: { rep: 5 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 10, value: (s) => s.defenders, reward: { gold: 50 } },
     ],
   },
@@ -6420,7 +6571,7 @@ const ACT_DEFS = {
       { id: 'amenity3', icon: '⬆️', label: 'Gebäude auf Stufe 3', target: 3, value: (s) => s.amenitiesAtLeast(3), reward: { gold: 120 } },
       { id: 'garrison', icon: '🛡️', label: 'Verteidiger in der Garnison', target: 30, value: (s) => s.defenders, reward: { gold: 120 } },
       { id: 'rep', icon: '⚜️', label: 'Ruf im Reich', target: 80, value: (s) => s.reputation, reward: { gold: 100 } },
-      { id: 'pop', icon: '👥', label: 'Bewohner im Reich', target: 24, value: (s) => s.pop, reward: { gold: 80 } },
+      { id: 'pop', icon: '👥', label: 'Eine Stadt: Einwohner', target: 40, value: (s) => s.pop, reward: { gold: 80 } },
       { id: 'dynasty', icon: '🌳', label: 'Herrscher der Dynastie', target: 2, value: (s) => s.generations, reward: { rep: 8 } },
     ],
   },
@@ -7423,6 +7574,10 @@ const TOOLS = [
   { id: 'bogenmacher', label: 'Bogenmacher', emoji: '🏹', hint: 'Klicke auf ein Feld im Grasland für den Bogenmacher. Seine Bögen machen Eure Bogenschützen stärker.' },
   { id: 'falknerei', label: 'Falknerei', emoji: '🦅', hint: 'Klicke auf ein Feld im Grasland für die Falknerei. Ermöglicht Jagden, die Nahrung bringen und den Hof erfreuen.' },
   { id: 'turnierplatz', label: 'Turnierplatz', emoji: '🏇', hint: 'Klicke auf ein Feld im Grasland für den Turnierplatz. Eigene Turniere bringen Ruhm, stärken Eure Ritter und locken neue an.' },
+  { id: 'vogtei', label: 'Vogtei', emoji: '🏛️', hint: 'Sitz des Vogtes im Dorf (später Rathaus): mehr Steuern und Platz für mehr Dorfbewohner. Auf ein Feld im Dorf oder auf Grasland.' },
+  { id: 'kirche', label: 'Kirche', emoji: '⛪', hint: 'Die Dorfkirche (auf Stufe 3 eine Kathedrale): Zufriedenheit, Wachstum, Platz. Auf ein Feld im Dorf oder auf Grasland.' },
+  { id: 'kloster', label: 'Kloster', emoji: '📿', hint: 'Mönche, die Bücher abschreiben und Gärten bestellen: schnellere Baukunst-Forschung, etwas Nahrung.' },
+  { id: 'marktplatz', label: 'Marktplatz', emoji: '🏪', hint: 'Der Markt macht aus dem Dorf einen Marktflecken: Bürger zahlen mehr, mehr Bauern werden Bürger.' },
   { id: 'graben', label: 'Graben', emoji: '🕳️', hint: 'Klicke auf eine Kante oder ziehe eine Reihe, um einen Burggraben auszuheben. Mit gedrückter Tab-Taste geht er auch diagonal, entlang schräger Mauern. Erst möglich, wenn eine Mauer fertig ist. Ein Graben, der eine Wasserkachel berührt (oder mit einem anderen wassergefüllten Graben verbunden ist), füllt sich mit Wasser.' },
   { id: 'delete', label: 'Abriss', emoji: '⛏️', hint: 'Klicke auf eine Baustelle oder ein fertiges Bauwerk, um es abzureißen — oder ziehe mit gedrückter Maustaste ein Rechteck auf: alle Mauern, Tore, Gräben und Türme darin werden auf einmal abgerissen.' },
 ];
@@ -7434,7 +7589,15 @@ export default function CastleBuilder() {
   const [structures, setStructures] = useState({});
   const moatUnlocked = Object.values(structures).some((s) => s.type === 'wall' && s.stage === 'done');
   const [workerUnits, setWorkerUnits] = useState(() => [makeWorker('laborer', 0)]);
-  const [villagePop, setVillagePop] = useState(4);
+  // All civilians (Bauern + Bürger) — soldiers are counted apart; see Bevölkerung.
+  const [villagePop, setVillagePop] = useState(14);
+  const [buerger, setBuerger] = useState(4);
+  const buergerRef = useRef(4);
+  useEffect(() => { buergerRef.current = buerger; }, [buerger]);
+  // Bauern called up as Landwehr for the coming battle (they're away from the fields meanwhile).
+  const [militia, setMilitia] = useState({ bauern: 0, buerger: 0 });
+  const militiaRef = useRef({ bauern: 0, buerger: 0 });
+  useEffect(() => { militiaRef.current = militia; }, [militia]);
   const [frohndienstCount, setFrohndienstCount] = useState(1);
   const [happiness, setHappiness] = useState(70);
   const [soldiers, setSoldiers] = useState({ soldier: 2, archer: 1 });
@@ -7457,7 +7620,7 @@ export default function CastleBuilder() {
   useEffect(() => { ownedRegionsRef.current = ownedRegions; }, [ownedRegions]);
   setOwnedRegionsGlobal(ownedRegions); // keep the module-level helpers in step, every render
   setViewRotationGlobal(viewRot);
-  const villageCap = MAX_VILLAGE_POP + regionPopBonus(ownedRegions);
+  const villageCap = villageCapFor(ownedRegions, structures);
   const expeditionRef = useRef(expedition);
   useEffect(() => { expeditionRef.current = expedition; }, [expedition]);
   const claimRegionRef = useRef(null);
@@ -7826,6 +7989,16 @@ export default function CastleBuilder() {
   useEffect(() => { nextAttackMultRef.current = nextAttackMult; }, [nextAttackMult]);
   // The last `n` foot soldiers of a freshly spawned battle are the hired mercenaries: their
   // deaths don't cost the garrison anything, and they leave once the battle is over.
+  const markMilitia = (units, n) => {
+    let left = n;
+    for (let k = units.length - 1; k >= 0 && left > 0; k--) {
+      const u = units[k];
+      if (u.side === 'defender' && u.type === 'soldier' && !u.merc && !u.militia) {
+        u.militia = true; u.hp = Math.round(u.hp * MILITIA_HP_MULT); u.maxHp = u.hp; u.dmgMult = (u.dmgMult || 1) * MILITIA_DMG_MULT; left--;
+      }
+    }
+  };
+  const militiaTotal = () => militiaRef.current.bauern + militiaRef.current.buerger;
   const markMercenaries = (units, n) => {
     let left = n;
     for (let k = units.length - 1; k >= 0 && left > 0; k--) {
@@ -7838,7 +8011,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { research, estateLast, structures, workerUnits, villagePop, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
+    saveSnapshotRef.current = { research, estateLast, structures, workerUnits, villagePop, buerger, militia, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -7899,7 +8072,7 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { research: setResearch, estateLast: setEstateLast, structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
+    const saveSetters = { research: setResearch, estateLast: setEstateLast, structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, buerger: setBuerger, militia: setMilitia, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
     if (!('act' in st)) {
       const y = getCalendarDate(st.day).year;
@@ -8007,7 +8180,7 @@ export default function CastleBuilder() {
     const cur = researchRef.current.current;
     if (!cur) return;
     const def = RESEARCH[cur.id];
-    const progress = cur.progress + (day - prev) / (def.days * (baumeisterHiredRef.current ? 1 : RESEARCH_SLOW_MULT));
+    const progress = cur.progress + (day - prev) * klosterResearchMult(structuresRef.current) / (def.days * (baumeisterHiredRef.current ? 1 : RESEARCH_SLOW_MULT));
     if (progress >= 1) {
       setResearch((r) => ({ done: r.done.includes(cur.id) ? r.done : [...r.done, cur.id], current: null }));
       setBuildLevel({}); // new walls and towers go up at the newly learned level from now on
@@ -8842,7 +9015,7 @@ export default function CastleBuilder() {
             desc: '+2 Dorfbewohner, −25 Nahrung, Ruf +6. Doch nicht jeder Fremde kommt in guter Absicht…',
             disabled: resourcesRef.current.food < 25,
             apply: () => {
-              setVillagePop((p) => Math.min(MAX_VILLAGE_POP + regionPopBonus(ownedRegionsRef.current), p + 2));
+              setVillagePop((p) => Math.min(villageCapFor(ownedRegionsRef.current, structuresRef.current), p + 2));
               setResources((r) => ({ ...r, food: Math.max(0, r.food - 25) }));
               adjustRep(6);
               // One in four times a Saxon agent slipped in with them — he'll be found out
@@ -9335,7 +9508,7 @@ export default function CastleBuilder() {
 
   const changeFrohndienst = useCallback((delta) => {
     setFrohndienstCount((prevCount) => {
-      const newCount = Math.max(0, Math.min(villagePopRef.current, prevCount + delta));
+      const newCount = Math.max(0, Math.min(villagePopRef.current - buergerRef.current, prevCount + delta));
       const diff = newCount - prevCount;
       if (diff > 0) {
         setWorkerUnits((prev) => [...prev, ...Array.from({ length: diff }, (_, k) => makeWorker('laborer', prev.length + k))]);
@@ -9352,6 +9525,20 @@ export default function CastleBuilder() {
       return newCount;
     });
   }, []);
+
+  // Keep the estates consistent when people are lost (battle, hunger, plague): never more
+  // Bürger than people, never more on Frondienst than there are Bauern, never more craftsmen
+  // at work than there are Bürger.
+  useEffect(() => {
+    if (buerger > villagePop) { setBuerger(villagePop); return; }
+    const bauern = villagePop - buerger;
+    if (frohndienstCount > bauern) { changeFrohndienst(bauern - frohndienstCount); return; }
+    const skilled = workerUnits.filter((w) => w.type !== 'laborer');
+    if (skilled.length > buerger) {
+      const drop = new Set(skilled.slice(buerger).map((w) => w.id));
+      setWorkerUnits((prev) => prev.filter((w) => !drop.has(w.id)));
+    }
+  }, [villagePop, buerger, frohndienstCount, workerUnits, changeFrohndienst]);
 
   useEffect(() => { setDragStart(null); setDragEnd(null); }, [tool]);
 
@@ -9613,7 +9800,8 @@ export default function CastleBuilder() {
         + (SMITH_UPKEEP_PER_DAY[smithTierRef.current] || 0)
         + (baumeisterHiredRef.current ? BAUMEISTER_WAGE : 0))
         + tutoring * TUTOR_GOLD_PER_MONTH / MONTH_LENGTH;
-      const totalFood = (hiredCounts.laborer + hiredCounts.arbeiter + hiredCounts.carpenter + hiredCounts.mason + hiredCounts.quarrier + hiredCounts.lumberjack) * FOOD_PER_WORKER
+      // Bauern on Frondienst can't feed themselves from the fields; the Bürger buy their bread.
+      const totalFood = hiredCounts.laborer * FOOD_PER_WORKER + buergerRef.current * FOOD_PER_BUERGER
         + (soldiersRef.current.soldier + soldiersRef.current.archer) * FOOD_PER_SOLDIER
         + KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]).length * FOOD_PER_SOLDIER * 1.5;
 
@@ -9637,14 +9825,14 @@ export default function CastleBuilder() {
       const hasGarrison = soldiersRef.current.soldier > 0 || soldiersRef.current.archer > 0;
       if (hasGarrison) {
         const onStrikeForecast = happinessRef.current < STRIKE_THRESHOLD;
-        const farmersForecast = Math.max(0, villagePopRef.current - frohndienstRef.current);
+        const farmersForecast = Math.max(0, villagePopRef.current - buergerRef.current - frohndienstRef.current);
         const baeckereiMultForecast = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
         const brunnenBonusForecast = brunnenFoodPerMonth(structuresRef.current);
         const brauhausBuiltForecast = hasDoneAmenity(structuresRef.current, 'brauhaus');
-        const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+        const brauhausBonusForecast = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + klosterFoodPerMonth(structuresRef.current) + (brauhausBuiltForecast && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
         const ffx = rulerFx(rulerRef.current);
         const farmFoodPerDayForecast = (onStrikeForecast ? 0 : (farmersForecast * FOOD_PER_FARMER_PER_MONTH * baeckereiMultForecast * regionFarmMult(ownedRegionsRef.current) * ffx.farmMult + brunnenBonusForecast + brauhausBonusForecast) / MONTH_LENGTH) + (regionFoodPerMonth(ownedRegionsRef.current) + ffx.foodPerMonth) / MONTH_LENGTH;
-        const villageGoldPerDayForecast = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * ffx.taxMult + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
+        const villageGoldPerDayForecast = (villageTaxPerMonth(villagePopRef.current, buergerRef.current, taxRate, structuresRef.current, ffx.taxMult) + regionGoldPerMonth(ownedRegionsRef.current)) / MONTH_LENGTH;
 
         const netGoldPerDay = villageGoldPerDayForecast - totalWage;
         const netFoodPerDay = farmFoodPerDayForecast - totalFood;
@@ -9680,15 +9868,15 @@ export default function CastleBuilder() {
         const newDay = d + 1;
         const onStrikeNow = happinessRef.current < STRIKE_THRESHOLD;
         setResources((prev) => {
-          const farmers = Math.max(0, villagePopRef.current - frohndienstRef.current);
+          const farmers = Math.max(0, villagePopRef.current - buergerRef.current - frohndienstRef.current);
           const baeckereiMult = bakeryFoodMult(structuresRef.current, bakeryUpgradedRef.current);
           const brunnenBonusPerMonth = brunnenFoodPerMonth(structuresRef.current);
           const brauhausBuiltNow = hasDoneAmenity(structuresRef.current, 'brauhaus');
-          const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
+          const brauhausBonusPerMonth = brauhausFoodPerMonth(structuresRef.current) + falknereiFoodPerMonth(structuresRef.current) + klosterFoodPerMonth(structuresRef.current) + (brauhausBuiltNow && monkHiredRef.current && !capturedCourtiersRef.current.monk ? MONK_BREW_BONUS : 0);
           const owned = ownedRegionsRef.current;
           const rfx = rulerFx(rulerRef.current);
           const farmFoodPerDay = (onStrikeNow ? 0 : (farmers * FOOD_PER_FARMER_PER_MONTH * baeckereiMult * regionFarmMult(owned) * rfx.farmMult + brunnenBonusPerMonth + brauhausBonusPerMonth) / MONTH_LENGTH) + (regionFoodPerMonth(owned) + rfx.foodPerMonth) / MONTH_LENGTH;
-          const villageGoldPerDay = (villagePopRef.current * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * rfx.taxMult + regionGoldPerMonth(owned)) / MONTH_LENGTH;
+          const villageGoldPerDay = (villageTaxPerMonth(villagePopRef.current, buergerRef.current, taxRate, structuresRef.current, rfx.taxMult) + regionGoldPerMonth(owned)) / MONTH_LENGTH;
           const foodCap = storageCapacity(structuresRef.current);
           return {
             ...prev,
@@ -9704,7 +9892,7 @@ export default function CastleBuilder() {
           const unrestPenalty = (unhappinessPenaltyUntilYear && currentYearNow < unhappinessPenaltyUntilYear) ? 2.5 : 0;
           const churchUnrestPenalty = (churchUnrestUntilYear && currentYearNow < churchUnrestUntilYear) ? 2 : 0;
           const churchBonus = (churchBlessingUntilYear && currentYearNow < churchBlessingUntilYear) ? 1.5 : 0;
-          const kapelleBonus = kapelleHappiness(structuresRef.current);
+          const kapelleBonus = kapelleHappiness(structuresRef.current) + kircheHappiness(structuresRef.current);
           const brauhausBonus = brauhausHappiness(structuresRef.current);
           const monkBonus = (monkHiredRef.current && !capturedCourtiersRef.current.monk) ? MONK_HAPPINESS_BONUS : 0;
           // A well-regarded king makes for a content village, a disreputable one the opposite.
@@ -9753,12 +9941,23 @@ export default function CastleBuilder() {
           if (failed.length) setEventOutcome({ emoji: '🌊', tone: 'bad', title: 'Schlechte Nachrichten', text: failed[0].failText });
         }
 
-        // The village grows twice a year while people are content (Zufriedenheit 60+), once a
-        // year otherwise — and not at all while the peasants are on strike.
-        if (newDay % (GROWTH_INTERVAL_DAYS / 2) === 0) {
-          const h = happinessRef.current;
-          if (h >= 60 || (newDay % GROWTH_INTERVAL_DAYS === 0 && h >= STRIKE_THRESHOLD)) {
-            setVillagePop((p) => Math.min(MAX_VILLAGE_POP + regionPopBonus(ownedRegionsRef.current), p + 1));
+        // Bevölkerung, once a month: hunger drives families away; plenty, contentment and a
+        // good name bring children and newcomers; and now and then a Bauer earns the
+        // Bürgerrecht, as far as the settlement's stage allows.
+        if (newDay % MONTH_LENGTH === 0) {
+          const pop = villagePopRef.current, st = structuresRef.current;
+          if (resourcesRef.current.food < 3) {
+            if (pop > 4 && Math.random() < 0.6) {
+              setVillagePop((p) => Math.max(4, p - 1));
+              logEvent('🥀', 'Hunger: eine Familie verlässt das Dorf', 'bad');
+            }
+          } else if (pop < villageCapFor(ownedRegionsRef.current, st) && Math.random() < villageGrowthChance(happinessRef.current, reputationRef.current, st)) {
+            setVillagePop((p) => p + 1);
+          }
+          const share = villageStage(pop, st).buergerShare;
+          if (happinessRef.current >= 40 && buergerRef.current < Math.floor(pop * share) && pop - buergerRef.current - frohndienstRef.current > 1 && Math.random() < promotionChance(st)) {
+            setBuerger((b) => b + 1);
+            logEvent('📜', 'Ein Bauer erhält das Bürgerrecht', 'good');
           }
         }
 
@@ -9882,8 +10081,9 @@ export default function CastleBuilder() {
           setPreBattleSoldiers({ ...garrison });
           setPendingBattleYear(newDate.year - 1);
           setPendingBattleSource(finale ? 'finale' : 'sachsen');
-          const spawned = spawnBattleUnits(structuresRef.current, { ...garrison, soldier: garrison.soldier + mercenaryCountRef.current }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
+          const spawned = spawnBattleUnits(structuresRef.current, { ...garrison, soldier: garrison.soldier + mercenaryCountRef.current + militiaTotal() }, attackerCount, yearIdx, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]));
           markMercenaries(spawned.units, mercenaryCountRef.current);
+          markMilitia(spawned.units, militiaTotal());
           empowerSpawnRef.current(spawned);
           setBattleUnits(spawned.units);
           setBattleObstacles(spawned.obstacles);
@@ -9908,8 +10108,9 @@ export default function CastleBuilder() {
             setPreBattleSoldiers({ ...soldiersRef.current });
             setPendingBattleYear(newDate.year);
             setPendingBattleSource(due.type);
-            const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current }, forced.length, newDate.year - START_YEAR, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]), forced);
+            const spawned = spawnBattleUnits(structuresRef.current, { ...soldiersRef.current, soldier: soldiersRef.current.soldier + mercenaryCountRef.current + militiaTotal() }, forced.length, newDate.year - START_YEAR, KNIGHT_IDS.filter((id) => recruitedKnightsRef.current[id]), forced);
             markMercenaries(spawned.units, mercenaryCountRef.current);
+            markMilitia(spawned.units, militiaTotal());
           empowerSpawnRef.current(spawned);
             setBattleUnits(spawned.units);
             setBattleObstacles(spawned.obstacles);
@@ -10041,6 +10242,26 @@ export default function CastleBuilder() {
     if (!timedOut && !keepDestroyed && battleTickCount - battleEndPendingTickRef.current < BATTLE_END_DELAY_TICKS) return;
     battleEndPendingTickRef.current = null;
 
+    // The Landwehr goes home — those who are left of it. Fallen Bürger are counted first among
+    // the dead only once the Bauern are used up.
+    const mil = militiaRef.current;
+    if (mil.bauern + mil.buerger > 0) {
+      const survivors = battleUnits.filter((u) => u.side === 'defender' && u.militia && u.hp > 0).length;
+      const fallen = mil.bauern + mil.buerger - survivors;
+      const backBuerger = Math.max(0, mil.buerger - Math.max(0, fallen - mil.bauern));
+      setVillagePop((p) => p + survivors);
+      setBuerger((b) => b + backBuerger);
+      setMilitia({ bauern: 0, buerger: 0 });
+      militiaRef.current = { bauern: 0, buerger: 0 };
+      if (fallen > 0) logEvent('⚰️', `${fallen} Mann der Landwehr sind gefallen`, 'bad');
+    }
+    // The villagers fled into the castle; if it falls, many of them are killed or carried off.
+    if (keepDestroyed) {
+      const lost = Math.ceil(villagePopRef.current * 0.2);
+      setVillagePop((p) => Math.max(2, p - lost));
+      logEvent('🔥', `Die Sachsen plündern das Dorf — ${lost} Dorfbewohner verloren`, 'bad');
+    }
+
     if (keepDestroyed) {
       // The walls have been breached and the defenders overrun — rather than an instant
       // game over, the Sachsen sack whatever's inside for a while and then withdraw. Every
@@ -10106,6 +10327,11 @@ export default function CastleBuilder() {
         else if (roll < DEATH_CHANCE + CAPTURE_CHANCE) { capturedNames.push(c.name); nextCaptured[c.key] = true; }
       });
       setCapturedCourtiers(nextCaptured);
+      // The garrison's dead stay dead after a sack, too.
+      const deadS = battleUnits.filter((u) => u.side === 'defender' && u.type === 'soldier' && u.hp <= 0 && !u.merc && !u.militia).length;
+      const deadA = battleUnits.filter((u) => u.side === 'defender' && u.type === 'archer' && u.hp <= 0).length;
+      setSoldiers((sv) => ({ soldier: Math.max(0, sv.soldier - deadS), archer: Math.max(0, sv.archer - deadA) }));
+      setMercenaryCount(0);
 
       setBattlePhase('raiding');
       setSelectedUnitId(null);
@@ -10117,7 +10343,7 @@ export default function CastleBuilder() {
     const routedAndSurvived = battleUnits.some((u) => u.side === 'attacker' && u.hp > 0 && u.routed);
     const moraleBroken = (won && routedAndSurvived) ? 'attacker' : null;
 
-    const lostSoldiers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'soldier' && u.hp <= 0 && !u.merc).length;
+    const lostSoldiers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'soldier' && u.hp <= 0 && !u.merc && !u.militia).length;
     setMercenaryCount(0);
     const lostArchers = battleUnits.filter((u) => u.side === 'defender' && u.type === 'archer' && u.hp <= 0).length;
     const fallenKnightIds = battleUnits.filter((u) => u.side === 'defender' && u.type === 'champion' && u.hp <= 0 && u.knightId).map((u) => u.knightId);
@@ -10274,6 +10500,7 @@ export default function CastleBuilder() {
     return list;
   }, [ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const amenityKeys = Object.keys(structures).filter((k) => k.startsWith('amenity:')).join('|');
   const props = useMemo(() => {
     const list = [];
     // Trees and rocks on land the realm doesn't hold yet stand in the haze of the fog.
@@ -10288,11 +10515,12 @@ export default function CastleBuilder() {
       const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
       list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
     });
-    VILLAGE_HOUSE_SPOTS.slice(0, villagePop).forEach((spot, idx) => {
+    // One house per family (two people), leaving out spots where a village building stands.
+    VILLAGE_HOUSE_SPOTS.filter((spot) => !structureKeyOnTile(structures, spot.i, spot.j)).slice(0, Math.ceil(villagePop / 2)).forEach((spot, idx) => {
       list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
     });
     return list;
-  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot, amenityKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edgeInteractive = !battlePhase && (tool === 'wall' || tool === 'gate' || tool === 'graben' || tool === 'delete' || tool === null);
   const vertexInteractive = !battlePhase && (tool === 'tower' || tool === 'delete' || tool === null);
@@ -10478,13 +10706,14 @@ export default function CastleBuilder() {
     }
     if (AMENITY_IDS.includes(tool)) {
       if (!structuresRef.current.keep) return;
-      if (terrainAt(i, j) !== 'grass') return;
+      if (terrainAt(i, j) !== 'grass' && !(VILLAGE_AMENITIES.includes(tool) && terrainAt(i, j) === 'village')) return;
       if (tool === 'kemenate' && !isKemenateAllowed(structuresRef.current, i, j)) return;
       if (tool === 'palas' && !researchRef.current.done.includes('palas')) return;
       const current = structs[key];
       const removing = current && current.kind === tool;
       // Every tile of the new building must be free grass.
-      if (!removing && !amenityTiles(tool, i, j).every(([a, b]) => terrainAt(a, b) === 'grass' && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
+      const okTerrain = (a, b) => terrainAt(a, b) === 'grass' || (VILLAGE_AMENITIES.includes(tool) && terrainAt(a, b) === 'village');
+      if (!removing && !amenityTiles(tool, i, j).every(([a, b]) => okTerrain(a, b) && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
       SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
@@ -10546,10 +10775,9 @@ export default function CastleBuilder() {
     return () => window.removeEventListener('mouseup', up);
   }, [dragStart, finishDrag]);
 
+  // Craftsmen are Bürger: a job can only be filled while a Bürger is free for it.
   const hire = useCallback((type) => {
-    if (resourcesRef.current.gold < HIRE_COST_WORKER) return;
-    setResources((r) => ({ ...r, gold: Math.max(0, r.gold - HIRE_COST_WORKER) }));
-    setWorkerUnits((prev) => [...prev, makeWorker(type, prev.length)]);
+    setWorkerUnits((prev) => (prev.filter((w) => w.type !== 'laborer').length >= buergerRef.current ? prev : [...prev, makeWorker(type, prev.length)]));
   }, []);
   const fire = useCallback((type) => {
     setWorkerUnits((prev) => {
@@ -10561,13 +10789,36 @@ export default function CastleBuilder() {
       return next;
     });
   }, []);
+  // Soldiers are raised from the Bauern (the gold pays for arms and armour); a man let go
+  // returns to his fields.
+  const freeBauern = () => villagePopRef.current - buergerRef.current - frohndienstRef.current;
   const hireSoldier = useCallback((type) => {
     const cost = HIRE_COST_SOLDIER[type] || HIRE_COST_SOLDIER.soldier;
-    if (resourcesRef.current.gold < cost) return;
+    if (resourcesRef.current.gold < cost || freeBauern() < 1) return;
     setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost) }));
+    setVillagePop((p) => p - 1);
+    villagePopRef.current -= 1;
     setSoldiers((prev) => ({ ...prev, [type]: prev[type] + 1 }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const fireSoldier = useCallback((type) => {
+    if (soldiersRef.current[type] < 1) return;
+    soldiersRef.current = { ...soldiersRef.current, [type]: soldiersRef.current[type] - 1 };
+    setSoldiers((prev) => ({ ...prev, [type]: Math.max(0, prev[type] - 1) }));
+    setVillagePop((p) => p + 1);
   }, []);
-  const fireSoldier = useCallback((type) => setSoldiers((prev) => ({ ...prev, [type]: Math.max(0, prev[type] - 1) })), []);
+  // Landwehr: in the last weeks before an attack, Bauern — and if none are left, Bürger — can
+  // be armed for the coming battle. They fight weaker than trained men; the survivors go home.
+  const callMilitia = useCallback((delta) => {
+    const m = militiaRef.current;
+    if (delta > 0) {
+      if (freeBauern() >= 1) { setMilitia({ ...m, bauern: m.bauern + 1 }); militiaRef.current = { ...m, bauern: m.bauern + 1 }; setVillagePop((p) => p - 1); villagePopRef.current -= 1; return; }
+      const idleBuerger = buergerRef.current - workersRef.current.filter((w) => w.type !== 'laborer').length;
+      if (idleBuerger >= 1) { setMilitia({ ...m, buerger: m.buerger + 1 }); militiaRef.current = { ...m, buerger: m.buerger + 1 }; setVillagePop((p) => p - 1); villagePopRef.current -= 1; setBuerger((b) => b - 1); buergerRef.current -= 1; }
+      return;
+    }
+    if (m.buerger > 0) { setMilitia({ ...m, buerger: m.buerger - 1 }); militiaRef.current = { ...m, buerger: m.buerger - 1 }; setVillagePop((p) => p + 1); villagePopRef.current += 1; setBuerger((b) => b + 1); buergerRef.current += 1; return; }
+    if (m.bauern > 0) { setMilitia({ ...m, bauern: m.bauern - 1 }); militiaRef.current = { ...m, bauern: m.bauern - 1 }; setVillagePop((p) => p + 1); villagePopRef.current += 1; }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // render as flooded rather than a dry trench.
   // Which ditches are connected (through shared corners) to a water tile, and therefore
@@ -10736,6 +10987,15 @@ export default function CastleBuilder() {
       ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds, getCalendarDate(day).year - START_YEAR + 1)
       : computeGarrisonPositions(garrisonAnchorI, garrisonAnchorJ, soldiers.soldier, soldiers.archer);
     if (!battlePhase) list.push({ depth: viewDepth(garrisonAnchorI, garrisonAnchorJ) + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
+    // During a battle the villagers have fled behind the walls: a crowd around the keep.
+    if (battlePhase && structures.keep) {
+      const n = Math.min(12, villagePop);
+      for (let k = 0; k < n; k++) {
+        const ang = (k / n) * Math.PI * 2 + 0.4, r = 0.95 + (k % 3) * 0.18;
+        const ci = structures.keep.i + Math.cos(ang) * r, cj = structures.keep.j + Math.sin(ang) * r;
+        list.push({ depth: viewDepth(ci, cj) + 0.7, node: <WorkerSprite key={`refugee-${k}`} i={ci} j={cj} type={k % 4 === 3 ? 'arbeiter' : 'laborer'} mode="idle" faceLeft={k % 2 === 0} /> });
+      }
+    }
 
     if (hoverKey && !dragStart) {
       if (hoverKey.startsWith('edge:') && (tool === 'wall' || tool === 'gate' || tool === 'graben')) {
@@ -10783,7 +11043,7 @@ export default function CastleBuilder() {
       if (hoverKey.startsWith('tile:') && AMENITY_IDS.includes(tool)) {
         const [ti, tj] = hoverKey.slice(5).split(',').map(Number);
         if (!structureKeyOnTile(structures, ti, tj)) {
-          const okBuild = !!structures.keep && amenityTiles(tool, ti, tj).every(([a, b]) => terrainAt(a, b) === 'grass' && isOwnedTile(a, b) && !structureKeyOnTile(structures, a, b)) && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
+          const okBuild = !!structures.keep && amenityTiles(tool, ti, tj).every(([a, b]) => (terrainAt(a, b) === 'grass' || (VILLAGE_AMENITIES.includes(tool) && terrainAt(a, b) === 'village')) && isOwnedTile(a, b) && !structureKeyOnTile(structures, a, b)) && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
           const c = amenityCenter(tool, ti, tj);
           list.push({ depth: viewDepth(c.i, c.j) - 0.4, node: <AmenityNode key="ghost-t" i={c.i} j={c.j} kind={tool} ghost ghostBlocked={!okBuild} /> });
         }
@@ -10900,7 +11160,7 @@ export default function CastleBuilder() {
 
     list.sort((a, b) => a.depth - b.depth);
     return list;
-  }, [viewRot, structures, workerUnits, soldiers, piles, resources.stone, resources.wood, hoverKey, tool, isVertexOccupied, props, dragStart, dragEnd, day, battlePhase, moatFilledKeys, battleDamageByKey, recruitedKnights, wallOrientationOffset, diagonalMode]);
+  }, [viewRot, villagePop, structures, workerUnits, soldiers, piles, resources.stone, resources.wood, hoverKey, tool, isVertexOccupied, props, dragStart, dragEnd, day, battlePhase, moatFilledKeys, battleDamageByKey, recruitedKnights, wallOrientationOffset, diagonalMode]);
 
   const peopleHitTargets = useMemo(() => {
     const list = workerUnits.map((w) => ({ i: w.curI, j: w.curJ, kind: 'worker', data: w }));
@@ -10939,10 +11199,22 @@ export default function CastleBuilder() {
   const activeToolInfo = TOOLS.find((t) => t.id === tool) || null;
   const calDate = getCalendarDate(day);
   const monthName = MONTH_NAMES[calDate.month];
-  const villageGoldPerMonth = Math.round(villagePop * VILLAGE_GOLD_PER_CAPITA_AT_100 * (taxRate / 100) * fx.taxMult);
+  const villageGoldPerMonth = Math.round(villageTaxPerMonth(villagePop, buerger, taxRate, structures, fx.taxMult));
   const onStrike = happiness < STRIKE_THRESHOLD;
   const keepUnlocked = !!structures.keep;
-  const farmersCount = Math.max(0, villagePop - frohndienstCount);
+  const farmersCount = Math.max(0, villagePop - buerger - frohndienstCount);
+  const bauernCount = Math.max(0, villagePop - buerger);
+  const skilledWorkers = workerUnits.filter((w) => w.type !== 'laborer').length;
+  const vStage = villageStage(villagePop, structures);
+  const nextVStage = VILLAGE_STAGES[VILLAGE_STAGES.indexOf(vStage) + 1] || null;
+  const canGrantCitizenship = resources.gold >= CITIZENSHIP_GOLD && buerger < Math.floor(villagePop * vStage.buergerShare) && farmersCount > 1;
+  const grantCitizenship = () => {
+    if (!canGrantCitizenship) return;
+    setResources((r) => ({ ...r, gold: r.gold - CITIZENSHIP_GOLD }));
+    setBuerger((b) => b + 1);
+    SOUND.play('coin');
+  };
+  const freeBauernNow = Math.max(0, villagePop - buerger - frohndienstCount);
   const baeckereiActive = hasDoneAmenity(structures, 'baeckerei');
   const brunnenActive = hasDoneAmenity(structures, 'brunnen');
   const bakeryMultNow = bakeryFoodMult(structures, bakeryUpgraded);
@@ -11156,7 +11428,7 @@ export default function CastleBuilder() {
   const foodPerDayTotal = (hired.laborer + hired.arbeiter + hired.carpenter + hired.mason + hired.quarrier + hired.lumberjack) * FOOD_PER_WORKER
     + (soldiers.soldier + soldiers.archer) * FOOD_PER_SOLDIER;
   const contractsPerMonth = contracts.reduce((sum, c) => sum + (day <= c.untilDay ? c.perMonth : 0), 0);
-  const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + falknereiFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
+  const brauhausFoodNow = onStrike ? 0 : brauhausFoodPerMonth(structures) + falknereiFoodPerMonth(structures) + klosterFoodPerMonth(structures) + (hasDoneAmenity(structures, 'brauhaus') && monkHired && !capturedCourtiers.monk ? MONK_BREW_BONUS : 0);
   const goldNetPerMonth = villageGoldPerMonth + regionGoldNow + contractsPerMonth - wagePerDay * MONTH_LENGTH;
   const foodNetPerMonth = farmFoodPerMonth + brauhausFoodNow - foodPerDayTotal * MONTH_LENGTH;
   const unreadChronicle = Math.max(0, chronicle.length - chronicleSeen);
@@ -11271,18 +11543,21 @@ export default function CastleBuilder() {
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 10 }}>
               {!battleEvent.raided && battleEvent.lostSoldiers > 0 && preBattleSoldiers && (() => {
                 const replaceCost = (battleEvent.lostSoldierCount || 0) * HIRE_COST_SOLDIER.soldier + (battleEvent.lostArcherCount || 0) * HIRE_COST_SOLDIER.archer;
-                const canAfford = resources.gold >= replaceCost;
+                // Every man replaced is a Bauer taken from the fields.
+                const needMen = (battleEvent.lostSoldierCount || 0) + (battleEvent.lostArcherCount || 0);
+                const canAfford = resources.gold >= replaceCost && villagePop - buerger - frohndienstCount >= needMen;
                 return (
                   <button
                     onClick={() => {
                       if (!canAfford) return;
                       setResources((r) => ({ ...r, gold: r.gold - replaceCost }));
+                      setVillagePop((p) => p - needMen);
                       setSoldiers(preBattleSoldiers);
                       setPreBattleSoldiers(null);
                     }}
                     disabled={!canAfford}
                     style={{ padding: '8px 16px', borderRadius: 4, border: '2px solid #5C554A', background: 'transparent', fontFamily: "'EB Garamond', serif", cursor: canAfford ? 'pointer' : 'not-allowed', opacity: canAfford ? 1 : 0.5 }}>
-                    Verluste ersetzen ({replaceCost} 🪙)
+                    Verluste ersetzen ({replaceCost} 🪙, {needMen} Bauern)
                   </button>
                 );
               })()}
@@ -11736,9 +12011,9 @@ export default function CastleBuilder() {
             👥 <strong>{villagePop}</strong>
             <span style={{ fontSize: '0.8rem', color: happiness >= 60 ? '#a5d87f' : happiness >= STRIKE_THRESHOLD ? '#e8d27a' : '#ff9e86' }}>{happiness >= 60 ? '☺' : happiness >= STRIKE_THRESHOLD ? '😐' : '😠'} {Math.round(happiness)}</span>
             <div className="cb-tip">
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Dorf</div>
-              <div>{villagePop} von {villageCap} Bewohnern, Zufriedenheit {Math.round(happiness)}.</div>
-              <div style={{ marginTop: 4 }}>{happiness >= 60 ? 'Das Dorf wächst zweimal im Jahr.' : happiness >= STRIKE_THRESHOLD ? 'Das Dorf wächst einmal im Jahr — ab 60 Zufriedenheit doppelt so schnell.' : 'Die Bauern streiken! Kein Wachstum, keine Ernte.'}</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>{vStage.icon} {vStage.name}</div>
+              <div>{villagePop} von {villageCap} Einwohnern: {bauernCount} Bauern, {buerger} Bürger. Zufriedenheit {Math.round(happiness)}.</div>
+              <div style={{ marginTop: 4 }}>Wachstum: {Math.round(villageGrowthChance(happiness, reputation, structures) * 100)} % pro Monat — bei vollen Kornkammern, guter Stimmung und gutem Ruf.</div>
             </div>
           </div>
           <div className="cb-chip cb-has-tip">⚜️ <strong>{Math.round(reputation)}</strong> <span className="cb-rep-label" style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#d8c79a' }}>{reputationLabel(reputation)}</span>
@@ -12041,7 +12316,7 @@ export default function CastleBuilder() {
 
       {openPanel === 'baukunst' && (() => {
         const cur = research.current;
-        const speed = baumeisterHired ? 1 : RESEARCH_SLOW_MULT;
+        const speed = (baumeisterHired ? 1 : RESEARCH_SLOW_MULT) / klosterResearchMult(structures);
         const upgradable = ['wall', 'gate', 'tower', 'keep'].map((type) => {
           const known = maxKnownLevel(type, research.done);
           const list = Object.values(structures).filter((st) => st.type === type && st.stage === 'done' && (st.level || 1) < known);
@@ -12083,7 +12358,7 @@ export default function CastleBuilder() {
                     {!done && !(cur && cur.id === id) && (
                       <button className="cb-btn" disabled={!can} onClick={() => startResearch(id)}
                         style={{ padding: '6px 10px', fontSize: '0.8rem', whiteSpace: 'nowrap', opacity: can ? 1 : 0.5 }}>
-                        {def.gold} 🪙 · {def.days * speed} Tage
+                        {def.gold} 🪙 · {Math.round(def.days * speed)} Tage
                       </button>
                     )}
                   </div>
@@ -12492,6 +12767,7 @@ export default function CastleBuilder() {
             <div>Fertige Gebäude und Türme anklicken: Info & <strong>Ausbau</strong>. Tore anklicken: öffnen/schließen, Rechtsklick: Info.</div>
             <div>📐 <strong>Baukunst</strong>: Ihr beginnt mit Motte und Holzpalisade. Steinbau, Wehrtürme, Wehrgang, Bastionen und den Palas erforscht Ihr dort — mit einem Baumeister am Hofe doppelt so schnell. Unter „Bauen als“ wählt Ihr die Stufe für neue Mauern, Tore und Türme.</div>
             <div>🏛️ Palas: Feste, Brautschau, Gäste · 🦅 Falknerei: Jagden · 🏇 Turnierplatz: Turniere — jeweils über das Info-Fenster des Gebäudes.</div>
+            <div>👥 <strong>Bevölkerung</strong>: Bauern ernähren das Dorf, leisten Frondienst und stellen die Soldaten; Bürger sind Eure Handwerker und zahlen mehr Steuern. Gefallene fehlen, bis das Dorf nachwächst. Vor einem Angriff könnt Ihr in der Garnison die Landwehr aufbieten. Vogtei, Kirche, Kloster und Marktplatz lassen das Dorf zur Stadt wachsen.</div>
           </div>
           <div className="cb-section-title" style={{ marginTop: 10 }}>Karte</div>
           <div style={{ fontSize: '0.88rem', lineHeight: 1.9 }}>
@@ -12540,8 +12816,25 @@ export default function CastleBuilder() {
       )}
 
       {openPanel === 'dorf' && (
-        <Modal title="Dorf &amp; Frondienste" onClose={() => setOpenPanel(null)}>
-          <div style={{ fontSize: '0.9rem', marginBottom: 8 }}>🧑‍🌾 Dorfbevölkerung: <strong>{villagePop}</strong> / {villageCap}</div>
+        <Modal title={`${vStage.icon} ${vStage.name} — Bevölkerung`} onClose={() => setOpenPanel(null)} maxWidth={420}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+            <div style={{ padding: '6px 8px', border: '1px solid rgba(92,85,74,0.35)', borderRadius: 4 }}>
+              <div style={{ fontSize: '0.92rem' }}>🧑‍🌾 <strong>{bauernCount}</strong> Bauern</div>
+              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>{farmersCount} auf dem Feld · {frohndienstCount} im Frondienst{militia.bauern ? ` · ${militia.bauern} in der Landwehr` : ''}</div>
+              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>je {TAX_PER_BAUER} 🪙 Steuer bei 100 %</div>
+            </div>
+            <div style={{ padding: '6px 8px', border: '1px solid rgba(92,85,74,0.35)', borderRadius: 4 }}>
+              <div style={{ fontSize: '0.92rem' }}>🧑‍🔧 <strong>{buerger}</strong> Bürger</div>
+              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>{skilledWorkers} arbeiten, {Math.max(0, buerger - skilledWorkers)} frei</div>
+              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>je {TAX_PER_BUERGER} 🪙 Steuer bei 100 %</div>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.84rem', marginBottom: 4 }}>👥 {villagePop} Einwohner, Platz für {villageCap} · {soldiers.soldier + soldiers.archer} unter Waffen</div>
+          <div style={{ fontSize: '0.78rem', color: '#5A5044', marginBottom: 8 }}>
+            Wachstum: {Math.round(villageGrowthChance(happiness, reputation, structures) * 100)} % Chance pro Monat{villagePop >= villageCap ? ' — das Dorf ist voll' : ''}{resources.food < 3 ? ' — Hunger! Familien ziehen fort' : ''}.
+            {' '}Bürger höchstens {Math.round(vStage.buergerShare * 100)} % ({Math.floor(villagePop * vStage.buergerShare)}).
+            {nextVStage && <> Nächste Stufe: <strong>{nextVStage.name}</strong> ab {nextVStage.minPop} Einwohnern{(nextVStage.needs || []).length ? ` mit ${nextVStage.needs.map((k) => AMENITY_TYPES[k].label).join(', ')}` : ''}.</>}
+          </div>
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 3 }}>
               <span>😊 Zufriedenheit</span>
@@ -12578,8 +12871,12 @@ export default function CastleBuilder() {
               {brunnenActive && `💧 Brunnen aktiv: +${brunnenFoodNow} Nahrung/Monat.`}
             </div>
           )}
+          <button className="cb-btn" disabled={!canGrantCitizenship} onClick={grantCitizenship}
+            style={{ width: '100%', marginTop: 10, padding: '6px 8px', fontSize: '0.84rem', opacity: canGrantCitizenship ? 1 : 0.5 }}>
+            📜 Bürgerrecht verleihen — ein Bauer wird Bürger ({CITIZENSHIP_GOLD} 🪙)
+          </button>
           <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
-            Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} verweigern die Bauern die Arbeit. Das Dorf wächst von selbst weiter, bis zu {villageCap} Bauern — mehr Land bietet Platz für mehr.
+            Bauern ernähren das Dorf und stellen die Soldaten; Bürger arbeiten als Handwerker und zahlen mehr Steuern. Das Dorf wächst bei vollen Kornkammern, guter Stimmung und gutem Ruf — wer im Krieg fällt, fehlt. Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} streiken die Bauern.
           </p>
         </Modal>
       )}
@@ -12593,14 +12890,14 @@ export default function CastleBuilder() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button onClick={() => fire(wt)} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent' }}>−</button>
                   <span style={{ width: 16, textAlign: 'center' }}>{hired[wt]}</span>
-                  <button onClick={() => hire(wt)} disabled={resources.gold < HIRE_COST_WORKER} title={`Einstellungskosten: ${HIRE_COST_WORKER} 🪙`}
-                    style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: resources.gold < HIRE_COST_WORKER ? 0.4 : 1, cursor: resources.gold < HIRE_COST_WORKER ? 'not-allowed' : 'pointer' }}>+</button>
+                  <button onClick={() => hire(wt)} disabled={skilledWorkers >= buerger} title={skilledWorkers >= buerger ? 'Kein Bürger frei' : 'Einen freien Bürger anstellen'}
+                    style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: skilledWorkers >= buerger ? 0.4 : 1, cursor: skilledWorkers >= buerger ? 'not-allowed' : 'pointer' }}>+</button>
                 </div>
               </div>
             ))}
           </div>
           <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
-            Lohnarbeiter kosten Gold und Nahrung, arbeiten aber auch während eines Bauern-Streiks weiter. Jede Einstellung kostet außerdem einmalig {HIRE_COST_WORKER} 🪙 — Entlassen ist kostenlos, aber ständiges Ein- und Ausstellen lohnt sich dadurch nicht mehr.
+            Alle Handwerker sind Bürger aus dem Dorf: {skilledWorkers} von {buerger} Bürgern arbeiten. Sie bekommen Lohn und arbeiten auch während eines Bauern-Streiks. Mehr Bürger gibt es, wenn das Dorf wächst und Bauern das Bürgerrecht erhalten.
           </p>
           <div style={{ marginTop: 12, borderTop: '1px solid #5C554A', paddingTop: 10 }}>
             <div style={{ fontSize: '0.85rem', marginBottom: 6 }}>Nachschub-Priorität</div>
@@ -12644,15 +12941,30 @@ export default function CastleBuilder() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <button onClick={() => fireSoldier(wt)} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent' }}>−</button>
                       <span style={{ width: 16, textAlign: 'center' }}>{soldiers[wt]}</span>
-                      <button onClick={() => hireSoldier(wt)} disabled={resources.gold < HIRE_COST_SOLDIER[wt]} title={`Einstellungskosten: ${HIRE_COST_SOLDIER[wt]} 🪙`}
-                        style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: resources.gold < HIRE_COST_SOLDIER[wt] ? 0.4 : 1, cursor: resources.gold < HIRE_COST_SOLDIER[wt] ? 'not-allowed' : 'pointer' }}>+</button>
+                      <button onClick={() => hireSoldier(wt)} disabled={resources.gold < HIRE_COST_SOLDIER[wt] || freeBauernNow < 1} title={`Einen Bauern ausheben: ${HIRE_COST_SOLDIER[wt]} 🪙 für Waffen`}
+                        style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: resources.gold < HIRE_COST_SOLDIER[wt] || freeBauernNow < 1 ? 0.4 : 1, cursor: resources.gold < HIRE_COST_SOLDIER[wt] ? 'not-allowed' : 'pointer' }}>+</button>
                     </div>
                   </div>
                 ))}
               </div>
               <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 6, fontStyle: 'italic' }}>
-                Jede Einstellung kostet einmalig Gold ({HIRE_COST_SOLDIER.soldier} 🪙 Soldat, {HIRE_COST_SOLDIER.archer} 🪙 Bogenschütze) — Entlassen bleibt kostenlos.
+                Soldaten werden aus den Bauern ausgehoben ({freeBauernNow} frei) — Waffen kosten {HIRE_COST_SOLDIER.soldier} 🪙 (Soldat) bzw. {HIRE_COST_SOLDIER.archer} 🪙 (Bogenschütze). Ein Entlassener kehrt auf seinen Hof zurück; ein Gefallener fehlt dem Dorf.
               </p>
+              {warningActive && !battlePhase && (
+                <div style={{ marginTop: 10, padding: '8px 10px', border: '2px solid #7a2318', borderRadius: 4, background: 'rgba(122,35,24,0.06)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                    <span>🔱 Landwehr</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button onClick={() => callMilitia(-1)} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent' }}>−</button>
+                      <span style={{ width: 20, textAlign: 'center' }}>{militia.bauern + militia.buerger}</span>
+                      <button onClick={() => callMilitia(1)} disabled={freeBauernNow < 1 && buerger - skilledWorkers < 1} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: freeBauernNow < 1 && buerger - skilledWorkers < 1 ? 0.4 : 1 }}>+</button>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: '0.74rem', color: '#5A5044', margin: '4px 0 0', lineHeight: 1.4 }}>
+                    Bauern (und notfalls freie Bürger) mit Spießen für die kommende Schlacht. Sie kämpfen schwächer als Soldaten und fehlen solange auf den Feldern; die Überlebenden kehren danach heim.
+                  </p>
+                </div>
+              )}
               <p style={{ fontSize: '0.85rem', color: '#5A5044', marginTop: 10 }}>Verteidigungswert aktuell: <strong>{currentDefense}</strong>.</p>
               {smithTier > 0 && (
                 <p style={{ fontSize: '0.78rem', color: '#3d5a2c', marginTop: 4 }}>
@@ -13505,7 +13817,11 @@ export default function CastleBuilder() {
                     <>
                       <div className="cb-section-title" style={{ marginTop: 12 }}>Gebäude</div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                        {AMENITY_IDS.map((id) => (id === 'palas' && !research.done.includes('palas') ? card(byId(id), true, 'erst Palasbau erforschen') : card(byId(id))))}
+                        {AMENITY_IDS.filter((id) => !VILLAGE_AMENITIES.includes(id)).map((id) => (id === 'palas' && !research.done.includes('palas') ? card(byId(id), true, 'erst Palasbau erforschen') : card(byId(id))))}
+                      </div>
+                      <div className="cb-section-title" style={{ marginTop: 12 }}>Dorf</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        {VILLAGE_AMENITIES.map((id) => card(byId(id)))}
                       </div>
                     </>
                   )}
