@@ -126,9 +126,8 @@ function buildTerrain() {
       const dc = Math.hypot(i - 37.5, (j - 5.5) * 1.2);
       if (dc > 3.2 && noise(i, j, 11) < 0.8) t = 'forest';
     } else if (r === 'auen') {
-      // Strip fields between grassy paths, and a fishpond.
-      if (Math.hypot(i - 41.5, (j - 17.5) * 1.3) < 1.9) t = 'water';
-      else if ((i - 31) % 5 < 3 && (j - 13) % 4 < 3 && i >= 31 && j >= 13 && i <= 44 && j <= 21) t = 'field';
+      // Strip fields between grassy paths.
+      if ((i - 31) % 5 < 3 && (j - 13) % 4 < 3 && i >= 31 && j >= 13 && i <= 44 && j <= 21) t = 'field';
     } else if (r === 'suedhuegel') {
       const dc = Math.hypot((i - 6) * 1.1, j - 30);
       if (dc < 4.6 + noise(i, j, 21) * 1.8) t = 'hill';
@@ -496,20 +495,26 @@ const DEPOT_I = 14;
 const DEPOT_J = 12;
 
 const BUILD_COST = {
-  wall: { wood: 3, stone: 6 },
-  gate: { wood: 5, stone: 9 },
-  tower: { wood: 6, stone: 15 },
+  wall: { wood: 3, stone: 10 },
+  gate: { wood: 6, stone: 14 },
+  tower: { wood: 7, stone: 26 },
   keep: { wood: 12, stone: 30 },
-  kemenate: { wood: 8, stone: 9 },
-  stallungen: { wood: 9, stone: 6 },
-  schmied: { wood: 5, stone: 12 },
-  baeckerei: { wood: 6, stone: 8 },
-  lagerhaus: { wood: 10, stone: 8 },
-  brunnen: { wood: 3, stone: 9 },
-  kapelle: { wood: 6, stone: 13 },
-  brauhaus: { wood: 9, stone: 8 },
+  kemenate: { wood: 8, stone: 13 },
+  stallungen: { wood: 9, stone: 8 },
+  schmied: { wood: 5, stone: 16 },
+  baeckerei: { wood: 6, stone: 11 },
+  lagerhaus: { wood: 10, stone: 11 },
+  brunnen: { wood: 3, stone: 12 },
+  kapelle: { wood: 6, stone: 18 },
+  brauhaus: { wood: 9, stone: 11 },
   graben: { wood: 0, stone: 0 },
 };
+// How much work each kind of building takes, as a multiple of a plain stage of work: stone
+// fortifications are slow, heavy going; a ditch is only dug.
+const BUILD_WORK = { wall: 3, gate: 3, tower: 3.6, keep: 2.2, graben: 1.6, amenity: 1.8 };
+function buildWorkOf(site) {
+  return BUILD_WORK[site.type] || 1;
+}
 function getBuildCost(site) {
   if (site.type === 'tower' && (site.level || 1) > 1) {
     const m = AMENITY_LEVEL_COST_MULT[site.level] || 1;
@@ -2145,6 +2150,20 @@ function PileProp({ i, j, amount, kind }) {
   );
 }
 
+// The stock of a Lagerhaus, floating just under its name tag.
+function StoreBadge({ i, j, level, stone, wood }) {
+  const top = AmenityBody({ i, j, kind: 'lagerhaus', level }).top;
+  const q = gridToScreen(i, j, top + 10), p = { x: q.x, y: q.y + 16 };
+  const text = `🪨 ${Math.floor(stone)}  ·  🪵 ${Math.floor(wood)}`;
+  const w = text.length * 5.2 + 16;
+  return (
+    <g pointerEvents="none">
+      <rect x={p.x - w / 2} y={p.y - 10} width={w} height="15" rx="7" fill="rgba(20,16,10,0.8)" stroke="rgba(201,162,75,0.6)" strokeWidth="0.8" />
+      <text x={p.x} y={p.y + 1} textAnchor="middle" fontSize="10" fill="#EAE0C4" fontFamily="'EB Garamond', serif">{text}</text>
+    </g>
+  );
+}
+
 // Floating status badge over a building site — stage, a gold progress bar, or a red warning.
 function ProgressLabel({ i, j, height, stage, progress, blocked, ruined = false }) {
   if (!stage || stage === 'done') return null;
@@ -2490,7 +2509,9 @@ function DitchPit({ corners, depth, filled, ghost, ghostBlocked, seed, clipId })
   );
 }
 
-const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOutSign = -1, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false }) {
+// Walls, gates and ditches are laid in long runs, so their site labels only show while the
+// mouse is over that piece (showLabel) instead of crowding every segment.
+const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, ghostBlocked, showLabel = false, stage = 'done', progress = 1, blocked = false, siegeActive = false, doorOpen = false, junction1 = false, junction2 = false, damageFrac = 0, filled = false, bridgeOut = null, bridgeSpansGraben = false, ruined = false, towerAt1 = false, towerAt2 = false }) {
   const horizontal = j1 === j2;
   const diagonal = i1 !== i2 && j1 !== j2;
   const t = 0.12;
@@ -2533,7 +2554,7 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       <g opacity={v.opacity}>
         <DitchPit corners={orientedRect(midI, midJ, ux, uy, len / 2 + 0.03, 0.19)} depth={depth} filled={filled && stage === 'done'} ghost={ghost} ghostBlocked={ghostBlocked} seed={midI * 31 + midJ * 17} clipId={clipId} />
         {!ghost && stage === 'foundation' && ruined && <RubbleDecor i={midI} j={midJ} frac={1} />}
-        {!ghost && <ProgressLabel i={midI} j={midJ} height={2} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
+        {!ghost && showLabel && <ProgressLabel i={midI} j={midJ} height={2} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
       </g>
     );
   }
@@ -2573,15 +2594,18 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
       portcullis += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
     });
 
+    // The drawbridge lies down on the gate's outward side (see gateBridgeOut).
+    const boL = bridgeOut ? Math.hypot(bridgeOut[0], bridgeOut[1]) : 1;
+    const boI = bridgeOut ? bridgeOut[0] / boL : -gpx, boJ = bridgeOut ? bridgeOut[1] / boL : -gpy;
     const bridgeLen = bridgeSpansGraben ? 1.82 : 0.7;
     const bridgeCorners = [
-      [i1 + ux * ph + gpx * t * bridgeOutSign, j1 + uy * ph + gpy * t * bridgeOutSign],
-      [i2 - ux * ph + gpx * t * bridgeOutSign, j2 - uy * ph + gpy * t * bridgeOutSign],
-      [i2 - ux * ph + gpx * (t + bridgeLen) * bridgeOutSign, j2 - uy * ph + gpy * (t + bridgeLen) * bridgeOutSign],
-      [i1 + ux * ph + gpx * (t + bridgeLen) * bridgeOutSign, j1 + uy * ph + gpy * (t + bridgeLen) * bridgeOutSign],
+      [i1 + ux * ph + boI * t, j1 + uy * ph + boJ * t],
+      [i2 - ux * ph + boI * t, j2 - uy * ph + boJ * t],
+      [i2 - ux * ph + boI * (t + bridgeLen), j2 - uy * ph + boJ * (t + bridgeLen)],
+      [i1 + ux * ph + boI * (t + bridgeLen), j1 + uy * ph + boJ * (t + bridgeLen)],
     ];
-    const chainA0 = gridToScreen(i1 + ux * ph + gpx * t * bridgeOutSign, j1 + uy * ph + gpy * t * bridgeOutSign, GH * 0.8);
-    const chainB0 = gridToScreen(i2 - ux * ph + gpx * t * bridgeOutSign, j2 - uy * ph + gpy * t * bridgeOutSign, GH * 0.8);
+    const chainA0 = gridToScreen(i1 + ux * ph + boI * t, j1 + uy * ph + boJ * t, GH * 0.8);
+    const chainB0 = gridToScreen(i2 - ux * ph + boI * t, j2 - uy * ph + boJ * t, GH * 0.8);
     const chainA1 = gridToScreen(bridgeCorners[3][0], bridgeCorners[3][1], 2);
     const chainB1 = gridToScreen(bridgeCorners[2][0], bridgeCorners[2][1], 2);
 
@@ -2665,7 +2689,7 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     return (
       <g>
         <FoundationSite corners={corners} progress={progress} ruined={ruined} seed={seed} height={v.height} />
-        <ProgressLabel i={midI} j={midJ} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+        {showLabel && <ProgressLabel i={midI} j={midJ} height={v.height} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
       </g>
     );
   }
@@ -2673,7 +2697,7 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     return (
       <g>
         <BuildingSite corners={corners} v={v} stage={stage} seed={seed} />
-        <ProgressLabel i={midI} j={midJ} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />
+        {showLabel && <ProgressLabel i={midI} j={midJ} height={Math.max(v.height, v.scaffoldH)} stage={stage} progress={progress} blocked={blocked} ruined={ruined} />}
       </g>
     );
   }
@@ -3898,13 +3922,24 @@ function standingLevel(s) { return s.stage === 'done' ? (s.level || 1) : Math.ma
 // only once every platform is taken do the rest stand in the courtyard. Foot soldiers and
 // knights hold the line just INSIDE the gate, so the walls actually stand between them and the
 // attackers — the enemy has to break through first.
-function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knightIds) {
+// The fronts the coming host marches in from, and roughly what share of it each one brings —
+// the same split spawnBattleUnits uses.
+function activeFronts(y) {
+  const f = attackOrigins();
+  if (f.third && y >= FLANK_YEAR) return [f.main, f.flank, f.third].map((o) => ({ ...originEntry(o), share: 1 / 3 }));
+  if (y >= FLANK_YEAR) return [{ ...originEntry(f.main), share: 0.65 }, { ...originEntry(f.flank), share: 0.35 }];
+  return [{ ...originEntry(f.main), share: 1 }];
+}
+function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knightIds, year = 1) {
   const keep = structures.keep && structures.keep.stage === 'done' ? structures.keep : null;
+  const fronts = activeFronts(year);
+  // How close a spot is to the nearest front: archers and the soldiers' lines go there first.
+  const frontDist = (pt) => Math.min(...fronts.map((f) => distance(pt, f)));
   const slotOffsets = [[-0.12, -0.12], [0.12, 0.12], [-0.12, 0.12], [0.12, -0.12]];
   const platformSlots = [];
   const towers = Object.values(structures)
     .filter((s) => s.type === 'tower' && standsFinished(s))
-    .map((t) => ({ t: { ...t, level: standingLevel(t) }, dist: distance({ i: t.i, j: t.j }, WOOD_GATHER) }))
+    .map((t) => ({ t: { ...t, level: standingLevel(t) }, dist: frontDist({ i: t.i, j: t.j }) }))
     .sort((a, b) => a.dist - b.dist);
   // Round-robin so every tower gets its first archer before any gets a second.
   const maxSlots = Math.max(KEEP_ARCHER_SLOTS, ...towers.map(({ t }) => TOWER_ARCHER_SLOTS[t.level || 1] || 2));
@@ -3917,7 +3952,7 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
   Object.values(structures)
     .filter((s) => s.type === 'wall' && s.stage === 'done')
     .map((w) => ({ i: (w.i1 + w.i2) / 2, j: (w.j1 + w.j2) / 2 }))
-    .sort((a, b) => distance(a, WOOD_GATHER) - distance(b, WOOD_GATHER))
+    .sort((a, b) => frontDist(a) - frontDist(b))
     .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: WALL_H + 2 }));
 
   const positions = [];
@@ -3926,38 +3961,56 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
     else positions.push({ i: fallbackI + ((k % 6) - 2.5) * 0.24, j: fallbackJ + 0.6 + Math.floor(k / 6) * 0.25, type: 'archer', elev: 0 });
   }
 
-  // The gate the line forms up behind (the one facing the usual approach), and which way is
-  // "inside" relative to it.
-  const gates = Object.values(structures).filter((s) => s.type === 'gate' && s.stage === 'done')
-    .sort((a, b) => distance({ i: (a.i1 + a.i2) / 2, j: (a.j1 + a.j2) / 2 }, WOOD_GATHER) - distance({ i: (b.i1 + b.i2) / 2, j: (b.j1 + b.j2) / 2 }, WOOD_GATHER));
-  const gate = gates[0];
-  let frontI, frontJ, alongI = 1, alongJ = 0;
-  if (gate) {
-    const mi = (gate.i1 + gate.i2) / 2, mj = (gate.j1 + gate.j2) / 2;
-    const ci = keep ? keep.i : fallbackI, cj = keep ? keep.j : fallbackJ;
-    if (gate.j1 === gate.j2) { frontI = mi; frontJ = mj + (cj >= mj ? 0.55 : -0.55); alongI = 1; alongJ = 0; }
-    else { frontI = mi + (ci >= mi ? 0.55 : -0.55); frontJ = mj; alongI = 0; alongJ = 1; }
-  } else {
-    frontI = keep ? keep.i : fallbackI;
-    frontJ = (keep ? keep.j : fallbackJ) + 0.85;
-  }
+  // Each front gets its own line of foot soldiers, formed up just inside the gate (or, with
+  // no gate, the stretch of outer wall) nearest to where that part of the host comes from.
+  const gates = Object.values(structures).filter((s) => s.type === 'gate' && s.stage === 'done');
+  const outerWalls = Object.values(structures).filter((s) => s.type === 'wall' && s.stage === 'done' && !edgeOutward(s, structures).inner);
+  const lineFor = (pt) => {
+    const cands = gates.length ? gates : outerWalls;
+    if (!cands.length) {
+      const ci = keep ? keep.i : fallbackI, cj = keep ? keep.j : fallbackJ;
+      return { key: 'keep', frontI: ci, frontJ: cj + 0.85, alongI: 1, alongJ: 0, inI: 0, inJ: 1 };
+    }
+    const mid = (g) => ({ i: (g.i1 + g.i2) / 2, j: (g.j1 + g.j2) / 2 });
+    const seg = cands.reduce((b, g) => (distance(mid(g), pt) < distance(mid(b), pt) ? g : b), cands[0]);
+    const [ni, nj] = edgeOutward(seg, structures).n;
+    const nl = Math.hypot(ni, nj) || 1;
+    const sl = Math.hypot(seg.i2 - seg.i1, seg.j2 - seg.j1) || 1;
+    const m = mid(seg);
+    return { key: edgeKeyOf(seg.i1, seg.j1, seg.i2, seg.j2), frontI: m.i - (ni / nl) * 0.55, frontJ: m.j - (nj / nl) * 0.55, alongI: (seg.i2 - seg.i1) / sl, alongJ: (seg.j2 - seg.j1) / sl, inI: -ni / nl, inJ: -nj / nl };
+  };
+  const lines = [];
+  fronts.forEach((f) => {
+    const l = lineFor(f);
+    const same = lines.find((x) => x.key === l.key);
+    if (same) same.share += f.share; else lines.push({ ...l, share: f.share, count: 0, knights: 0 });
+  });
+  // Share the soldiers out by each front's weight (largest remainder).
+  const total = soldiers.soldier;
+  lines.forEach((l) => { l.count = Math.floor(total * l.share); });
+  let left = total - lines.reduce((sum, l) => sum + l.count, 0);
+  [...lines].sort((a, b) => (b.share * total - b.count) - (a.share * total - a.count)).forEach((l) => { if (left > 0) { l.count++; left--; } });
   const perRow = 6;
-  for (let k = 0; k < soldiers.soldier; k++) {
-    const row = Math.floor(k / perRow), col = k % perRow;
-    const inRow = Math.min(perRow, soldiers.soldier - row * perRow);
-    const off = (col - (inRow - 1) / 2) * 0.24;
-    const depth = row * 0.28;
-    const di = alongJ ? depth * Math.sign(frontI - (gate ? (gate.i1 + gate.i2) / 2 : frontI) || 1) : 0;
-    const dj = alongI ? depth * Math.sign(frontJ - (gate ? (gate.j1 + gate.j2) / 2 : frontJ) || 1) : 0;
-    positions.push({ i: frontI + alongI * off + di, j: frontJ + alongJ * off + dj, type: 'soldier', elev: 0 });
-  }
-  const lineHalf = Math.min(perRow, soldiers.soldier) / 2 * 0.24;
+  lines.forEach((l) => {
+    for (let k = 0; k < l.count; k++) {
+      const row = Math.floor(k / perRow), col = k % perRow;
+      const inRow = Math.min(perRow, l.count - row * perRow);
+      const off = (col - (inRow - 1) / 2) * 0.24;
+      const depth = row * 0.28;
+      positions.push({ i: l.frontI + l.alongI * off + l.inI * depth, j: l.frontJ + l.alongJ * off + l.inJ * depth, type: 'soldier', elev: 0 });
+    }
+  });
+  // Knights hold the ends of the front lines, shoulder to shoulder with the foot soldiers —
+  // the strongest fronts first.
+  const byShare = [...lines].sort((a, b) => b.share - a.share);
   (knightIds || []).forEach((knightId, idx) => {
-    // Knights hold the ends of the front line, shoulder to shoulder with the foot soldiers.
-    const side = idx % 2 === 0 ? 1 : -1;
-    const rank = Math.floor(idx / 2);
+    const l = byShare[idx % byShare.length];
+    const n = l.knights++;
+    const side = n % 2 === 0 ? 1 : -1;
+    const rank = Math.floor(n / 2);
+    const lineHalf = Math.min(perRow, l.count) / 2 * 0.24;
     const offset = side * (lineHalf + 0.3 + rank * 0.32);
-    positions.push({ i: frontI + alongI * offset, j: frontJ + alongJ * offset, type: 'champion', knightId, elev: 0 });
+    positions.push({ i: l.frontI + l.alongI * offset, j: l.frontJ + l.alongJ * offset, type: 'champion', knightId, elev: 0 });
   });
   return positions;
 }
@@ -4051,6 +4104,18 @@ function distance(a, b) {
   const di = a.i - b.i, dj = a.j - b.j;
   return Math.sqrt(di * di + dj * dj);
 }
+// Every worker keeps a little individuality on the road: a walking pace of their own, a spot
+// of their own at the pile, and a lane slightly to one side — so a crowd on the same errand
+// spreads out instead of trotting along in single file like beads on a string.
+function workerPace(id) { return 0.82 + 0.36 * hash2(id, 3, 17); }
+function workerSpread(id, r) {
+  const a = hash2(id, 5, 23) * Math.PI * 2, d = r * (0.4 + 0.6 * hash2(id, 9, 29));
+  return { i: Math.cos(a) * d, j: Math.sin(a) * d };
+}
+// Drawn a touch to one side of the route they walk.
+function workerLane(w) {
+  return workerSpread(w.id, 0.18);
+}
 function siteAnchor(site) {
   if (site.type === 'tower' || site.type === 'keep' || site.type === 'amenity') return { i: site.i, j: site.j };
   return { i: (site.i1 + site.i2) / 2, j: (site.j1 + site.j2) / 2 };
@@ -4060,65 +4125,191 @@ function slotOffset(anchor, slot) {
   return { i: anchor.i + dx, j: anchor.j + 0.38 };
 }
 
-// Which side of a gate its drawbridge lays down on — always away from the castle interior.
-// Shared by both the visual bridge (WallNode) and the movement/blocking logic above, so the
-// two always agree on which moat segment (if any) a given gate is actually spanning.
-function gateBridgeOutSign(s, castleCenterI, castleCenterJ) {
-  return s.j1 === s.j2 ? (castleCenterJ > s.j1 ? -1 : 1) : (castleCenterI > s.i1 ? -1 : 1);
-}
-// The one graben edge (one tile straight out, parallel to the gate) that this gate's
-// drawbridge would actually reach, if a moat happens to run there.
-function gateBridgedGrabenKey(s, castleCenterI, castleCenterJ) {
-  const sign = gateBridgeOutSign(s, castleCenterI, castleCenterJ);
-  if (s.j1 === s.j2) {
-    const nj = s.j1 + sign;
-    return `${Math.min(s.i1, s.i2)},${nj}-${Math.max(s.i1, s.i2)},${nj}`;
+// ---- Innen und außen --------------------------------------------------------------------
+// Which side of a wall is "outside" is found by flooding the board from its border: every
+// tile is split into four triangles (one against each of its edges) so that diagonal walls,
+// which cut a tile in half, close off exactly half of it. Whatever the flood can't reach is
+// inside the castle. Walls and gates count at every stage, so a moat or drawbridge planned
+// while the ring is still going up already knows its way out. Where a wall doesn't enclose
+// anything (yet), the side away from the keep counts as outside instead.
+const outsideMapCache = new WeakMap();
+function castleOutsideMap(structures) {
+  const cached = outsideMapCache.get(structures);
+  if (cached) return cached;
+  const W = GRID_COLS, H = GRID_ROWS;
+  const hBlock = new Uint8Array(W * (H + 1));
+  const vBlock = new Uint8Array((W + 1) * H);
+  const dBack = new Uint8Array(W * H), dFwd = new Uint8Array(W * H);
+  Object.values(structures).forEach((s) => {
+    if (s.type !== 'wall' && s.type !== 'gate') return;
+    if (s.i1 !== s.i2 && s.j1 !== s.j2) {
+      const ti = Math.min(s.i1, s.i2), tj = Math.min(s.j1, s.j2);
+      if (ti < 0 || tj < 0 || ti >= W || tj >= H) return;
+      if (Math.sign(s.i2 - s.i1) === Math.sign(s.j2 - s.j1)) dBack[tj * W + ti] = 1; else dFwd[tj * W + ti] = 1;
+    } else if (s.j1 === s.j2) {
+      for (let i = Math.min(s.i1, s.i2); i < Math.max(s.i1, s.i2); i++) if (i >= 0 && i < W && s.j1 >= 0 && s.j1 <= H) hBlock[s.j1 * W + i] = 1;
+    } else {
+      for (let j = Math.min(s.j1, s.j2); j < Math.max(s.j1, s.j2); j++) if (j >= 0 && j < H && s.i1 >= 0 && s.i1 <= W) vBlock[j * (W + 1) + s.i1] = 1;
+    }
+  });
+  // Triangle k of a tile lies against its edge k: 0 = top (j), 1 = right (i+1), 2 = bottom
+  // (j+1), 3 = left (i).
+  const out = new Uint8Array(W * H * 4);
+  const stack = [];
+  const visit = (i, j, k) => {
+    if (i < 0 || j < 0 || i >= W || j >= H) return;
+    const id = (j * W + i) * 4 + k;
+    if (out[id]) return;
+    out[id] = 1;
+    stack.push(id);
+  };
+  for (let i = 0; i < W; i++) { visit(i, 0, 0); visit(i, H - 1, 2); }
+  for (let j = 0; j < H; j++) { visit(0, j, 3); visit(W - 1, j, 1); }
+  while (stack.length) {
+    const id = stack.pop();
+    const k = id % 4, c = (id - k) / 4, i = c % W, j = (c - i) / W;
+    // Inside the tile: "/" separates 0|1 and 2|3, "\" separates 1|2 and 3|0.
+    const kn = (k + 1) % 4, kp = (k + 3) % 4;
+    if (!(k % 2 === 0 ? dFwd[c] : dBack[c])) visit(i, j, kn);
+    if (!(kp % 2 === 0 ? dFwd[c] : dBack[c])) visit(i, j, kp);
+    if (k === 0 && !hBlock[j * W + i]) visit(i, j - 1, 2);
+    if (k === 2 && !hBlock[(j + 1) * W + i]) visit(i, j + 1, 0);
+    if (k === 3 && !vBlock[j * (W + 1) + i]) visit(i - 1, j, 1);
+    if (k === 1 && !vBlock[j * (W + 1) + i + 1]) visit(i + 1, j, 3);
   }
-  const ni = s.i1 + sign;
-  return `${ni},${Math.min(s.j1, s.j2)}-${ni},${Math.max(s.j1, s.j2)}`;
+  const isOut = (i, j, k) => (i < 0 || j < 0 || i >= W || j >= H) || !!out[(j * W + i) * 4 + k];
+  outsideMapCache.set(structures, isOut);
+  return isOut;
+}
+// The two sides of a wall-grid edge: the direction each one faces, and the tile triangles
+// that touch the edge from that side.
+function edgeSides(s) {
+  if (s.i1 !== s.i2 && s.j1 !== s.j2) {
+    const ti = Math.min(s.i1, s.i2), tj = Math.min(s.j1, s.j2);
+    if (Math.sign(s.i2 - s.i1) === Math.sign(s.j2 - s.j1)) {
+      return [{ n: [1, -1], q: [[ti, tj, 0], [ti, tj, 1]] }, { n: [-1, 1], q: [[ti, tj, 2], [ti, tj, 3]] }];
+    }
+    return [{ n: [-1, -1], q: [[ti, tj, 0], [ti, tj, 3]] }, { n: [1, 1], q: [[ti, tj, 1], [ti, tj, 2]] }];
+  }
+  if (s.j1 === s.j2) {
+    const i = Math.min(s.i1, s.i2);
+    return [{ n: [0, -1], q: [[i, s.j1 - 1, 2]] }, { n: [0, 1], q: [[i, s.j1, 0]] }];
+  }
+  const j = Math.min(s.j1, s.j2);
+  return [{ n: [-1, 0], q: [[s.i1 - 1, j, 1]] }, { n: [1, 0], q: [[s.i1, j, 3]] }];
+}
+function castleCenterOf(structures) {
+  const k = structures.keep;
+  return k && k.stage === 'done' ? { i: k.i, j: k.j } : { i: DEPOT_I, j: DEPOT_J };
+}
+// Which way is out from this wall/gate/ditch edge? n = outward direction (unit along an axis,
+// (±1,±1) for a diagonal); inner = it stands inside the castle on both sides.
+function edgeOutward(s, structures) {
+  const isOut = castleOutsideMap(structures);
+  const sides = edgeSides(s);
+  const o = sides.map((side) => side.q.some(([i, j, k]) => isOut(i, j, k)));
+  if (o[0] !== o[1]) return { n: o[0] ? sides[0].n : sides[1].n, enclosing: true, inner: false };
+  const c = castleCenterOf(structures);
+  const mi = (s.i1 + s.i2) / 2, mj = (s.j1 + s.j2) / 2;
+  const d0 = sides[0].n[0] * (mi - c.i) + sides[0].n[1] * (mj - c.j);
+  return { n: d0 >= 0 ? sides[0].n : sides[1].n, enclosing: false, inner: !o[0] };
+}
+// The key an edge between two grid points is stored under (diagonals carry a "diag:" prefix).
+function edgeKeyOf(i1, j1, i2, j2) {
+  if (i1 !== i2 && j1 !== j2) {
+    const ti = Math.min(i1, i2), tj = Math.min(j1, j2);
+    return Math.sign(i2 - i1) === Math.sign(j2 - j1) ? `diag:${ti},${tj}-${ti + 1},${tj + 1}` : `diag:${ti + 1},${tj}-${ti},${tj + 1}`;
+  }
+  return `${Math.min(i1, i2)},${Math.min(j1, j2)}-${Math.max(i1, i2)},${Math.max(j1, j2)}`;
+}
+function edgeInfoOf(i1, j1, i2, j2) {
+  if (i1 !== i2 && j1 !== j2) {
+    const ti = Math.min(i1, i2), tj = Math.min(j1, j2);
+    return Math.sign(i2 - i1) === Math.sign(j2 - j1)
+      ? { i1: ti, j1: tj, i2: ti + 1, j2: tj + 1, diagonal: true }
+      : { i1: ti + 1, j1: tj, i2: ti, j2: tj + 1, diagonal: true };
+  }
+  return { i1: Math.min(i1, i2), j1: Math.min(j1, j2), i2: Math.max(i1, i2), j2: Math.max(j1, j2) };
+}
+// How far a moat line runs in front of a wall: a straight wall one tile out, a diagonal one
+// half a tile across (so that it meets the straight runs either side of it at a grid point).
+function moatShift(n) {
+  return n[0] !== 0 && n[1] !== 0 ? [n[0], 0] : n;
+}
+// The drawbridge of a gate always lays down on the outward side.
+function gateBridgeOut(s, structures) {
+  return edgeOutward(s, structures).n;
+}
+// The one ditch edge right in front of a gate that its drawbridge reaches, if a moat runs there.
+function gateBridgedGrabenKey(s, structures) {
+  const [di, dj] = moatShift(gateBridgeOut(s, structures));
+  return edgeKeyOf(s.i1 + di, s.j1 + dj, s.i2 + di, s.j2 + dj);
 }
 
-// "Burggraben automatisch ziehen": for every finished wall or gate segment, trace one tile
-// straight outward (the same outward direction a gate's own drawbridge uses) and propose a
-// ditch there — tracing the whole built perimeter roughly one ring further out. Where a
-// tower sits at a genuine corner (a horizontal wall run and a vertical one actually meeting
-// there), also add the two short connector segments that wrap around its outward corner, so
-// the ring doesn't leave a gap. A tower along an otherwise straight wall run — or one with no
-// wall touching it at all — gets no bracket: the wall's own traced ditch line already covers
-// it, and adding one anyway is exactly what produced the diagonal zigzags cutting across the
-// moat. Segments that already have something on them, or would leave the buildable grass,
-// are skipped rather than forced.
+// "Burggraben automatisch ziehen": every finished wall or gate facing the outside gets a
+// ditch line in front of it (see moatShift). Where two such walls meet at an angle, their two
+// ditch lines are run on until they cross, so the ring closes neatly round every corner —
+// convex or concave, straight or diagonal. Walls standing inside the castle get none.
+// Segments that already have something on them, or would leave the buildable land, are
+// skipped rather than forced.
 function autoMoatEdges(structures) {
-  const castleCenterI = (structures.keep && structures.keep.stage === 'done') ? structures.keep.i : DEPOT_I;
-  const castleCenterJ = (structures.keep && structures.keep.stage === 'done') ? structures.keep.j : DEPOT_J;
   const out = new Map();
   const tryAdd = (i1, j1, i2, j2) => {
     if (!isBuildableEdge(i1, j1, i2, j2, true)) return;
-    const key = `${Math.min(i1, i2)},${Math.min(j1, j2)}-${Math.max(i1, i2)},${Math.max(j1, j2)}`;
+    const key = edgeKeyOf(i1, j1, i2, j2);
     if (structures[key] || out.has(key)) return;
-    out.set(key, { i1, j1, i2, j2 });
+    out.set(key, edgeInfoOf(i1, j1, i2, j2));
   };
-  const wallsAndGates = Object.values(structures).filter((s) => (s.type === 'wall' || s.type === 'gate') && s.stage === 'done');
-  wallsAndGates.forEach((s) => {
-    const sign = gateBridgeOutSign(s, castleCenterI, castleCenterJ);
-    if (s.j1 === s.j2) { const nj = s.j1 + sign; tryAdd(s.i1, nj, s.i2, nj); }
-    else { const ni = s.i1 + sign; tryAdd(ni, s.j1, ni, s.j2); }
-  });
+  const lines = [];
   Object.values(structures).forEach((s) => {
-    if (s.type !== 'tower' || s.stage !== 'done') return;
-    const ti = s.i, tj = s.j;
-    // Only the wall/gate segments that actually touch this tower's own vertex decide whether
-    // (and which way) it's a corner — not the tower's position relative to the castle centre.
-    const touching = wallsAndGates.filter((s2) => (s2.i1 === ti && s2.j1 === tj) || (s2.i2 === ti && s2.j2 === tj));
-    const horizontal = touching.find((s2) => s2.j1 === s2.j2);
-    const vertical = touching.find((s2) => s2.i1 !== s2.i2);
-    if (!horizontal || !vertical) return; // straight run or an isolated tower — nothing to bracket
-    const signJ = gateBridgeOutSign(horizontal, castleCenterI, castleCenterJ);
-    const signI = gateBridgeOutSign(vertical, castleCenterI, castleCenterJ);
-    // The "L" bracket around the tower's outward corner — one edge on each axis, together
-    // continuing the two wall-traced ditch lines that actually meet at this tower.
-    tryAdd(ti, tj + signJ, ti + signI, tj + signJ);
-    tryAdd(ti + signI, tj, ti + signI, tj + signJ);
+    if ((s.type !== 'wall' && s.type !== 'gate') || s.stage !== 'done') return;
+    const o = edgeOutward(s, structures);
+    if (o.inner) return;
+    const [si, sj] = moatShift(o.n);
+    lines.push({
+      P: [s.i1, s.j1], Q: [s.i2, s.j2], d: [Math.sign(s.i2 - s.i1), Math.sign(s.j2 - s.j1)],
+      start: [s.i1 + si, s.j1 + sj], end: [s.i2 + si, s.j2 + sj], n: o.n,
+    });
+  });
+  const at = new Map();
+  lines.forEach((l) => [l.P, l.Q].forEach((v) => {
+    const k = `${v[0]},${v[1]}`;
+    if (!at.has(k)) at.set(k, []);
+    at.get(k).push(l);
+  }));
+  const connectors = [];
+  lines.forEach((l) => {
+    [0, 1].forEach((endIdx) => {
+      const V = endIdx ? l.Q : l.P;
+      const others = at.get(`${V[0]},${V[1]}`).filter((m) => m !== l);
+      // A straight continuation needs nothing; at a corner, meet the neighbouring ditch line.
+      const m = others.find((x) => x.d[0] * l.d[1] - x.d[1] * l.d[0] !== 0);
+      if (!m || others.some((x) => x.d[0] * l.d[1] - x.d[1] * l.d[0] === 0)) return;
+      const A = l.start, C = m.start, d = l.d, e = m.d;
+      const det = -d[0] * e[1] + e[0] * d[1];
+      const t = ((C[0] - A[0]) * -e[1] + e[0] * (C[1] - A[1])) / det;
+      const X = [A[0] + t * d[0], A[1] + t * d[1]];
+      if (Math.abs(X[0] - Math.round(X[0])) > 1e-6 || Math.abs(X[1] - Math.round(X[1])) > 1e-6) {
+        // Two diagonals at right angles can't meet on the grid: bridge the gap instead.
+        connectors.push([endIdx ? l.end : l.start, (m.P[0] === V[0] && m.P[1] === V[1]) ? m.start : m.end]);
+        return;
+      }
+      if (endIdx) l.end = X; else l.start = X;
+    });
+  });
+  lines.forEach((l) => {
+    const len = ((l.end[0] - l.start[0]) * l.d[0] + (l.end[1] - l.start[1]) * l.d[1]) / (l.d[0] * l.d[0] + l.d[1] * l.d[1]);
+    for (let k = 0; k < Math.round(len); k++) {
+      tryAdd(l.start[0] + k * l.d[0], l.start[1] + k * l.d[1], l.start[0] + (k + 1) * l.d[0], l.start[1] + (k + 1) * l.d[1]);
+    }
+  });
+  connectors.forEach(([a, b]) => {
+    let [i, j] = a;
+    for (let guard = 0; guard < 6 && (i !== b[0] || j !== b[1]); guard++) {
+      const ni = i + Math.sign(b[0] - i), nj = j + Math.sign(b[1] - j);
+      tryAdd(i, j, ni, nj);
+      [i, j] = [ni, nj];
+    }
   });
   return out;
 }
@@ -4368,17 +4559,15 @@ function navSmooth(nav, pts, exA, exB) {
 // towers, the keep and finished buildings, plus the river.
 function buildWorkerNav(structures) {
   const nav = makeNavGrid();
-  const castleCenterI = (structures.keep && structures.keep.stage === 'done') ? structures.keep.i : DEPOT_I;
-  const castleCenterJ = (structures.keep && structures.keep.stage === 'done') ? structures.keep.j : DEPOT_J;
   Object.entries(structures).forEach(([key, s]) => {
     if (!standsFinished(s)) return;
     if (s.type === 'wall' || (s.type === 'gate' && !s.doorOpen)) {
       navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity);
       nav.sig.push(key);
     } else if (s.type === 'graben') {
-      const gkey = `${s.i1},${s.j1}-${s.i2},${s.j2}`;
+      const gkey = edgeKeyOf(s.i1, s.j1, s.i2, s.j2);
       const bridged = Object.values(structures).some((g) => g.type === 'gate' && g.stage === 'done' && g.doorOpen
-        && gateBridgedGrabenKey(g, castleCenterI, castleCenterJ) === gkey);
+        && gateBridgedGrabenKey(g, structures) === gkey);
       if (!bridged) { navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity); nav.sig.push(key); }
     } else if (s.type === 'tower') {
       navAddTower(nav, s.i, s.j);
@@ -4558,7 +4747,11 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
       targetPos = node ? { i: node.i, j: node.j } : WOOD_GATHER;
       targetKey = node ? `tree:${node.id}` : 'woodGatherEmpty';
     }
-    else if (w.haulPhase === 'toSource') { targetPos = w.haulResource === 'stone' ? STONE_GATHER : WOOD_GATHER; targetKey = `haulSrc:${w.haulResource}`; }
+    else if (w.haulPhase === 'toSource') {
+      const src = w.haulResource === 'stone' ? STONE_GATHER : WOOD_GATHER, sp = workerSpread(w.id, 0.55);
+      targetPos = { i: src.i + sp.i, j: src.j + sp.j };
+      targetKey = `haulSrc:${w.haulResource}`;
+    }
     else if (w.haulPhase === 'toStorage') { targetPos = haulDeliveryTarget(structures, w.curI, w.curJ); targetKey = `storage:${Math.round(targetPos.i)},${Math.round(targetPos.j)}`; }
     else if (w.siteKey && structures[w.siteKey]) { targetPos = slotOffset(siteAnchor(structures[w.siteKey]), w.slot); targetKey = `site:${w.siteKey}:${w.slot}`; }
     else { const jitter = ((w.id % 5) - 2) * 0.35; targetPos = { i: DEPOT_I + jitter, j: DEPOT_J }; targetKey = 'idle'; }
@@ -4586,7 +4779,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     let newI = w.curI, newJ = w.curJ;
     let forceReplan = false;
     if (d > 0.001) {
-      const t = Math.min(1, SPEED_PER_TICK / d);
+      const t = Math.min(1, SPEED_PER_TICK * workerPace(w.id) / d);
       newI = w.curI + (moveTarget.i - w.curI) * t;
       newJ = w.curJ + (moveTarget.j - w.curJ) * t;
       // Never take a step through a wall, a shut gate or into a solid building. With proper
@@ -4669,7 +4862,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     const site = structures[key];
     const crew = crewCount[key] || 0;
     if (crew === 0) { structures[key] = { ...site, crew: 0 }; return; }
-    const gain = crew * PROGRESS_GAIN_PER_WORKER_PER_TICK * buildSpeed;
+    const gain = crew * PROGRESS_GAIN_PER_WORKER_PER_TICK * buildSpeed / buildWorkOf(site);
     const newProgress = site.progress + gain;
     // Once a crew is actually back on site, any "these are ruins from the last siege"
     // visual should fade in favour of the normal in-progress look — the moment work
@@ -4998,7 +5191,7 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
   const keepDone = structures.keep && structures.keep.stage === 'done';
   const anchorI = keepDone ? structures.keep.i : DEPOT_I;
   const anchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
-  computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds).forEach((p) => {
+  computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds, year || 1).forEach((p) => {
     const isChampion = p.type === 'champion';
     const maxHp = isChampion ? Math.round(CHAMPION_MAX_HP * stallKnightHpMult(structures)) : UNIT_MAX_HP;
     units.push({ id: battleUnitIdSeq++, side: 'defender', type: p.type, knightId: p.knightId || null, i: p.i, j: p.j, hp: maxHp, maxHp, elev: p.elev || 0, targetId: null, dmgMult: p.dmgMult || 1 });
@@ -5600,6 +5793,23 @@ const UI_CSS = `
   @media (max-width: 1400px) { .cb-chip .cb-cap { display: none; } }
   @media (max-width: 1300px) { .cb-date-sub { display: none; } .cb-topbar { gap: 4px !important; } }
 `;
+
+// Abriss per Rechteck: the box spanned by two grid points, and the wall-grid structures
+// (walls, gates, ditches, towers) lying wholly inside it.
+function dragBox(a, b) {
+  const [i1, j1] = a.split(',').map(Number);
+  const [i2, j2] = b.split(',').map(Number);
+  return { i0: Math.min(i1, i2), i1: Math.max(i1, i2), j0: Math.min(j1, j2), j1: Math.max(j1, j2) };
+}
+function structuresInBox(structures, box) {
+  const inside = (i, j) => i >= box.i0 && i <= box.i1 && j >= box.j0 && j <= box.j1;
+  return Object.keys(structures).filter((k) => {
+    const s = structures[k];
+    if (s.type === 'wall' || s.type === 'gate' || s.type === 'graben') return inside(s.i1, s.j1) && inside(s.i2, s.j2);
+    if (s.type === 'tower') return inside(s.i, s.j);
+    return false;
+  });
+}
 
 // Hotkeys for the most-used tools (shown on the tool cards).
 const TOOL_HOTKEYS = { wall: 'Q', tower: 'W', gate: 'E', graben: 'R', keep: 'F', delete: 'X' };
@@ -6728,8 +6938,8 @@ const TOOLS = [
   { id: 'brunnen', label: 'Brunnen', emoji: '💧', hint: 'Klicke auf ein Feld im Grasland für den Brunnen.' },
   { id: 'kapelle', label: 'Kapelle', emoji: '⛪', hint: 'Klicke auf ein Feld im Grasland für die Kapelle. Hebt die Moral der Kämpfer und die Zufriedenheit im Dorf. Voraussetzung, damit der Bischof an Eurem Hof vorspricht.' },
   { id: 'brauhaus', label: 'Brauhaus', emoji: '🍺', hint: 'Klicke auf ein Feld im Grasland für das Brauhaus. Bringt zusätzliche Nahrung und hebt die Zufriedenheit im Dorf.' },
-  { id: 'graben', label: 'Graben', emoji: '🕳️', hint: 'Klicke auf eine Kante oder ziehe eine Reihe, um einen Burggraben auszuheben. Erst möglich, wenn eine Mauer fertig ist. Ein Graben, der eine Wasserkachel berührt (oder mit einem anderen wassergefüllten Graben verbunden ist), füllt sich mit Wasser.' },
-  { id: 'delete', label: 'Abriss', emoji: '⛏️', hint: 'Klicke auf eine Baustelle oder ein fertiges Bauwerk, um es abzureißen.' },
+  { id: 'graben', label: 'Graben', emoji: '🕳️', hint: 'Klicke auf eine Kante oder ziehe eine Reihe, um einen Burggraben auszuheben. Mit gedrückter Tab-Taste geht er auch diagonal, entlang schräger Mauern. Erst möglich, wenn eine Mauer fertig ist. Ein Graben, der eine Wasserkachel berührt (oder mit einem anderen wassergefüllten Graben verbunden ist), füllt sich mit Wasser.' },
+  { id: 'delete', label: 'Abriss', emoji: '⛏️', hint: 'Klicke auf eine Baustelle oder ein fertiges Bauwerk, um es abzureißen — oder ziehe mit gedrückter Maustaste ein Rechteck auf: alle Mauern, Tore, Gräben und Türme darin werden auf einmal abgerissen.' },
 ];
 
 export default function CastleBuilder() {
@@ -8338,6 +8548,12 @@ export default function CastleBuilder() {
     };
   }, [triggerSuccession, hireCourtFigure]);
 
+  // Heiratsangebot: a finished Kemenate for an unmarried king brings the next audience close.
+  const marriageOfferedRef = useRef(false);
+  const kemenateReady = hasDoneAmenity(structures, 'kemenate') && !royalFamily.married;
+  useEffect(() => {
+    if (kemenateReady && !marriageOfferedRef.current) setNextPetitionDay((d) => Math.min(d, dayRef.current + 12));
+  }, [kemenateReady]);
   useEffect(() => {
     if (petitionEvent || battlePhase || gameOverEvent || !kingName || eventOutcome) return;
     // A follow-up from an earlier decision comes first, as soon as it's due.
@@ -8395,6 +8611,11 @@ export default function CastleBuilder() {
     if (reputation >= 65) eligible.push('turnier', 'haendler', 'gilde', ...(eligible.includes('ritter') ? ['ritter'] : []));
     if (reputation < 35) eligible.push('spion', 'wilderer_folge', ...(reignYear >= 4 ? ['delegation'] : []));
     let ev = null;
+    // Once the Kemenate stands, the first suitor comes straight away rather than by chance.
+    if (eligible.includes('hochzeit') && !marriageOfferedRef.current) {
+      marriageOfferedRef.current = true;
+      ev = buildPetitionEvent('hochzeit', currentYear);
+    }
     for (let tries = 0; tries < 5 && !ev; tries++) {
       const type = eligible[Math.floor(Math.random() * eligible.length)];
       ev = buildPetitionEvent(type, currentYear);
@@ -8526,6 +8747,23 @@ export default function CastleBuilder() {
   const PAN_THRESHOLD = 4;
 
   const handleMapMouseDown = useCallback((e) => {
+    if (e.button === 0 && toolRef.current === 'delete' && mapViewportRef.current) {
+      // Abriss per Rechteck: the box can be started anywhere on the map.
+      const rect = mapViewportRef.current.getBoundingClientRect();
+      const toVertex = (ev) => {
+        const z = zoomRef.current, p = panRef.current;
+        const g = screenToGrid((ev.clientX - rect.left - p.x) / z, (ev.clientY - rect.top - p.y) / z);
+        return `${Math.max(0, Math.min(GRID_COLS, Math.round(g.i)))},${Math.max(0, Math.min(GRID_ROWS, Math.round(g.j)))}`;
+      };
+      const start = toVertex(e);
+      setDragStart(start);
+      setDragEnd(start);
+      const move = (ev) => setDragEnd(toVertex(ev));
+      const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
     if (e.button !== 2) return;
     e.preventDefault();
     if (dragStart) return;
@@ -9522,7 +9760,6 @@ export default function CastleBuilder() {
         // if current is a wall, do nothing — previously this silently overwrote the
         // wall with a fresh, unfinished gate; use "Abriss" to remove the wall first
       } else if (tool === 'graben') {
-        if (info.diagonal) return prev; // a ditch always runs along a tile edge, never cuts across one
         if (current && current.type === 'graben') delete next[key];
         else if (!current) next[key] = { type: 'graben', ...info, stage: 'foundation', progress: 0 };
         // a graben shares the same edge grid as walls/gates, so it can't be dug where
@@ -9631,6 +9868,21 @@ export default function CastleBuilder() {
   }, [tool]);
 
   const finishDrag = useCallback(() => {
+    if (tool === 'delete' && dragStart && dragEnd && dragStart !== dragEnd) {
+      // Abriss per Rechteck: everything on the wall grid inside the box goes at once.
+      const box = dragBox(dragStart, dragEnd);
+      SOUND.play('place');
+      setStructures((prev) => {
+        const hit = structuresInBox(prev, box);
+        if (!hit.length) return prev;
+        const next = { ...prev };
+        hit.forEach((k) => { delete next[k]; });
+        return next;
+      });
+      setDragStart(null);
+      setDragEnd(null);
+      return;
+    }
     const dragOk = tool === 'graben' ? moatUnlocked : !!structuresRef.current.keep;
     if (dragStart && dragEnd && dragStart !== dragEnd && (tool === 'wall' || tool === 'gate' || tool === 'graben') && dragOk) {
       const [i1, j1] = dragStart.split(',').map(Number);
@@ -9785,11 +10037,6 @@ export default function CastleBuilder() {
       list.push({ depth: viewDepth(vi, vj) + 0.3, node: <WallJunctionPost key={`post-${k}`} i={vi} j={vj} /> });
     });
 
-    // Reference point for "inside the castle", used to make sure a drawbridge always lays
-    // itself down on the outward side of its gate rather than into the courtyard.
-    const castleCenterI = (structures.keep && structures.keep.stage === 'done') ? structures.keep.i : DEPOT_I;
-    const castleCenterJ = (structures.keep && structures.keep.stage === 'done') ? structures.keep.j : DEPOT_J;
-
     Object.entries(structures).forEach(([key, s]) => {
       if (s.type === 'wall' || s.type === 'gate') {
         const junction1 = postVertices.has(`${s.i1},${s.j1}`);
@@ -9798,8 +10045,8 @@ export default function CastleBuilder() {
         const towerV2 = structures[`v:${s.i2},${s.j2}`];
         const towerAt1 = !!(towerV1 && towerV1.type === 'tower' && towerV1.stage === 'done');
         const towerAt2 = !!(towerV2 && towerV2.type === 'tower' && towerV2.stage === 'done');
-        const bridgeOutSign = s.type === 'gate' ? gateBridgeOutSign(s, castleCenterI, castleCenterJ) : -1;
-        const bridgedGrabenKey = s.type === 'gate' ? gateBridgedGrabenKey(s, castleCenterI, castleCenterJ) : null;
+        const bridgeOut = s.type === 'gate' ? gateBridgeOut(s, structures) : null;
+        const bridgedGrabenKey = s.type === 'gate' ? gateBridgedGrabenKey(s, structures) : null;
         const bridgedGraben = bridgedGrabenKey ? structures[bridgedGrabenKey] : null;
         const bridgeSpansGraben = !!(bridgedGraben && bridgedGraben.type === 'graben' && bridgedGraben.stage === 'done');
         let gateDepth = (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.4;
@@ -9821,9 +10068,9 @@ export default function CastleBuilder() {
         // the tower's own base instead of poking out past it.
         if (towerAt1) gateDepth = Math.min(gateDepth, viewDepth(s.i1, s.j1) + 0.6 - 0.05);
         if (towerAt2) gateDepth = Math.min(gateDepth, viewDepth(s.i2, s.j2) + 0.6 - 0.05);
-        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOutSign={bridgeOutSign} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} /> });
+        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOut={bridgeOut} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} /> });
       } else if (s.type === 'graben') {
-        list.push({ depth: (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
+        list.push({ depth: (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
       } else if (s.type === 'tower') {
         // A doorway on each visible tower face where a wall-walk runs into it. Which grid
         // sides face the camera depends on the view direction.
@@ -9839,8 +10086,16 @@ export default function CastleBuilder() {
     });
 
     list.push({ depth: viewDepth(DEPOT_I, DEPOT_J) - 0.1, node: <DepotMarker key="depot" /> });
-    list.push({ depth: viewDepth(DEPOT_I - 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-stone" i={DEPOT_I - 1.2} j={DEPOT_J + 0.9} amount={resources.stone} kind="stone" /> });
-    list.push({ depth: viewDepth(DEPOT_I + 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-wood" i={DEPOT_I + 1.2} j={DEPOT_J + 0.9} amount={resources.wood} kind="wood" /> });
+    // Once a Lagerhaus stands, the stores are kept inside it: no loose heaps on the yard, and
+    // the stock is shown over the (nearest) warehouse instead.
+    const storeHouses = doneLagerhausList(structures);
+    if (storeHouses.length) {
+      const lh = storeHouses.reduce((b, w) => (distance(w, { i: DEPOT_I, j: DEPOT_J }) < distance(b, { i: DEPOT_I, j: DEPOT_J }) ? w : b), storeHouses[0]);
+      list.push({ depth: 1e9, node: <StoreBadge key="store-badge" i={lh.i} j={lh.j} level={lh.level || 1} stone={resources.stone} wood={resources.wood} /> });
+    } else {
+      list.push({ depth: viewDepth(DEPOT_I - 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-stone" i={DEPOT_I - 1.2} j={DEPOT_J + 0.9} amount={resources.stone} kind="stone" /> });
+      list.push({ depth: viewDepth(DEPOT_I + 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-wood" i={DEPOT_I + 1.2} j={DEPOT_J + 0.9} amount={resources.wood} kind="wood" /> });
+    }
 
     workerUnits.forEach((w) => {
       let wMode;
@@ -9849,14 +10104,14 @@ export default function CastleBuilder() {
       else if (w.haulPhase) wMode = 'walk';
       else if (w.siteKey) wMode = w.arrived ? 'work' : 'walk';
       else wMode = 'idle';
-      list.push({ depth: viewDepth(w.curI, w.curJ) + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI} j={w.curJ} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
+      list.push({ depth: viewDepth(w.curI, w.curJ) + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI + workerLane(w).i} j={w.curJ + workerLane(w).j} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
     });
 
     const keepDone = structures.keep && structures.keep.stage === 'done';
     const garrisonAnchorI = keepDone ? structures.keep.i : DEPOT_I;
     const garrisonAnchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
     const garrisonPositions = siegeActive
-      ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds)
+      ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds, getCalendarDate(day).year - START_YEAR + 1)
       : computeGarrisonPositions(garrisonAnchorI, garrisonAnchorJ, soldiers.soldier, soldiers.archer);
     if (!battlePhase) list.push({ depth: viewDepth(garrisonAnchorI, garrisonAnchorJ) + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
 
@@ -9984,6 +10239,24 @@ export default function CastleBuilder() {
       }
     }
 
+    if (dragStart && dragEnd && tool === 'delete' && dragStart !== dragEnd) {
+      // Abriss per Rechteck: the box on the ground and a red mark on everything inside it.
+      const box = dragBox(dragStart, dragEnd);
+      const pts = [[box.i0, box.j0], [box.i1, box.j0], [box.i1, box.j1], [box.i0, box.j1]].map(([a, b]) => gridToScreen(a, b, 0));
+      list.push({ depth: -1e9, node: <polygon key="del-box" points={ptsStr(pts)} fill="rgba(192,57,43,0.16)" stroke="#c0392b" strokeWidth="2" strokeDasharray="6,4" pointerEvents="none" /> });
+      structuresInBox(structures, box).forEach((k) => {
+        const st = structures[k];
+        if (st.type === 'tower') {
+          const ringP = gridToScreen(st.i, st.j, TOWER_H * 0.5);
+          list.push({ depth: viewDepth(st.i, st.j) + 0.95, node: <ellipse key={`del-${k}`} cx={ringP.x} cy={ringP.y} rx="24" ry="14" fill="none" stroke="#c0392b" strokeWidth="4" opacity="0.85" pointerEvents="none" /> });
+          return;
+        }
+        const hgt = st.type === 'gate' ? PILLAR_H + MERLON_H : st.type === 'graben' ? 2 : WALL_H;
+        const p1 = gridToScreen(st.i1, st.j1, hgt * 0.55), p2 = gridToScreen(st.i2, st.j2, hgt * 0.55);
+        list.push({ depth: (viewDepth(st.i1, st.j1) + viewDepth(st.i2, st.j2)) / 2 + 0.95, node: <line key={`del-${k}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="#c0392b" strokeWidth="7" strokeLinecap="round" opacity="0.75" pointerEvents="none" /> });
+      });
+    }
+
     if (dragStart && dragEnd && (tool === 'wall' || tool === 'gate' || tool === 'graben')) {
       const [i1, j1] = dragStart.split(',').map(Number);
       const [i2, j2] = dragEnd.split(',').map(Number);
@@ -10014,7 +10287,7 @@ export default function CastleBuilder() {
     const garrisonAnchorI = keepDone ? structures.keep.i : DEPOT_I;
     const garrisonAnchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
     const positions = siegeActive
-      ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds)
+      ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds, getCalendarDate(day).year - START_YEAR + 1)
       : computeGarrisonPositions(garrisonAnchorI, garrisonAnchorJ, soldiers.soldier, soldiers.archer);
     positions.forEach((p) => list.push({ i: p.i, j: p.j, kind: 'soldier', data: { type: p.type } }));
     return list;
@@ -10710,7 +10983,7 @@ export default function CastleBuilder() {
             const keepDone = structures.keep && structures.keep.stage === 'done';
             const anchorI = keepDone ? structures.keep.i : DEPOT_I;
             const anchorJ = keepDone ? structures.keep.j : DEPOT_J - 1.4;
-            const positions = computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds);
+            const positions = computeSiegePositions(structures, soldiers, anchorI, anchorJ, recruitedKnightIds, pendingBattleYear != null ? pendingBattleYear - START_YEAR + 1 : getCalendarDate(day).year - START_YEAR + 1);
             setBattleUnits((prev) => {
               const attackers = prev.filter((u) => u.side === 'attacker');
               const defenders = prev.filter((u) => u.side === 'defender');
@@ -10803,8 +11076,8 @@ export default function CastleBuilder() {
             ))}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1, color: '#f1e6c8', minWidth: 110 }}>
-            <span style={{ fontFamily: "'Cinzel', serif", fontSize: '0.86rem' }}>{SEASON_ICON[calDate.month]} {calDate.dayOfMonth}. {monthName}</span>
-            <span className="cb-date-sub" style={{ fontSize: '0.74rem', color: '#b8a888', fontStyle: 'italic' }}>Anno {calDate.year} · {kingName ? `${kingName} ${regnalNumeral(kingOrdinal)}.` : ''}</span>
+            <span style={{ fontFamily: "'Cinzel', serif", fontSize: '0.86rem', whiteSpace: 'nowrap' }}>{SEASON_ICON[calDate.month]} {calDate.dayOfMonth}. {monthName} {calDate.year}</span>
+            <span className="cb-date-sub" style={{ fontSize: '0.74rem', color: '#b8a888', fontStyle: 'italic' }}>{kingName ? `${kingName} ${regnalNumeral(kingOrdinal)}. · ` : ''}{yearNum}. Jahr des Reiches</span>
           </div>
           <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(201,162,75,0.3)' }} />
 
@@ -12091,7 +12364,7 @@ export default function CastleBuilder() {
                     // close enough on screen to fight over the same click. Existing diagonal
                     // walls/gates stay inspectable/deletable regardless of Tab. A graben still
                     // never goes diagonal (a ditch always runs along a tile edge).
-                    const diagBuildTool = tool === 'wall' || tool === 'gate';
+                    const diagBuildTool = tool === 'wall' || tool === 'gate' || tool === 'graben';
                     const diagActive = e.diagonal
                       ? (tool === 'delete' || tool === null || (diagBuildTool && diagonalMode))
                       : !(diagBuildTool && diagonalMode);
