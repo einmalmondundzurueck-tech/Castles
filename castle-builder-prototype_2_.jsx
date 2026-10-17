@@ -3782,7 +3782,7 @@ function AmenityBody({ i, j, kind, level }) {
       const big = L >= 3;
       const nave = orientedRect(i + 0.06, j, 1, 0, half * 0.95, half * 0.62);
       const nq = computeFaceQuads(nave, 0, H);
-      els.push(<Block key="nave" corners={nave} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 30} />);
+      els.push(<Block key="schiff" corners={nave} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="stone" seed={seed} shadowHeight={H + 30} />);
       [0.2, 0.4, 0.6, 0.8].forEach((u, k) => {
         els.push(<ArchOpening key={`wa${k}`} face={nq.faceA} u={u} v0={0.2} dv={0.55} du={0.06} fill="#3a4a66" glow={big} />);
         els.push(<ArchOpening key={`wb${k}`} face={nq.faceB} u={u} v0={0.2} dv={0.55} du={0.06} fill="#3a4a66" glow={big} />);
@@ -3799,7 +3799,7 @@ function AmenityBody({ i, j, kind, level }) {
         const cb = P(ti, tj, tH + (big ? 24 : 18)), ct = P(ti, tj, tH + (big ? 30 : 24));
         els.push(<g key={`cr${k}`} pointerEvents="none"><line x1={cb.x} y1={cb.y} x2={ct.x} y2={ct.y} stroke="#c9a24b" strokeWidth="1.2" /><line x1={ct.x - 2.5} y1={ct.y + 2} x2={ct.x + 2.5} y2={ct.y + 2} stroke="#c9a24b" strokeWidth="1.2" /></g>);
       });
-      els.push(<ArchOpening key="portal" face={nq.faceB} u={0.08} v0={0.45} dv={0.55} du={0.07} fill="#4a3220" />);
+      els.push(<ArchOpening key="westdoor" face={nq.faceB} u={0.08} v0={0.45} dv={0.55} du={0.07} fill="#4a3220" />);
       top = H + (big ? 46 : 34);
       break;
     }
@@ -3809,7 +3809,7 @@ function AmenityBody({ i, j, kind, level }) {
       const rq = computeFaceQuads(range, 0, H);
       // Garden first (in front of the range when seen from the usual side).
       const bed = (a, b2) => { const pts = [[-0.8, -0.2], [0.8, -0.2], [0.8, 0.2], [-0.8, 0.2]].map(([x, y]) => P(i + x * half, j + half * 0.5 + (y + b2) * 0.35, 0.5)); return ptsStr(pts); };
-      els.push(<polygon key="garden" points={bed(0, 0)} fill="#5e7d3a" stroke="#3d5a2c" strokeWidth="0.6" pointerEvents="none" />);
+      els.push(<polygon key="beete" points={bed(0, 0)} fill="#5e7d3a" stroke="#3d5a2c" strokeWidth="0.6" pointerEvents="none" />);
       let rows = '';
       for (let k = 0; k < 4; k++) { const a = P(i - 0.7 * half, j + half * 0.38 + k * 0.07, 1), c = P(i + 0.7 * half, j + half * 0.38 + k * 0.07, 1); rows += `M${a.x} ${a.y}L${c.x} ${c.y}`; }
       els.push(<path key="rows" d={rows} stroke="#7a9a4a" strokeWidth="1.4" strokeDasharray="2,1.5" pointerEvents="none" />);
@@ -3824,7 +3824,7 @@ function AmenityBody({ i, j, kind, level }) {
     }
     case 'marktplatz': {
       // A paved square with market stalls under striped awnings round a market cross.
-      els.push(<Block key="pave" corners={corners} baseElev={0} topElev={1.5} topFill="#b8ad96" faceLeft="#9a8f78" faceRight="#7a705e" shadowHeight={0} />);
+      els.push(<Block key="pflaster" corners={corners} baseElev={0} topElev={1.5} topFill="#b8ad96" faceLeft="#9a8f78" faceRight="#7a705e" shadowHeight={0} />);
       const cross0 = P(i, j, 1.5), cross1 = P(i, j, 16);
       els.push(<g key="cross" pointerEvents="none"><line x1={cross0.x} y1={cross0.y} x2={cross1.x} y2={cross1.y} stroke="#8a8274" strokeWidth="2.4" /><line x1={cross1.x - 4} y1={cross1.y + 4} x2={cross1.x + 4} y2={cross1.y + 4} stroke="#8a8274" strokeWidth="2" /></g>);
       const stalls = [[-0.55, -0.55], [0.55, -0.55], [-0.55, 0.55], [0.55, 0.55], [0, -0.6], [0, 0.6]].slice(0, 2 + 2 * L);
