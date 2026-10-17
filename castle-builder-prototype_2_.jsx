@@ -1001,7 +1001,7 @@ const HOCHAMT_COST = 3; // Weihrauch
 const HOCHAMT_COOLDOWN = 180;
 const SMITH_TIER_IRON = { 1: 4, 2: 10 };
 const AMENITY_UPGRADE_GOODS = { kirche: { 3: { glas: 6 } }, kapelle: { 3: { glas: 3 } }, palas: { 3: { glas: 4, seide: 2 } } };
-const MARKET_INIT = { mult: Object.fromEntries(GOOD_IDS.map((g) => [g, 1])), caravan: null, nextCaravanDay: 75, supply: { hof: true, buerger: true }, status: { hof: [], buerger: [] } };
+const MARKET_INIT = { mult: Object.fromEntries(GOOD_IDS.map((g) => [g, 1])), caravan: null, nextCaravanDay: 75, supply: { hof: true, buerger: true }, status: { hof: [], buerger: [] }, auto: {}, autoReserve: 150 };
 function goodsProduction(owned) {
   const out = {};
   owned.forEach((r) => Object.entries(REGION_GOODS[r] || {}).forEach(([g, n]) => { out[g] = (out[g] || 0) + n; }));
@@ -1019,6 +1019,35 @@ function caravanInterval(structures, owned) {
 }
 function goodPrice(g, mult, owned) { return Math.max(1, Math.round(GOODS[g].base * (mult[g] || 1) * (owned.includes('strasse') ? STRASSE_DISCOUNT : 1))); }
 function goodSellPrice(g, mult) { return Math.max(1, Math.round(GOODS[g].base * (mult[g] || 1) * SELL_SHARE)); }
+// The Verwalter: for every good with a target he sells what lies above it and buys from the
+// Fernhändler up to it, never spending below the gold reserve.
+function runAutoTrade(goodsIn, gold, market, canSellHome) {
+  const goods = { ...goodsIn };
+  const mult = { ...market.mult };
+  const caravan = market.caravan ? { ...market.caravan, offers: { ...market.caravan.offers } } : null;
+  const sold = [], bought = [];
+  let delta = 0;
+  Object.entries(market.auto || {}).forEach(([k, target]) => {
+    if (target == null || !GOODS[k]) return;
+    const have = Math.floor(goods[k] || 0);
+    if (have > target && (canSellHome || caravan)) {
+      const qty = have - target;
+      const price = goodSellPrice(k, mult);
+      goods[k] -= qty; delta += qty * price;
+      mult[k] = Math.max(0.55, (mult[k] || 1) * Math.pow(0.97, qty));
+      sold.push(`${qty} ${GOODS[k].icon}`);
+    } else if (have < target && caravan && caravan.offers[k]) {
+      const o = caravan.offers[k];
+      const qty = Math.max(0, Math.min(target - have, o.stock, Math.floor((gold + delta - (market.autoReserve || 0)) / o.price)));
+      if (qty > 0) {
+        goods[k] = (goods[k] || 0) + qty; delta -= qty * o.price;
+        caravan.offers[k] = { ...o, stock: o.stock - qty };
+        bought.push(`${qty} ${GOODS[k].icon}`);
+      }
+    }
+  });
+  return { goods, mult, caravan, delta, sold, bought };
+}
 // A caravan brings two goods from afar and two others, a few of each.
 function makeCaravan(day, mult, owned) {
   const pick = (pool, n) => [...pool].sort(() => Math.random() - 0.5).slice(0, n);
@@ -8812,13 +8841,13 @@ export default function CastleBuilder() {
   const [toastNow, setToastNow] = useState(Date.now());
   const logEvent = useCallback((icon, text, tone = 'neutral') => {
     if (Date.now() > soundQuietUntilRef.current) {
-      if (icon === '🏗️' || icon === '🗼' || icon === '🏰' || icon === '🚪' || icon === '🧱' || icon === '🕳️') SOUND.play('complete');
+      if (icon === '🏗️' || icon === '🗼' || icon === '🏰' || icon === '🚪') SOUND.play('complete');
       else if (tone === 'good') SOUND.play('good');
       else if (tone === 'bad') SOUND.play('bad');
     }
     setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
   }, []);
-  const toasts = chronicle.filter((c) => toastNow - c.at < 9000).slice(0, 4);
+  const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
   // ---- Baukunst: research advances day by day -------------------------------------------------
   useEffect(() => {
     const prev = lastResearchDayRef.current;
@@ -8858,6 +8887,45 @@ export default function CastleBuilder() {
       return next;
     });
     SOUND.play('place');
+  };
+  // One rule for raising a single building or fortification a level — used by its info
+  // window and by the Baukunst overview alike.
+  const upgradeInfoFor = (st, key) => {
+    const lv = STRUCT_LEVELS[st.type];
+    const lvl = st.level || 1;
+    const maxL = lv ? lv.names.length : AMENITY_MAX_LEVEL;
+    const nextLvl = lvl + 1;
+    const goldCost = (lv ? lv.upgradeGold : AMENITY_UPGRADE_GOLD)[nextLvl];
+    const matCost = lvl < maxL ? getBuildCost({ type: st.type, kind: st.kind, level: nextLvl }) : null;
+    const needs = lvl < maxL ? (lv ? lv.needs[nextLvl - 1] : amenityUpgradeNeeds(st.kind, nextLvl)) : null;
+    const unknown = !!needs && !research.done.includes(needs);
+    const canUpgrade = st.stage === 'done' && lvl < maxL && !!key && !(lv && battlePhase) && !unknown;
+    const goodsCost = (!lv && AMENITY_UPGRADE_GOODS[st.kind] && AMENITY_UPGRADE_GOODS[st.kind][nextLvl]) || null;
+    const goodsOk = !goodsCost || Object.entries(goodsCost).every(([g, n]) => (goods[g] || 0) >= n);
+    const affordable = canUpgrade && resources.gold >= goldCost && goodsOk;
+    return { lv, lvl, maxL, nextLvl, goldCost, matCost, needs, unknown, canUpgrade, goodsCost, goodsOk, affordable };
+  };
+  const upgradeStructure = (key) => {
+    const st = structures[key];
+    if (!st) return;
+    const u = upgradeInfoFor(st, key);
+    if (!u.affordable) return;
+    setResources((r) => ({ ...r, gold: r.gold - u.goldCost }));
+    if (u.goodsCost) setGoods((g) => { const n = { ...g }; Object.entries(u.goodsCost).forEach(([id, c]) => { n[id] = (n[id] || 0) - c; }); return n; });
+    setStructures((prev) => {
+      if (!prev[key] || prev[key].stage !== 'done') return prev;
+      return { ...prev, [key]: { ...prev[key], level: u.nextLvl, stage: 'scaffold', progress: 0, blocked: false, upgrading: true } };
+    });
+    SOUND.play('place');
+  };
+  // Waffen- und Rüstungsforschung of the Schmiede.
+  const smithTierReady = (t) => smithTier === t - 1 && hasDoneAmenity(structures, 'schmied') && (t < 2 || waffenschmiedHired);
+  const raiseSmithTier = (t) => {
+    if (!smithTierReady(t) || resources.gold < SMITH_TIER_COST[t] || (goods.eisen || 0) < SMITH_TIER_IRON[t]) return;
+    setResources((r) => ({ ...r, gold: r.gold - SMITH_TIER_COST[t] }));
+    setGoods((g) => ({ ...g, eisen: (g.eisen || 0) - SMITH_TIER_IRON[t] }));
+    setSmithTier(t);
+    SOUND.play('coin');
   };
   // ---- Palas, Falknerei, Turnierplatz: feasts, hunts and tournaments --------------------------
   const estateReadyIn = (kind, cooldown) => Math.max(0, (estateLast[kind] != null ? estateLast[kind] : -99999) + cooldown - day);
@@ -8946,7 +9014,16 @@ export default function CastleBuilder() {
       logEvent('🐫', `Fernhändler am Burgtor: ${Object.keys(caravan.offers).map((k) => GOODS[k].name).join(', ')}`, 'good');
       setEventOutcome({ image: COURT_IMG_CARAVAN, tone: 'good', title: 'Fernhändler am Burgtor', text: `Packpferde und Wagen voller Ballen und Fässer: Die Händler bieten ${Object.keys(caravan.offers).map((k) => GOODS[k].name).join(', ')} feil. Sie bleiben etwa ${CARAVAN_STAY_DAYS} Tage — kauft und verkauft im Handelsfenster.` });
     }
-    const nm = { ...m, mult, caravan, nextCaravanDay, status };
+    let nm = { ...m, mult, caravan, nextCaravanDay, status };
+    const canSellHome = hasDoneAmenity(structuresRef.current, 'marktplatz');
+    const at = runAutoTrade(g, resourcesRef.current.gold, nm, canSellHome);
+    if (at.sold.length || at.bought.length) {
+      goodsRef.current = at.goods;
+      setGoods(at.goods);
+      setResources((r) => ({ ...r, gold: r.gold + at.delta }));
+      nm = { ...nm, mult: at.mult, caravan: at.caravan };
+      logEvent('📒', `Der Verwalter${at.sold.length ? ` verkauft ${at.sold.join(', ')}` : ''}${at.sold.length && at.bought.length ? ' und' : ''}${at.bought.length ? ` kauft ${at.bought.join(', ')}` : ''} (${at.delta >= 0 ? '+' : '−'}${Math.round(Math.abs(at.delta))} 🪙)`, 'neutral');
+    }
     marketRef.current = nm;
     setMarket(nm);
   };
@@ -8971,6 +9048,7 @@ export default function CastleBuilder() {
     setMarket((mk) => ({ ...mk, mult: { ...mk.mult, [k]: Math.max(0.55, (mk.mult[k] || 1) * Math.pow(0.97, qty)) } }));
     SOUND.play('coin');
   };
+  const setAutoTarget = (k, v) => setMarket((mk) => ({ ...mk, auto: { ...(mk.auto || {}), [k]: v == null ? null : Math.max(0, v) } }));
   const holdHochamt = () => {
     const church = hasDoneAmenity(structures, 'kapelle') || hasDoneAmenity(structures, 'kirche');
     if (!church || (goods.weihrauch || 0) < HOCHAMT_COST || estateReadyIn('hochamt', HOCHAMT_COOLDOWN) > 0) return;
@@ -9175,20 +9253,14 @@ export default function CastleBuilder() {
     prevDoneRef.current = done;
     if (!prev) return;
     const finished = Object.keys(done).filter((k) => !(k in prev) || done[k] > prev[k]);
-    // Walls come in long runs — summarise them instead of one line per segment.
-    const named = finished.filter((k) => !['wall', 'graben', 'gate'].includes(structures[k].type));
-    const walls = finished.filter((k) => structures[k].type === 'wall' && !(k in prev)).length;
-    const raised = finished.filter((k) => structures[k].type === 'wall' && (k in prev));
-    if (raised.length) logEvent('🧱', `${raised.length === 1 ? 'Ein Mauerstück' : `${raised.length} Mauerstücke`} zur ${levelName('wall', structures[raised[0]].level)} ausgebaut`, 'good');
-    const ditches = finished.filter((k) => structures[k].type === 'graben').length;
+    // Walls, ditches and towers are built by the dozen — no message for those, it'd be too much.
+    const named = finished.filter((k) => !['wall', 'graben', 'gate', 'tower'].includes(structures[k].type));
     const gates = finished.filter((k) => structures[k].type === 'gate').length;
     named.slice(0, 3).forEach((k) => {
       const st = structures[k];
-      logEvent(st.type === 'tower' ? '🗼' : st.type === 'keep' ? '🏰' : '🏗️', (prev[k] ? `${structureLabel(st)} ausgebaut` : `${structureLabel(st)} fertiggestellt`), 'good');
+      logEvent(st.type === 'keep' ? '🏰' : '🏗️', (prev[k] ? `${structureLabel(st)} ausgebaut` : `${structureLabel(st)} fertiggestellt`), 'good');
     });
-    if (walls) logEvent('🧱', walls === 1 ? 'Ein Mauerstück fertiggestellt' : `${walls} Mauerstücke fertiggestellt`, 'good');
     if (gates) logEvent('🚪', `${levelName('gate', structures[finished.find((k) => structures[k].type === 'gate')].level)} fertiggestellt`, 'good');
-    if (ditches) logEvent('🕳️', ditches === 1 ? 'Ein Grabenstück ausgehoben' : `${ditches} Grabenstücke ausgehoben`, 'good');
   }, [structures, logEvent]);
   const prevPopRef = useRef(null);
   useEffect(() => {
@@ -13446,27 +13518,35 @@ export default function CastleBuilder() {
                 // offer the expansion if it's finished, not yet at the top level, and the
                 // realm already knows how to build the next level (Baukunst).
                 const st = infoTarget.data;
-                const lv = STRUCT_LEVELS[st.type];
-                const lvl = st.level || 1;
-                const maxL = lv ? lv.names.length : AMENITY_MAX_LEVEL;
+                const { lv, lvl, maxL, nextLvl, goldCost, matCost, needs, unknown, canUpgrade, goodsCost, goodsOk, affordable } = upgradeInfoFor(st, infoTarget.structKey);
                 const texts = lv ? lv.text : (AMENITY_LEVEL_TEXT[st.kind] || []);
-                const nextLvl = lvl + 1;
-                const goldCost = (lv ? lv.upgradeGold : AMENITY_UPGRADE_GOLD)[nextLvl];
-                const matCost = lvl < maxL ? getBuildCost({ type: st.type, kind: st.kind, level: nextLvl }) : null;
-                const needs = lvl < maxL ? (lv ? lv.needs[nextLvl - 1] : amenityUpgradeNeeds(st.kind, nextLvl)) : null;
-                const unknown = needs && !research.done.includes(needs);
-                const canUpgrade = st.stage === 'done' && lvl < maxL && infoTarget.structKey && !(lv && battlePhase) && !unknown;
-                const goodsCost = (!lv && AMENITY_UPGRADE_GOODS[st.kind] && AMENITY_UPGRADE_GOODS[st.kind][nextLvl]) || null;
-                const goodsOk = !goodsCost || Object.entries(goodsCost).every(([g, n]) => (goods[g] || 0) >= n);
-                const affordable = canUpgrade && resources.gold >= goldCost && goodsOk;
                 return (
                   <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>
                       🏗️ Ausbaustufe {'★'.repeat(lvl)}{'☆'.repeat(maxL - lvl)}
                     </div>
-                    {unknown && st.stage === 'done' && (
-                      <div style={{ fontSize: '0.8rem', color: '#7a5a20', marginBottom: 6 }}>📐 Für Stufe {nextLvl} muss zuerst „{RESEARCH[needs].name}“ erforscht werden (Baukunst).</div>
-                    )}
+                    {unknown && st.stage === 'done' && (() => {
+                      // The research it needs can be started right here.
+                      const def = RESEARCH[needs];
+                      const missing = def.needs.filter((n) => !research.done.includes(n));
+                      const busy = research.current && research.current.id !== needs;
+                      const running = research.current && research.current.id === needs;
+                      const can = !research.current && !missing.length && resources.gold >= def.gold;
+                      const speed = (baumeisterHired ? 1 : RESEARCH_SLOW_MULT) / klosterResearchMult(structures);
+                      return (
+                        <div style={{ fontSize: '0.8rem', color: '#7a5a20', marginBottom: 6 }}>
+                          📐 Für Stufe {nextLvl} braucht es „{def.name}“.
+                          {running ? <div style={{ color: '#3d5a2c', marginTop: 4 }}>Wird gerade erforscht ({Math.round(research.current.progress * 100)} %).</div>
+                            : missing.length ? <div style={{ marginTop: 4 }}>Erst: {missing.map((n) => RESEARCH[n].name).join(', ')} — siehe Baukunst.</div>
+                            : (
+                              <button className="cb-btn" disabled={!can} onClick={() => startResearch(needs)}
+                                style={{ display: 'block', width: '100%', marginTop: 6, padding: '7px 10px', fontSize: '0.86rem', opacity: can ? 1 : 0.55 }}>
+                                {def.icon} {def.name} erforschen — {def.gold} 🪙 · {Math.round(def.days * speed)} Tage{busy ? ' (erst nach der laufenden Forschung)' : ''}
+                              </button>
+                            )}
+                        </div>
+                      );
+                    })()}
                     {st.upgrading && st.stage !== 'done' && (
                       <div style={{ fontSize: '0.82rem', color: '#7a5a20', marginBottom: 6 }}>Wird auf Stufe {lvl} ausgebaut — die Wirkung ruht, bis der Ausbau fertig ist.</div>
                     )}
@@ -13477,17 +13557,7 @@ export default function CastleBuilder() {
                     ))}
                     {canUpgrade && (
                       <button
-                        onClick={() => {
-                          if (!affordable) return;
-                          const k = infoTarget.structKey;
-                          setResources((r) => ({ ...r, gold: r.gold - goldCost }));
-                          if (goodsCost) setGoods((g) => { const n = { ...g }; Object.entries(goodsCost).forEach(([id, c]) => { n[id] = (n[id] || 0) - c; }); return n; });
-                          setStructures((prev) => {
-                            if (!prev[k] || prev[k].stage !== 'done') return prev;
-                            return { ...prev, [k]: { ...prev[k], level: nextLvl, stage: 'scaffold', progress: 0, blocked: false, upgrading: true } };
-                          });
-                          setInfoTarget(null);
-                        }}
+                        onClick={() => { if (!affordable) return; upgradeStructure(infoTarget.structKey); setInfoTarget(null); }}
                         disabled={!affordable}
                         style={{
                           marginTop: 8, width: '100%', padding: '8px 0', borderRadius: 3,
@@ -13534,48 +13604,20 @@ export default function CastleBuilder() {
                     Aktuelle Stufe: <strong>{smithTier === 0 ? 'Keine' : smithTier}</strong>
                     {' '}(Kampfschaden ×{SMITH_DAMAGE_MULT[smithTier].toFixed(2)}, Sold ×{SMITH_WAGE_MULT[smithTier].toFixed(1)})
                   </div>
-                  {smithTier < 1 && (
-                    <button
-                      onClick={() => {
-                        if (resources.gold < SMITH_TIER_COST[1] || (goods.eisen || 0) < SMITH_TIER_IRON[1]) return;
-                        setResources((r) => ({ ...r, gold: r.gold - SMITH_TIER_COST[1] }));
-                        setGoods((g) => ({ ...g, eisen: (g.eisen || 0) - SMITH_TIER_IRON[1] }));
-                        setSmithTier(1);
-                      }}
-                      disabled={resources.gold < SMITH_TIER_COST[1] || (goods.eisen || 0) < SMITH_TIER_IRON[1]}
-                      style={{
-                        width: '100%', padding: '8px 0', borderRadius: 3, marginBottom: 6,
-                        border: '2px solid #5C554A', background: resources.gold >= SMITH_TIER_COST[1] && (goods.eisen || 0) >= SMITH_TIER_IRON[1] ? 'transparent' : 'rgba(0,0,0,0.06)',
-                        color: '#2B2420', fontFamily: "'EB Garamond', serif", fontSize: '0.9rem',
-                        cursor: resources.gold >= SMITH_TIER_COST[1] && (goods.eisen || 0) >= SMITH_TIER_IRON[1] ? 'pointer' : 'not-allowed', opacity: resources.gold >= SMITH_TIER_COST[1] && (goods.eisen || 0) >= SMITH_TIER_IRON[1] ? 1 : 0.55,
-                      }}>
-                      Stufe 1 erforschen ({SMITH_TIER_COST[1]} 🪙 + {SMITH_TIER_IRON[1]} ⛓️)
-                    </button>
-                  )}
-                  {smithTier === 1 && (
-                    waffenschmiedHired ? (
-                      <button
-                        onClick={() => {
-                          if (resources.gold < SMITH_TIER_COST[2] || (goods.eisen || 0) < SMITH_TIER_IRON[2]) return;
-                          setResources((r) => ({ ...r, gold: r.gold - SMITH_TIER_COST[2] }));
-                        setGoods((g) => ({ ...g, eisen: (g.eisen || 0) - SMITH_TIER_IRON[2] }));
-                          setSmithTier(2);
-                        }}
-                        disabled={resources.gold < SMITH_TIER_COST[2] || (goods.eisen || 0) < SMITH_TIER_IRON[2]}
-                        style={{
-                          width: '100%', padding: '8px 0', borderRadius: 3,
-                          border: '2px solid #5C554A', background: resources.gold >= SMITH_TIER_COST[2] && (goods.eisen || 0) >= SMITH_TIER_IRON[2] ? 'transparent' : 'rgba(0,0,0,0.06)',
-                          color: '#2B2420', fontFamily: "'EB Garamond', serif", fontSize: '0.9rem',
-                          cursor: resources.gold >= SMITH_TIER_COST[2] && (goods.eisen || 0) >= SMITH_TIER_IRON[2] ? 'pointer' : 'not-allowed', opacity: resources.gold >= SMITH_TIER_COST[2] && (goods.eisen || 0) >= SMITH_TIER_IRON[2] ? 1 : 0.55,
-                        }}>
-                        Stufe 2 erforschen ({SMITH_TIER_COST[2]} 🪙 + {SMITH_TIER_IRON[2]} ⛓️)
+                  {smithTier < 2 && (smithTier === 1 && !waffenschmiedHired ? (
+                    <p style={{ fontSize: '0.78rem', color: '#5A5044', fontStyle: 'italic' }}>
+                      Für Stufe 2 muss zuerst der Waffenschmied-Bittsteller am Hofe angestellt worden sein.
+                    </p>
+                  ) : (() => {
+                    const t = smithTier + 1;
+                    const ok = resources.gold >= SMITH_TIER_COST[t] && (goods.eisen || 0) >= SMITH_TIER_IRON[t];
+                    return (
+                      <button className="cb-btn" disabled={!ok} onClick={() => raiseSmithTier(t)}
+                        style={{ width: '100%', padding: '8px 0', marginBottom: 6, fontSize: '0.9rem', opacity: ok ? 1 : 0.55 }}>
+                        Stufe {t} erforschen ({SMITH_TIER_COST[t]} 🪙 + {SMITH_TIER_IRON[t]} ⛓️)
                       </button>
-                    ) : (
-                      <p style={{ fontSize: '0.78rem', color: '#5A5044', fontStyle: 'italic' }}>
-                        Für Stufe 2 muss zuerst der Waffenschmied-Bittsteller am Hofe angestellt worden sein.
-                      </p>
-                    )
-                  )}
+                    );
+                  })())}
                   {smithTier >= 2 && (
                     <p style={{ fontSize: '0.82rem', color: '#3d5a2c', fontWeight: 700 }}>Höchste Stufe erreicht.</p>
                   )}
@@ -13647,7 +13689,7 @@ export default function CastleBuilder() {
           return { type, known, list, gold };
         }).filter((u) => u.list.length);
         return (
-          <Modal title="📐 Baukunst" onClose={() => setOpenPanel(null)} maxWidth={560}>
+          <Modal title="📐 Baukunst — Forschung und Ausbau" onClose={() => setOpenPanel(null)} maxWidth={560}>
             <p style={{ fontSize: '0.82rem', color: '#5A5044', lineHeight: 1.5, marginTop: 0 }}>
               Eure Burg beginnt als Motte mit Holzpalisade. Steinbau und die Kunst der Befestigung müssen erst erlernt werden — immer ein Vorhaben nach dem anderen.
               {' '}{baumeisterHired
@@ -13661,7 +13703,75 @@ export default function CastleBuilder() {
                 <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4 }}>noch etwa {Math.ceil((1 - cur.progress) * RESEARCH[cur.id].days * speed)} Tage</div>
               </div>
             )}
-            {[['Befestigung', RESEARCH_IDS.filter((id) => !RESEARCH[id].group)], ['Ausbau der Gebäude (Stufe 2 und 3)', RESEARCH_IDS.filter((id) => RESEARCH[id].group === 'bauten')]].map(([title, ids]) => (
+            {(() => {
+              // Every finished building with a next level, in one list: the same Ausbau as in
+              // its own info window.
+              const rows = Object.entries(structures).filter(([, st]) => st.type === 'amenity' && st.stage === 'done' && (st.level || 1) < AMENITY_MAX_LEVEL);
+              if (!rows.length) return null;
+              return (
+                <>
+                  <div className="cb-section-title" style={{ marginTop: 14 }}>Gebäude ausbauen</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {rows.map(([key, st]) => {
+                      const u = upgradeInfoFor(st, key);
+                      const tool = TOOLS.find((t) => t.id === st.kind);
+                      return (
+                        <div key={key} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 8px', borderRadius: 4, border: '1px solid rgba(92,85,74,0.25)' }}>
+                          <span style={{ fontSize: '1.1rem' }}>{tool ? tool.emoji : '🏗️'}</span>
+                          <div style={{ flex: 1, fontSize: '0.84rem' }}>
+                            <strong>{structureLabel(st)}</strong> {'★'.repeat(u.lvl)}{'☆'.repeat(u.maxL - u.lvl)}
+                            {u.unknown && <div style={{ fontSize: '0.74rem', color: '#7a5a20' }}>erst „{RESEARCH[u.needs].name}“ erforschen</div>}
+                            {!u.unknown && u.goodsCost && !u.goodsOk && <div style={{ fontSize: '0.74rem', color: '#7a2318' }}>es fehlt: {Object.entries(u.goodsCost).filter(([g, n]) => (goods[g] || 0) < n).map(([g, n]) => `${GOODS[g].icon} ${Math.floor(goods[g] || 0)}/${n}`).join(', ')}</div>}
+                          </div>
+                          {!u.unknown && (
+                            <button className="cb-btn" disabled={!u.affordable} onClick={() => upgradeStructure(key)}
+                              style={{ padding: '5px 9px', fontSize: '0.78rem', whiteSpace: 'nowrap', opacity: u.affordable ? 1 : 0.5 }}>
+                              Stufe {u.nextLvl} · {u.goldCost} 🪙{u.goodsCost ? Object.entries(u.goodsCost).map(([g, n]) => ` ${n}${GOODS[g].icon}`).join('') : ''}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
+            {hasDoneAmenity(structures, 'schmied') && (
+              <>
+                <div className="cb-section-title" style={{ marginTop: 14 }}>Waffen und Rüstung (Schmiede)</div>
+                <div style={{ fontSize: '0.82rem', marginBottom: 6 }}>
+                  Stufe {smithTier}/2 · Kampfschaden ×{SMITH_DAMAGE_MULT[smithTier].toFixed(2)}, Sold ×{SMITH_WAGE_MULT[smithTier].toFixed(1)}
+                </div>
+                {smithTier < 2 && (smithTier === 1 && !waffenschmiedHired
+                  ? <p style={{ fontSize: '0.78rem', color: '#5A5044', fontStyle: 'italic', margin: 0 }}>Für Stufe 2 braucht es einen Waffenschmied am Hofe.</p>
+                  : (() => {
+                    const t = smithTier + 1;
+                    const ok = resources.gold >= SMITH_TIER_COST[t] && (goods.eisen || 0) >= SMITH_TIER_IRON[t];
+                    return (
+                      <button className="cb-btn" disabled={!ok} onClick={() => raiseSmithTier(t)}
+                        style={{ width: '100%', padding: '7px 10px', fontSize: '0.84rem', textAlign: 'left', opacity: ok ? 1 : 0.55 }}>
+                        ⚒️ Stufe {t} erforschen — {SMITH_TIER_COST[t]} 🪙 + {SMITH_TIER_IRON[t]} ⛓️ Eisen
+                      </button>
+                    );
+                  })())}
+              </>
+            )}
+            {upgradable.length > 0 && (
+              <>
+                <div className="cb-section-title" style={{ marginTop: 14 }}>Befestigung ausbauen</div>
+                {upgradable.map((u) => (
+                  <button key={u.type} className="cb-btn" disabled={resources.gold < u.gold || !!battlePhase} onClick={() => upgradeAllOf(u.type)}
+                    style={{ width: '100%', marginBottom: 6, padding: '7px 10px', fontSize: '0.84rem', textAlign: 'left', opacity: resources.gold < u.gold ? 0.55 : 1 }}>
+                    {u.list.length}× {levelName(u.type, u.list[0].level)} → {levelName(u.type, Math.min(u.known, (u.list[0].level || 1) + 1))} ausbauen — {u.gold} 🪙 jetzt, Holz und Stein beim Bau
+                  </button>
+                ))}
+                <p style={{ fontSize: '0.74rem', color: '#5A5044', fontStyle: 'italic', margin: 0 }}>Während des Ausbaus steht das alte Bauwerk weiter und verteidigt die Burg.</p>
+              </>
+            )}
+            {research.done.length > 0 && (
+              <p style={{ fontSize: '0.78rem', color: '#3d5a2c', margin: '6px 0 0' }}>✔ Erforscht: {research.done.filter((id) => RESEARCH[id]).map((id) => `${RESEARCH[id].icon} ${RESEARCH[id].name}`).join(' · ')}</p>
+            )}
+            {[['Forschung: Befestigung', RESEARCH_IDS.filter((id) => !RESEARCH[id].group && !research.done.includes(id))], ['Forschung: Gebäude-Stufen 2 und 3', RESEARCH_IDS.filter((id) => RESEARCH[id].group === 'bauten' && !research.done.includes(id))]].filter(([, ids]) => ids.length).map(([title, ids]) => (
             <React.Fragment key={title}>
             <div className="cb-section-title" style={{ marginTop: 10 }}>{title}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -13690,18 +13800,6 @@ export default function CastleBuilder() {
             </div>
             </React.Fragment>
             ))}
-            {upgradable.length > 0 && (
-              <>
-                <div className="cb-section-title" style={{ marginTop: 14 }}>Bestehendes ausbauen</div>
-                {upgradable.map((u) => (
-                  <button key={u.type} className="cb-btn" disabled={resources.gold < u.gold || !!battlePhase} onClick={() => upgradeAllOf(u.type)}
-                    style={{ width: '100%', marginBottom: 6, padding: '7px 10px', fontSize: '0.84rem', textAlign: 'left', opacity: resources.gold < u.gold ? 0.55 : 1 }}>
-                    {u.list.length}× {levelName(u.type, u.list[0].level)} → {levelName(u.type, Math.min(u.known, (u.list[0].level || 1) + 1))} ausbauen — {u.gold} 🪙 jetzt, Holz und Stein beim Bau
-                  </button>
-                ))}
-                <p style={{ fontSize: '0.74rem', color: '#5A5044', fontStyle: 'italic', margin: 0 }}>Während des Ausbaus steht das alte Bauwerk weiter und verteidigt die Burg.</p>
-              </>
-            )}
           </Modal>
         );
       })()}
@@ -14578,7 +14676,7 @@ export default function CastleBuilder() {
             <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
               <thead>
                 <tr style={{ textAlign: 'left', fontSize: '0.74rem', color: '#6b5536' }}>
-                  <th style={cell}>Ware</th><th style={cell}>Lager</th><th style={cell}>pro Monat</th><th style={cell}>Verkauf</th><th style={cell}>Wofür</th>
+                  <th style={cell}>Ware</th><th style={cell}>Lager</th><th style={cell}>pro Monat</th><th style={cell}>Verkauf</th><th style={cell} title="Der Verwalter hält diesen Vorrat: Überschuss wird verkauft, Fehlendes bei den Fernhändlern gekauft">📒 Verwalter</th><th style={cell}>Wofür</th>
                 </tr>
               </thead>
               <tbody>
@@ -14600,6 +14698,18 @@ export default function CastleBuilder() {
                         <button style={smallBtn(canSell && have >= 1)} disabled={!canSell || have < 1} onClick={() => sellGood(k, 1)}>1</button>
                         <button style={smallBtn(canSell && have >= 5)} disabled={!canSell || have < 5} onClick={() => sellGood(k, 5)}>5</button>
                       </td>
+                      <td style={{ ...cell, whiteSpace: 'nowrap' }}>
+                        {market.auto && market.auto[k] != null ? (
+                          <>
+                            <button style={smallBtn(market.auto[k] > 0)} disabled={market.auto[k] <= 0} onClick={() => setAutoTarget(k, market.auto[k] - 1)}>−</button>
+                            <span style={{ display: 'inline-block', minWidth: 30, textAlign: 'center', fontWeight: 700 }} title="Zielvorrat">{market.auto[k]}</span>
+                            <button style={smallBtn(true)} onClick={() => setAutoTarget(k, market.auto[k] + 1)}>+</button>
+                            <button style={smallBtn(true)} title="Verwalter für diese Ware aus" onClick={() => setAutoTarget(k, null)}>✕</button>
+                          </>
+                        ) : (
+                          <button style={smallBtn(true)} onClick={() => setAutoTarget(k, Math.max(Math.ceil(use * 2), have))}>halten…</button>
+                        )}
+                      </td>
                       <td style={{ ...cell, color: '#5A5044', fontSize: '0.74rem' }}>{GOODS[k].use}</td>
                     </tr>
                   );
@@ -14607,6 +14717,12 @@ export default function CastleBuilder() {
               </tbody>
             </table>
             {!canSell && <div style={{ fontSize: '0.76rem', color: '#7a5a20', marginTop: -6, marginBottom: 10, fontStyle: 'italic' }}>Ohne Marktplatz im Dorf verkauft Ihr nur an Fernhändler, solange sie da sind.</div>}
+            <div style={{ fontSize: '0.78rem', color: '#4a4034', marginTop: -4, marginBottom: 12, lineHeight: 1.5 }}>
+              📒 <strong>Verwalter:</strong> Hält bei jeder Ware mit Ziel den Vorrat — jeden Monat und wenn Fernhändler kommen verkauft er den Überschuss und kauft Fehlendes nach. Er gibt nie Gold unter
+              {' '}<button style={smallBtn((market.autoReserve || 0) >= 50)} disabled={(market.autoReserve || 0) < 50} onClick={() => setMarket((mk) => ({ ...mk, autoReserve: Math.max(0, (mk.autoReserve || 0) - 50) }))}>−</button>
+              <strong style={{ margin: '0 4px' }}>{market.autoReserve || 0} 🪙</strong>
+              <button style={smallBtn(true)} onClick={() => setMarket((mk) => ({ ...mk, autoReserve: (mk.autoReserve || 0) + 50 }))}>+</button> aus.
+            </div>
 
             <div className="cb-parch" style={{ padding: '10px 12px', marginBottom: 10, boxShadow: 'inset 0 0 0 1px rgba(201,162,75,0.4)' }}>
               <div className="cb-section-title" style={{ marginBottom: 6 }}>🐫 Fernhändler</div>
