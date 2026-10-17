@@ -31,10 +31,70 @@ const OFFSET_Y = PAD_TOP;
 const VIEW_W = (rawMaxX - rawMinX) + PAD * 2;
 const VIEW_H = rawMaxY + PAD_TOP + PAD_BOTTOM;
 
+// ---- Drehbare Kamera ------------------------------------------------------------------------
+// The view can be turned in quarter steps so that the far side of a wall can be seen. The
+// game itself always thinks in grid coordinates; only the projection turns the grid first.
+// VIEW_ROT mirrors the camera state (like OWNED_REGIONS) so every drawing helper can use it.
+// The projected map has the same width and height in every direction — only the horizontal
+// offset depends on which grid side now runs to the left.
+let VIEW_ROT = 0;
+// Where the camera stands, by compass (east is +i, south is +j): it starts in the south-east.
+const VIEW_DIR_LABELS = ['SO', 'NO', 'NW', 'SW'];
+function setViewRotationGlobal(r) { VIEW_ROT = ((r % 4) + 4) % 4; }
+function toView(i, j) {
+  switch (VIEW_ROT) {
+    case 1: return [GRID_ROWS - j, i];
+    case 2: return [GRID_COLS - i, GRID_ROWS - j];
+    case 3: return [j, GRID_COLS - i];
+    default: return [i, j];
+  }
+}
+// A direction (not a position) turned into view space.
+function toViewVec(di, dj) {
+  switch (VIEW_ROT) {
+    case 1: return [-dj, di];
+    case 2: return [-di, -dj];
+    case 3: return [dj, -di];
+    default: return [di, dj];
+  }
+}
+// The inverse: which grid point lies under a point of the (unzoomed) map picture.
+function screenToGrid(x, y) {
+  const ox = VIEW_ROT % 2 ? PAD + GRID_COLS * (TILE_W / 2) : OFFSET_X;
+  const u = (x - ox) / (TILE_W / 2), v = (y - OFFSET_Y) / (TILE_H / 2);
+  const a = (u + v) / 2, b = (v - u) / 2;
+  switch (VIEW_ROT) {
+    case 1: return { i: b, j: GRID_ROWS - a };
+    case 2: return { i: GRID_COLS - a, j: GRID_ROWS - b };
+    case 3: return { i: GRID_COLS - b, j: a };
+    default: return { i: a, j: b };
+  }
+}
+// And back: the grid direction that points along a view direction.
+function fromViewVec(a, b) {
+  switch (VIEW_ROT) {
+    case 1: return [b, -a];
+    case 2: return [-a, -b];
+    case 3: return [-b, a];
+    default: return [a, b];
+  }
+}
+// How far a grid step moves sideways on screen (positive: to the right).
+function screenDxOf(di, dj) {
+  const [a, b] = toViewVec(di, dj);
+  return a - b;
+}
+// Painter's depth of a grid point as seen from the current camera: larger is nearer.
+function viewDepth(i, j) {
+  const [a, b] = toView(i, j);
+  return a + b;
+}
 function gridToScreen(i, j, elev = 0) {
+  const [a, b] = toView(i, j);
+  const ox = VIEW_ROT % 2 ? PAD + GRID_COLS * (TILE_W / 2) : OFFSET_X;
   return {
-    x: (i - j) * (TILE_W / 2) + OFFSET_X,
-    y: (i + j) * (TILE_H / 2) - elev + OFFSET_Y,
+    x: (a - b) * (TILE_W / 2) + ox,
+    y: (a + b) * (TILE_H / 2) - elev + OFFSET_Y,
   };
 }
 
@@ -1099,7 +1159,8 @@ function centroid(corners) {
 // the visible ones, the two opposite edges are hidden behind the building.
 function frontIndex(corners) {
   let best = 0, bestV = -Infinity;
-  corners.forEach(([ci, cj], k) => {
+  corners.forEach(([gi, gj], k) => {
+    const [ci, cj] = toView(gi, gj);
     const v = ci + cj + (ci - cj) * 1e-4;
     if (v > bestV) { bestV = v; best = k; }
   });
@@ -1131,11 +1192,15 @@ function convexHull(points) {
 const SHADOW_DI = -0.0062;
 const SHADOW_DJ = 0.0105;
 const SHADOW_FILL = 'rgba(16,12,4,0.27)';
+// The sun stays put on screen when the camera turns, so the shadow is an offset in screen space.
+const SHADOW_DX = (SHADOW_DI - SHADOW_DJ) * (TILE_W / 2);
+const SHADOW_DY = (SHADOW_DI + SHADOW_DJ) * (TILE_H / 2);
 function castShadowPoints(corners, height) {
   const pts = [];
   corners.forEach(([ci, cj]) => {
-    pts.push(gridToScreen(ci, cj, 0));
-    pts.push(gridToScreen(ci + height * SHADOW_DI, cj + height * SHADOW_DJ, 0));
+    const p = gridToScreen(ci, cj, 0);
+    pts.push(p);
+    pts.push({ x: p.x + height * SHADOW_DX, y: p.y + height * SHADOW_DY });
   });
   return ptsStr(convexHull(pts));
 }
@@ -1254,7 +1319,7 @@ function Block({ corners, baseElev, topElev, topFill, faceLeft, faceRight, textu
 // Crenellations: a row of small stone teeth, painted back-to-front so the far ones never
 // overlap the near ones.
 function Merlons({ centers, ux = 1, uy = 0, along, across, base, height, pal, seed = 0 }) {
-  const sorted = centers.slice().sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+  const sorted = centers.slice().sort((a, b) => viewDepth(a[0], a[1]) - viewDepth(b[0], b[1]));
   return (
     <g pointerEvents="none">
       {sorted.map(([ci, cj], k) => (
@@ -1272,7 +1337,7 @@ function PyramidRoof({ corners, baseElev, apexElev, color }) {
   const n = corners.length;
   const faces = corners.map((c, k) => {
     const d = corners[(k + 1) % n];
-    const mi = (c[0] + d[0]) / 2 - ci, mj = (c[1] + d[1]) / 2 - cj;
+    const [mi, mj] = toViewVec((c[0] + d[0]) / 2 - ci, (c[1] + d[1]) / 2 - cj);
     return { a: c, b: d, depth: mi + mj, lit: mi - mj };
   }).sort((x, y) => x.depth - y.depth);
   return (
@@ -1303,31 +1368,35 @@ function GableRoof({ i, j, half, halfJ, baseElev, roofH, color, wallPal, axis = 
     return d;
   };
   const stroke = 'rgba(28,20,12,0.5)';
+  // Both slopes and both gable ends are built; which of them face the camera depends on the
+  // view direction. A slope's tone follows where it faces on screen (the sun is to the right).
+  let slopes, gables, r0, r1;
   if (axis === 'i') {
     const hi = hI + overhang * 0.4, hj = hJ + overhang;
     const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
-    const r0 = P(i - hi, j, T), r1 = P(i + hi, j, T);
-    const g0 = P(i + hI, j - hJ, B), g1 = P(i + hI, j + hJ, B), gr = P(i + hI, j, T - roofH * (overhang * 0.6 / hj));
-    return (
-      <g pointerEvents="none">
-        <polygon points={ptsStr([e0, e1, r1, r0])} fill={shade(color, 0.14)} stroke={stroke} strokeWidth="0.8" />
-        <polygon points={ptsStr([g0, g1, gr])} fill={wallPal.left} stroke={stroke} strokeWidth="0.8" />
-        <polygon points={ptsStr([e3, e2, r1, r0])} fill={color} stroke={stroke} strokeWidth="0.8" />
-        <path d={lines(e3, e2, r0, r1)} stroke="rgba(25,15,8,0.28)" strokeWidth="0.8" fill="none" />
-        <line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke={shade(color, -0.35)} strokeWidth="1.6" strokeLinecap="round" />
-      </g>
-    );
+    r0 = P(i - hi, j, T); r1 = P(i + hi, j, T);
+    const gH = T - roofH * (overhang * 0.6 / hj);
+    slopes = [{ pts: [e0, e1, r1, r0], n: [0, -1] }, { pts: [e3, e2, r1, r0], n: [0, 1] }];
+    gables = [{ pts: [P(i + hI, j - hJ, B), P(i + hI, j + hJ, B), P(i + hI, j, gH)], n: [1, 0] }, { pts: [P(i - hI, j - hJ, B), P(i - hI, j + hJ, B), P(i - hI, j, gH)], n: [-1, 0] }];
+  } else {
+    const hi = hI + overhang, hj = hJ + overhang * 0.4;
+    const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
+    r0 = P(i, j - hj, T); r1 = P(i, j + hj, T);
+    const gH = T - roofH * (overhang * 0.6 / hi);
+    slopes = [{ pts: [e0, e3, r1, r0], n: [-1, 0] }, { pts: [e1, e2, r1, r0], n: [1, 0] }];
+    gables = [{ pts: [P(i - hI, j + hJ, B), P(i + hI, j + hJ, B), P(i, j + hJ, gH)], n: [0, 1] }, { pts: [P(i - hI, j - hJ, B), P(i + hI, j - hJ, B), P(i, j - hJ, gH)], n: [0, -1] }];
   }
-  const hi = hI + overhang, hj = hJ + overhang * 0.4;
-  const e0 = P(i - hi, j - hj, B), e1 = P(i + hi, j - hj, B), e2 = P(i + hi, j + hj, B), e3 = P(i - hi, j + hj, B);
-  const r0 = P(i, j - hj, T), r1 = P(i, j + hj, T);
-  const g0 = P(i - hI, j + hJ, B), g1 = P(i + hI, j + hJ, B), gr = P(i, j + hJ, T - roofH * (overhang * 0.6 / hi));
+  const facing = (o) => { const [a, b] = toViewVec(o.n[0], o.n[1]); return { right: a - b > 0, near: a + b > 0 }; };
+  const tone = (o) => { const f = facing(o); return f.right ? (f.near ? 0.1 : 0.14) : (f.near ? 0 : -0.12); };
+  const back = slopes.find((o) => !facing(o).near), front = slopes.find((o) => facing(o).near);
+  const gable = gables.find((o) => facing(o).near);
+  const fp = front.pts;
   return (
     <g pointerEvents="none">
-      <polygon points={ptsStr([e0, e3, r1, r0])} fill={shade(color, -0.12)} stroke={stroke} strokeWidth="0.8" />
-      <polygon points={ptsStr([g0, g1, gr])} fill={wallPal.right} stroke={stroke} strokeWidth="0.8" />
-      <polygon points={ptsStr([e1, e2, r1, r0])} fill={shade(color, 0.1)} stroke={stroke} strokeWidth="0.8" />
-      <path d={lines(e1, e2, r0, r1)} stroke="rgba(25,15,8,0.28)" strokeWidth="0.8" fill="none" />
+      <polygon points={ptsStr(back.pts)} fill={shade(color, tone(back))} stroke={stroke} strokeWidth="0.8" />
+      <polygon points={ptsStr(gable.pts)} fill={facing(gable).right ? wallPal.left : wallPal.right} stroke={stroke} strokeWidth="0.8" />
+      <polygon points={ptsStr(fp)} fill={shade(color, tone(front))} stroke={stroke} strokeWidth="0.8" />
+      <path d={lines(fp[0], fp[1], fp[3], fp[2])} stroke="rgba(25,15,8,0.28)" strokeWidth="0.8" fill="none" />
       <line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke={shade(color, -0.35)} strokeWidth="1.6" strokeLinecap="round" />
     </g>
   );
@@ -1522,7 +1591,7 @@ function RaggedTop({ corners, elev, pal, seed }) {
       stones.push({ si, sj, ux, uy, h, len: Math.min(0.06, len / cnt * 0.42) });
     }
   }
-  stones.sort((x, y) => (x.si + x.sj) - (y.si + y.sj));
+  stones.sort((x, y) => viewDepth(x.si, x.sj) - viewDepth(y.si, y.sj));
   return (
     <g pointerEvents="none">
       {stones.map((s, k) => (
@@ -1836,8 +1905,15 @@ const TileFace = React.memo(function TileFace({ i, j }) {
 const MAP_BASE_DEPTH = 30;
 function MapBase() {
   const D = MAP_BASE_DEPTH;
-  const sideJ = [gridToScreen(0, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, -D), gridToScreen(0, GRID_ROWS, -D)];
-  const sideI = [gridToScreen(GRID_COLS, 0, 0), gridToScreen(GRID_COLS, GRID_ROWS, 0), gridToScreen(GRID_COLS, GRID_ROWS, -D), gridToScreen(GRID_COLS, 0, -D)];
+  // The two sides of the board that face the camera: those meeting at its nearest corner.
+  const corners = [[0, 0], [GRID_COLS, 0], [GRID_COLS, GRID_ROWS], [0, GRID_ROWS]];
+  const f = frontIndex(corners);
+  const front = corners[f];
+  const [nA, nB] = [corners[(f + 3) % 4], corners[(f + 1) % 4]];
+  const [left, right] = gridToScreen(nA[0], nA[1], 0).x < gridToScreen(nB[0], nB[1], 0).x ? [nA, nB] : [nB, nA];
+  const side = (n) => [gridToScreen(n[0], n[1], 0), gridToScreen(front[0], front[1], 0), gridToScreen(front[0], front[1], -D), gridToScreen(n[0], n[1], -D)];
+  const sideJ = side(left);
+  const sideI = side(right);
   const strata = (side, frac, color, w) => {
     const a = lerpPt(side[0], side[3], frac), b = lerpPt(side[1], side[2], frac);
     return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={w} />;
@@ -2149,7 +2225,7 @@ function TowerBody({ i, j, level = 1, damageFrac = 0, doorA = false, doorB = fal
     });
   }
   const turretOff = ph * 0.95;
-  const turrets = L >= 3 && showMerlons ? [[i - turretOff, j - turretOff], [i + turretOff, j - turretOff], [i + turretOff, j + turretOff], [i - turretOff, j + turretOff]].sort((a, b) => (a[0] + a[1]) - (b[0] + b[1])) : [];
+  const turrets = L >= 3 && showMerlons ? [[i - turretOff, j - turretOff], [i + turretOff, j - turretOff], [i + turretOff, j + turretOff], [i - turretOff, j + turretOff]].sort((a, b) => viewDepth(a[0], a[1]) - viewDepth(b[0], b[1])) : [];
   const flagBase = gridToScreen(i, j, topH), flagTop = gridToScreen(i, j, topH + 24);
   return (
     <g>
@@ -2268,7 +2344,7 @@ const KeepNode = React.memo(function KeepNode({ i, j, ghost, ghostBlocked, stage
   const roofItems = [];
   rimPoints(i, j, ph - 0.07, 3, true).forEach(([ci, cj]) => roofItems.push({ kind: 'm', ci, cj }));
   turretCenters.forEach(([ci, cj]) => roofItems.push({ kind: 't', ci, cj }));
-  roofItems.sort((a, b) => (a.ci + a.cj) - (b.ci + b.cj));
+  roofItems.sort((a, b) => viewDepth(a.ci, a.cj) - viewDepth(b.ci, b.cj));
   const mPal = shadePal(pal, 0.05);
   const flagBase = gridToScreen(i, j, KEEP_H);
   const flagTop = gridToScreen(i, j, KEEP_H + 36);
@@ -2392,7 +2468,8 @@ function DitchPit({ corners, depth, filled, ghost, ghostBlocked, seed, clipId })
   const bankFace = (a, b, k) => {
     const A = corners[a], Bc = corners[b];
     const pts = [gridToScreen(A[0], A[1], 0.4), gridToScreen(Bc[0], Bc[1], 0.4), gridToScreen(Bc[0], Bc[1], floorElev), gridToScreen(A[0], A[1], floorElev)];
-    const facesI = Math.abs(Bc[1] - A[1]) > Math.abs(Bc[0] - A[0]);
+    const [va, vb] = toViewVec(Bc[0] - A[0], Bc[1] - A[1]);
+    const facesI = Math.abs(vb) > Math.abs(va);
     return <polygon key={k} points={ptsStr(pts)} fill={facesI ? '#5a4129' : '#3f2d1c'} stroke="rgba(20,12,6,0.4)" strokeWidth="0.6" />;
   };
   const floor = corners.map(([a, b]) => gridToScreen(a, b, floorElev));
@@ -2510,8 +2587,10 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
 
     // Gatehouse: two stone pillars joined by an arched lintel with its own battlements.
     const s0i = i1 + ux * ph, s0j = j1 + uy * ph, e0i = i2 - ux * ph, e0j = j2 - uy * ph;
-    let fs = (gpx + gpy) >= 0 ? 1 : -1;
-    if (Math.abs(gpx + gpy) < 1e-6) fs = 1;
+    // The arched lintel goes on whichever side of the gate faces the camera.
+    const [gvx, gvy] = toViewVec(gpx, gpy);
+    let fs = (gvx + gvy) >= 0 ? 1 : -1;
+    if (Math.abs(gvx + gvy) < 1e-6) fs = 1;
     const lintelTop = [[s0i + gpx * t, s0j + gpy * t], [e0i + gpx * t, e0j + gpy * t], [e0i - gpx * t, e0j - gpy * t], [s0i - gpx * t, s0j - gpy * t]].map(([a, b]) => gridToScreen(a, b, GH));
     const fsI = s0i + gpx * t * fs, fsJ = s0j + gpy * t * fs, feI = e0i + gpx * t * fs, feJ = e0j + gpy * t * fs;
     const spring = GH * 0.42, crown = GH - 6;
@@ -2523,12 +2602,12 @@ const WallNode = React.memo(function WallNode({ i1, j1, i2, j2, kind, ghost, gho
     }
     const frontTopA = gridToScreen(fsI, fsJ, GH), frontTopB = gridToScreen(feI, feJ, GH);
     const lintelFace = [frontTopA, frontTopB, ...arc.slice().reverse()];
-    const faceLit = (gpx * fs) > (gpy * fs);
+    const faceLit = (gvx * fs) > (gvy * fs);
     const lintelFill = faceLit ? pal.left : pal.right;
     const archPath = arc.map((p, k) => `${k ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
     const pillar1 = <Block key="p1" corners={orientedRect(i1, j1, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed} shadowHeight={GH + MERLON_H} />;
     const pillar2 = <Block key="p2" corners={orientedRect(i2, j2, ux, uy, ph, ph)} baseElev={0} topElev={GH} topFill={pal.top} faceLeft={pal.left} faceRight={pal.right} texture="stone" seed={seed + 9} shadowHeight={GH + MERLON_H} />;
-    const p1First = (i1 + j1) <= (i2 + j2);
+    const p1First = viewDepth(i1, j1) <= viewDepth(i2, j2);
     const crenels = [];
     [[i1, j1], [i2, j2]].forEach(([ci, cj]) => {
       [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b]) => crenels.push([ci + (ux * a - uy * b) * (ph - 0.05), cj + (uy * a + ux * b) * (ph - 0.05)]));
@@ -4527,11 +4606,11 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     // Facing: sprites are drawn looking right; mirror them when the step (or, once on site,
     // the spot they're working on) lies to the left on screen.
     let faceLeft = !!w.faceLeft;
-    const screenDx = (newI - w.curI) - (newJ - w.curJ);
+    const screenDx = screenDxOf(newI - w.curI, newJ - w.curJ);
     if (Math.abs(screenDx) > 0.002) faceLeft = screenDx < 0;
     else if (atTarget && w.siteKey && structures[w.siteKey]) {
       const an = siteAnchor(structures[w.siteKey]);
-      const lookDx = (an.i - newI) - (an.j - newJ);
+      const lookDx = screenDxOf(an.i - newI, an.j - newJ);
       if (Math.abs(lookDx) > 0.02) faceLeft = lookDx < 0;
     }
     const stuckTicks = atTarget || madeProgress ? 0 : ((w.stuckTicks || 0) >= 12 ? 0 : (w.stuckTicks || 0) + 1);
@@ -5438,11 +5517,11 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     const p = prevById.get(u.id);
     if (!p) return;
     if (u.hp < p.hp) u.hitTick = tickCount || 0;
-    const sdx = (u.i - p.i) - (u.j - p.j);
+    const sdx = screenDxOf(u.i - p.i, u.j - p.j);
     if (Math.abs(sdx) > 0.002) u.faceLeft = sdx < 0;
     else if (u.targetId != null && byId.get(u.targetId)) {
       const t = byId.get(u.targetId);
-      const ldx = (t.i - u.i) - (t.j - u.j);
+      const ldx = screenDxOf(t.i - u.i, t.j - u.j);
       if (Math.abs(ldx) > 0.02) u.faceLeft = ldx < 0;
     }
   });
@@ -5540,7 +5619,7 @@ const MinimapTerrain = React.memo(function MinimapTerrain({ ownedKey }) { // esl
   }
   return <g>{cells}</g>;
 });
-function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits }) {
+function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits, viewRot }) {
   const scale = MINIMAP_W / VIEW_W;
   const h = VIEW_H * scale;
   const marks = [];
@@ -5565,7 +5644,7 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
           onJump(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
         }}>
         <rect width={VIEW_W} height={VIEW_H} fill="#171a12" />
-        <MinimapTerrain ownedKey={[...OWNED_REGIONS].join(',')} />
+        <MinimapTerrain ownedKey={[...OWNED_REGIONS].join(',')} viewRot={viewRot} />
         {marks}
         {workers.map((w) => { const p = gridToScreen(w.curI, w.curJ, 0); return <circle key={w.id} cx={p.x} cy={p.y} r="9" fill="#ffe08a" />; })}
         {(battleUnits || []).filter((u) => u.hp > 0).map((u) => { const p = gridToScreen(u.i, u.j, 0); return <circle key={`b${u.id}`} cx={p.x} cy={p.y} r="12" fill={u.side === 'attacker' ? '#e0452f' : '#5fb2e8'} />; })}
@@ -6674,12 +6753,15 @@ export default function CastleBuilder() {
   const [forestTrees, setForestTrees] = useState(() => generateForestTrees());
   // ---- Landstriche: owned regions beyond the heartland, and a Feldzug under way ----------
   const [ownedRegions, setOwnedRegions] = useState([]);
+  // Camera direction in quarter turns (0 = the original view from the south-east).
+  const [viewRot, setViewRot] = useState(0);
   const [expedition, setExpedition] = useState(null);
   const [reichFocus, setReichFocus] = useState(null);
   const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0 });
   const ownedRegionsRef = useRef(ownedRegions);
   useEffect(() => { ownedRegionsRef.current = ownedRegions; }, [ownedRegions]);
   setOwnedRegionsGlobal(ownedRegions); // keep the module-level helpers in step, every render
+  setViewRotationGlobal(viewRot);
   const villageCap = MAX_VILLAGE_POP + regionPopBonus(ownedRegions);
   const expeditionRef = useRef(expedition);
   useEffect(() => { expeditionRef.current = expedition; }, [expedition]);
@@ -8547,6 +8629,47 @@ export default function CastleBuilder() {
   }, [jumpTo]);
   const centerOnCastleRef = useRef(null);
   centerOnCastleRef.current = centerOnCastle;
+  // Turn the camera a quarter step; whatever was in the middle of the screen stays there.
+  const rotateView = useCallback((d) => {
+    const vw = viewportSize.w, vh = viewportSize.h, z = zoomRef.current, p0 = panRef.current;
+    const g = screenToGrid((vw / 2 - p0.x) / z, (vh / 2 - p0.y) / z);
+    const nr = (VIEW_ROT + d + 4) % 4;
+    setViewRotationGlobal(nr);
+    const p = gridToScreen(g.i, g.j, 0);
+    setPan({ x: vw / 2 - p.x * z, y: vh / 2 - p.y * z });
+    setViewRot(nr);
+  }, [viewportSize]);
+  // Vollbild: the whole game fills the screen. Some embeddings don't allow it — then say how.
+  const gameRootRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [hudHint, setHudHint] = useState(null);
+  useEffect(() => {
+    const on = () => setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
+    document.addEventListener('fullscreenchange', on);
+    document.addEventListener('webkitfullscreenchange', on);
+    return () => { document.removeEventListener('fullscreenchange', on); document.removeEventListener('webkitfullscreenchange', on); };
+  }, []);
+  useEffect(() => {
+    if (!hudHint) return undefined;
+    const t = setTimeout(() => setHudHint(null), 4000);
+    return () => clearTimeout(t);
+  }, [hudHint]);
+  const toggleFullscreen = useCallback(() => {
+    const blocked = () => setHudHint('Vollbild ist hier nicht erlaubt — drückt F11 im Browser');
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        const r = exit && exit.call(document);
+        if (r && r.catch) r.catch(() => {});
+        return;
+      }
+      const el = gameRootRef.current || document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (!req || document.fullscreenEnabled === false) { blocked(); return; }
+      const r = req.call(el);
+      if (r && r.catch) r.catch(blocked);
+    } catch (err) { blocked(); }
+  }, []);
   // The board is far larger than the screen: start out looking at the heartland.
   const initialCenterRef = useRef(0);
   useEffect(() => {
@@ -8566,6 +8689,9 @@ export default function CastleBuilder() {
       if (k === '-') { zoomBy(1 / 1.2); return; }
       if (k === '?') { setHelpOpen((o) => !o); return; }
       if (k === 'h' || k === 'H') { centerOnCastle(); return; }
+      if (k === ',' || k === '<') { rotateView(-1); return; }
+      if (k === '.' || k === '>') { rotateView(1); return; }
+      if (k === 'v' || k === 'V') { toggleFullscreen(); return; }
       if (k === 'c' || k === 'C') { setOpenPanel((p) => (p === 'chronik' ? null : 'chronik')); return; }
       if (k === 's' || k === 'S') { setOpenPanel((p) => (p === 'speicher' ? null : 'speicher')); return; }
       if (k === 'm' || k === 'M') { setSettings((st) => ({ ...st, muted: !st.muted })); return; }
@@ -8584,7 +8710,7 @@ export default function CastleBuilder() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [blockingEventActive, openPanel, infoTarget, helpOpen, zoomBy, centerOnCastle, battlePhase]);
+  }, [blockingEventActive, openPanel, infoTarget, helpOpen, zoomBy, centerOnCastle, rotateView, toggleFullscreen, battlePhase]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -9305,18 +9431,18 @@ export default function CastleBuilder() {
     forestTrees.forEach((t) => {
       if (t.felled) return;
       const node = <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} />;
-      list.push({ depth: t.i + t.j + 0.5, node: foreign(t) ? <g key={`tree-${t.id}`} opacity="0.5">{node}</g> : node });
+      list.push({ depth: viewDepth(t.i, t.j) + 0.5, node: foreign(t) ? <g key={`tree-${t.id}`} opacity="0.5">{node}</g> : node });
     });
     hillRocks.forEach((r) => {
       if (r.depleted) return;
       const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
-      list.push({ depth: r.i + r.j + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
+      list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
     });
     VILLAGE_HOUSE_SPOTS.slice(0, villagePop).forEach((spot, idx) => {
-      list.push({ depth: spot.i + spot.j + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
+      list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
     });
     return list;
-  }, [forestTrees, hillRocks, villagePop, ownedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edgeInteractive = !battlePhase && (tool === 'wall' || tool === 'gate' || tool === 'graben' || tool === 'delete' || tool === null);
   const vertexInteractive = !battlePhase && (tool === 'tower' || tool === 'delete' || tool === null);
@@ -9617,16 +9743,16 @@ export default function CastleBuilder() {
     const list = [];
     for (let j = 0; j < GRID_ROWS; j++) for (let i = 0; i < GRID_COLS; i++) list.push(<TileFace key={`t-${i}-${j}`} i={i} j={j} />);
     return list;
-  }, []);
+  }, [viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const drawables = useMemo(() => {
     const list = [];
     props.forEach((p) => list.push(p));
 
     const lumberjackWorking = workerUnits.some((w) => w.type === 'lumberjack' && w.atTarget);
-    list.push({ depth: WOOD_GATHER.i + (WOOD_GATHER.j - 0.6) + 0.3, node: <FellingTree key="felling-tree" i={WOOD_GATHER.i} j={WOOD_GATHER.j - 0.6} active={lumberjackWorking} /> });
-    if (piles.stone > 0.05) list.push({ depth: STONE_GATHER.i + STONE_GATHER.j + 0.7 + 0.6, node: <PileProp key="pile-stone" i={STONE_GATHER.i} j={STONE_GATHER.j + 0.7} amount={piles.stone} kind="stone" /> });
-    if (piles.wood > 0.05) list.push({ depth: WOOD_GATHER.i + (WOOD_GATHER.j + 0.7) + 0.6, node: <PileProp key="pile-wood" i={WOOD_GATHER.i} j={WOOD_GATHER.j + 0.7} amount={piles.wood} kind="wood" /> });
+    list.push({ depth: viewDepth(WOOD_GATHER.i, WOOD_GATHER.j - 0.6) + 0.3, node: <FellingTree key="felling-tree" i={WOOD_GATHER.i} j={WOOD_GATHER.j - 0.6} active={lumberjackWorking} /> });
+    if (piles.stone > 0.05) list.push({ depth: viewDepth(STONE_GATHER.i, STONE_GATHER.j + 0.7) + 0.6, node: <PileProp key="pile-stone" i={STONE_GATHER.i} j={STONE_GATHER.j + 0.7} amount={piles.stone} kind="stone" /> });
+    if (piles.wood > 0.05) list.push({ depth: viewDepth(WOOD_GATHER.i, WOOD_GATHER.j + 0.7) + 0.6, node: <PileProp key="pile-wood" i={WOOD_GATHER.i} j={WOOD_GATHER.j + 0.7} amount={piles.wood} kind="wood" /> });
 
     // Where finished walls meet at an angle (an L-corner, a T or a cross) with no tower on the
     // spot, a square corner post is set exactly on the joint so the stonework reads as one
@@ -9656,7 +9782,7 @@ export default function CastleBuilder() {
       }
       postVertices.add(k);
       const [vi, vj] = k.split(',').map(Number);
-      list.push({ depth: vi + vj + 0.3, node: <WallJunctionPost key={`post-${k}`} i={vi} j={vj} /> });
+      list.push({ depth: viewDepth(vi, vj) + 0.3, node: <WallJunctionPost key={`post-${k}`} i={vi} j={vj} /> });
     });
 
     // Reference point for "inside the castle", used to make sure a drawbridge always lays
@@ -9676,14 +9802,14 @@ export default function CastleBuilder() {
         const bridgedGrabenKey = s.type === 'gate' ? gateBridgedGrabenKey(s, castleCenterI, castleCenterJ) : null;
         const bridgedGraben = bridgedGrabenKey ? structures[bridgedGrabenKey] : null;
         const bridgeSpansGraben = !!(bridgedGraben && bridgedGraben.type === 'graben' && bridgedGraben.stage === 'done');
-        let gateDepth = (s.i1 + s.j1 + s.i2 + s.j2) / 2 + 0.4;
+        let gateDepth = (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.4;
         if (bridgeSpansGraben) {
           // The moat segment being bridged sits one tile further out and would otherwise
           // often paint after (in front of) the gate in the isometric sort order, burying
           // the drawbridge under the ditch's near lip instead of laying visibly across it.
           // Forcing the gate's whole group to paint after that specific tile guarantees the
           // bridge is always drawn on top of the water/trench it spans.
-          const grabenDepth = (bridgedGraben.i1 + bridgedGraben.j1 + bridgedGraben.i2 + bridgedGraben.j2) / 2 + 0.3;
+          const grabenDepth = (viewDepth(bridgedGraben.i1, bridgedGraben.j1) + viewDepth(bridgedGraben.i2, bridgedGraben.j2)) / 2 + 0.3;
           gateDepth = Math.max(gateDepth, grabenDepth + 0.5);
         }
         // Where this segment meets a tower, its own depth (a compromise averaged across the
@@ -9693,26 +9819,28 @@ export default function CastleBuilder() {
         // whichever tower(s) it touches guarantees the tower is always drawn on top there,
         // burying the wall's (intentionally oversized, see towerOverlap) corner cleanly under
         // the tower's own base instead of poking out past it.
-        if (towerAt1) gateDepth = Math.min(gateDepth, s.i1 + s.j1 + 0.6 - 0.05);
-        if (towerAt2) gateDepth = Math.min(gateDepth, s.i2 + s.j2 + 0.6 - 0.05);
+        if (towerAt1) gateDepth = Math.min(gateDepth, viewDepth(s.i1, s.j1) + 0.6 - 0.05);
+        if (towerAt2) gateDepth = Math.min(gateDepth, viewDepth(s.i2, s.j2) + 0.6 - 0.05);
         list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOutSign={bridgeOutSign} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} /> });
       } else if (s.type === 'graben') {
-        list.push({ depth: (s.i1 + s.j1 + s.i2 + s.j2) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
+        list.push({ depth: (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
       } else if (s.type === 'tower') {
-        // A doorway on each visible tower face where a wall-walk runs into it.
-        const doorA = doneWallEdges.has(`${s.i},${s.j}>${s.i + 1},${s.j}`);
-        const doorB = doneWallEdges.has(`${s.i},${s.j}>${s.i},${s.j + 1}`);
-        list.push({ depth: s.i + s.j + 0.6, node: <TowerNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} damageFrac={battleDamageByKey[key] || 0} ruined={!!s.ruined} doorA={doorA} doorB={doorB} level={s.level || 1} upgrading={!!s.upgrading} /> });
+        // A doorway on each visible tower face where a wall-walk runs into it. Which grid
+        // sides face the camera depends on the view direction.
+        const wallTo = ([di, dj]) => doneWallEdges.has(`${s.i},${s.j}>${s.i + di},${s.j + dj}`);
+        const doorA = wallTo(fromViewVec(1, 0));
+        const doorB = wallTo(fromViewVec(0, 1));
+        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <TowerNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} damageFrac={battleDamageByKey[key] || 0} ruined={!!s.ruined} doorA={doorA} doorB={doorB} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'keep') {
-        list.push({ depth: s.i + s.j + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
+        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <KeepNode key={key} i={s.i} j={s.j} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} /> });
       } else if (s.type === 'amenity') {
-        list.push({ depth: s.i + s.j + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
+        list.push({ depth: viewDepth(s.i, s.j) + 0.6, node: <AmenityNode key={key} i={s.i} j={s.j} kind={s.kind} stage={s.stage} progress={s.progress} blocked={s.blocked} ruined={!!s.ruined} level={s.level || 1} upgrading={!!s.upgrading} /> });
       }
     });
 
-    list.push({ depth: DEPOT_I + DEPOT_J - 0.1, node: <DepotMarker key="depot" /> });
-    list.push({ depth: (DEPOT_I - 1.2) + (DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-stone" i={DEPOT_I - 1.2} j={DEPOT_J + 0.9} amount={resources.stone} kind="stone" /> });
-    list.push({ depth: (DEPOT_I + 1.2) + (DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-wood" i={DEPOT_I + 1.2} j={DEPOT_J + 0.9} amount={resources.wood} kind="wood" /> });
+    list.push({ depth: viewDepth(DEPOT_I, DEPOT_J) - 0.1, node: <DepotMarker key="depot" /> });
+    list.push({ depth: viewDepth(DEPOT_I - 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-stone" i={DEPOT_I - 1.2} j={DEPOT_J + 0.9} amount={resources.stone} kind="stone" /> });
+    list.push({ depth: viewDepth(DEPOT_I + 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-wood" i={DEPOT_I + 1.2} j={DEPOT_J + 0.9} amount={resources.wood} kind="wood" /> });
 
     workerUnits.forEach((w) => {
       let wMode;
@@ -9721,7 +9849,7 @@ export default function CastleBuilder() {
       else if (w.haulPhase) wMode = 'walk';
       else if (w.siteKey) wMode = w.arrived ? 'work' : 'walk';
       else wMode = 'idle';
-      list.push({ depth: w.curI + w.curJ + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI} j={w.curJ} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
+      list.push({ depth: viewDepth(w.curI, w.curJ) + 0.75, node: <WorkerSprite key={`w-${w.id}`} i={w.curI} j={w.curJ} type={w.type} mode={wMode} carrying={w.carrying} haulResource={w.haulResource} faceLeft={!!w.faceLeft} /> });
     });
 
     const keepDone = structures.keep && structures.keep.stage === 'done';
@@ -9730,7 +9858,7 @@ export default function CastleBuilder() {
     const garrisonPositions = siegeActive
       ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds)
       : computeGarrisonPositions(garrisonAnchorI, garrisonAnchorJ, soldiers.soldier, soldiers.archer);
-    if (!battlePhase) list.push({ depth: garrisonAnchorI + garrisonAnchorJ + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
+    if (!battlePhase) list.push({ depth: viewDepth(garrisonAnchorI, garrisonAnchorJ) + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
 
     if (hoverKey && !dragStart) {
       if (hoverKey.startsWith('edge:') && (tool === 'wall' || tool === 'gate' || tool === 'graben')) {
@@ -9756,7 +9884,7 @@ export default function CastleBuilder() {
           const okBuild = tool === 'graben'
             ? (!isDiag && moatUnlocked && isBuildableEdge(i1, j1, i2, j2, true))
             : (!!structures.keep && isBuildableEdge(i1, j1, i2, j2));
-          list.push({ depth: (i1 + j1 + i2 + j2) / 2 + 0.4, node: <WallNode key="ghost-e" i1={i1} j1={j1} i2={i2} j2={j2} kind={tool} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: (viewDepth(i1, j1) + viewDepth(i2, j2)) / 2 + 0.4, node: <WallNode key="ghost-e" i1={i1} j1={j1} i2={i2} j2={j2} kind={tool} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('v:') && tool === 'tower') {
@@ -9764,7 +9892,7 @@ export default function CastleBuilder() {
         if (!isVertexOccupied(key)) {
           const [i, j] = key.split(',').map(Number);
           const okBuild = !!structures.keep && isBuildableVertex(i, j);
-          list.push({ depth: i + j + 0.6, node: <TowerNode key="ghost-v" i={i} j={j} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: viewDepth(i, j) + 0.6, node: <TowerNode key="ghost-v" i={i} j={j} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('tile:') && tool === 'keep') {
@@ -9772,7 +9900,7 @@ export default function CastleBuilder() {
         const keepHere = structures.keep && Math.floor(structures.keep.i) === ti && Math.floor(structures.keep.j) === tj;
         if (!keepHere) {
           const okBuild = terrainAt(ti, tj) === 'grass';
-          list.push({ depth: ti + tj + 0.6, node: <KeepNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: viewDepth(ti + 0.5, tj + 0.5) - 0.4, node: <KeepNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} ghost ghostBlocked={!okBuild} /> });
         }
       }
       if (hoverKey.startsWith('tile:') && AMENITY_IDS.includes(tool)) {
@@ -9780,7 +9908,7 @@ export default function CastleBuilder() {
         const occKey = `amenity:${ti},${tj}`;
         if (!structures[occKey]) {
           const okBuild = !!structures.keep && terrainAt(ti, tj) === 'grass' && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
-          list.push({ depth: ti + tj + 0.6, node: <AmenityNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} kind={tool} ghost ghostBlocked={!okBuild} /> });
+          list.push({ depth: viewDepth(ti + 0.5, tj + 0.5) - 0.4, node: <AmenityNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} kind={tool} ghost ghostBlocked={!okBuild} /> });
         }
       }
       // Abriss (delete): previously hovering a wall/tower/building with the demolish tool
@@ -9802,7 +9930,7 @@ export default function CastleBuilder() {
             const p2 = gridToScreen(i2, j2, hgt * 0.55);
             const gp = gridToScreen(midI, midJ, hgt + 14);
             list.push({
-              depth: (i1 + j1 + i2 + j2) / 2 + 0.95,
+              depth: (viewDepth(i1, j1) + viewDepth(i2, j2)) / 2 + 0.95,
               node: (
                 <g key="del-hover-e" pointerEvents="none">
                   <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="#c0392b" strokeWidth="7" strokeLinecap="round" opacity="0.75" />
@@ -9821,7 +9949,7 @@ export default function CastleBuilder() {
             const ringP = gridToScreen(i, j, TOWER_H * 0.5);
             const gp = gridToScreen(i, j, TOWER_H + MERLON_H + 16);
             list.push({
-              depth: i + j + 0.95,
+              depth: viewDepth(i, j) + 0.95,
               node: (
                 <g key="del-hover-v" pointerEvents="none">
                   <ellipse cx={ringP.x.toFixed(1)} cy={ringP.y.toFixed(1)} rx="24" ry="14" fill="none" stroke="#c0392b" strokeWidth="4" opacity="0.85" />
@@ -9842,7 +9970,7 @@ export default function CastleBuilder() {
             const c = gridToScreen(ti + 0.5, tj + 0.5, 0);
             const gp = gridToScreen(ti + 0.5, tj + 0.5, heightGuess + 16);
             list.push({
-              depth: ti + tj + 0.95,
+              depth: viewDepth(ti + 0.5, tj + 0.5) - 0.05,
               node: (
                 <g key="del-hover-t" pointerEvents="none">
                   <ellipse cx={c.x.toFixed(1)} cy={c.y.toFixed(1)} rx="26" ry="15" fill="rgba(192,57,43,0.35)" stroke="#c0392b" strokeWidth="3" />
@@ -9872,13 +10000,13 @@ export default function CastleBuilder() {
         const already = structures[`${a},${b}-${c},${d}`];
         if (already) return;
         const ok = tool === 'graben' ? (moatUnlocked && isBuildableEdge(a, b, c, d, true)) : (!!structures.keep && isBuildableEdge(a, b, c, d));
-        list.push({ depth: (a + b + c + d) / 2 + 0.4, node: <WallNode key={`drag-${idx}`} i1={a} j1={b} i2={c} j2={d} kind={tool} ghost ghostBlocked={!ok} /> });
+        list.push({ depth: (viewDepth(a, b) + viewDepth(c, d)) / 2 + 0.4, node: <WallNode key={`drag-${idx}`} i1={a} j1={b} i2={c} j2={d} kind={tool} ghost ghostBlocked={!ok} /> });
       });
     }
 
     list.sort((a, b) => a.depth - b.depth);
     return list;
-  }, [structures, workerUnits, soldiers, piles, resources.stone, resources.wood, hoverKey, tool, isVertexOccupied, props, dragStart, dragEnd, day, battlePhase, moatFilledKeys, battleDamageByKey, recruitedKnights, wallOrientationOffset, diagonalMode]);
+  }, [viewRot, structures, workerUnits, soldiers, piles, resources.stone, resources.wood, hoverKey, tool, isVertexOccupied, props, dragStart, dragEnd, day, battlePhase, moatFilledKeys, battleDamageByKey, recruitedKnights, wallOrientationOffset, diagonalMode]);
 
   const peopleHitTargets = useMemo(() => {
     const list = workerUnits.map((w) => ({ i: w.curI, j: w.curJ, kind: 'worker', data: w }));
@@ -10150,7 +10278,7 @@ export default function CastleBuilder() {
   ].filter((r) => r.count > 0);
 
   return (
-    <div className={isPaused ? 'cb-game-paused' : ''} style={{ position: 'fixed', inset: 0, background: '#1E1A15', fontFamily: "'EB Garamond', serif", color: '#2B2420', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div ref={gameRootRef} className={isPaused ? 'cb-game-paused' : ''} style={{ position: 'fixed', inset: 0, background: '#1E1A15', fontFamily: "'EB Garamond', serif", color: '#2B2420', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
         ${UI_CSS}
@@ -11343,6 +11471,7 @@ export default function CastleBuilder() {
             <div><span className="cb-key">Mausrad</span> Zoom · <span className="cb-key">+</span> <span className="cb-key">−</span> Zoom</div>
             <div>Rechte Maustaste halten oder <span className="cb-key">←</span><span className="cb-key">↑</span><span className="cb-key">→</span><span className="cb-key">↓</span>: verschieben</div>
             <div><span className="cb-key">H</span> zum Burgfried · Minikarte anklicken: dorthin springen</div>
+            <div><span className="cb-key">,</span> <span className="cb-key">.</span> oder ⟲ ⟳: Kamera drehen — so seht Ihr auch, was hinter den Mauern liegt · <span className="cb-key">V</span> Vollbild</div>
             <div><span className="cb-key">C</span> Chronik · <span className="cb-key">S</span> Spielstände · <span className="cb-key">M</span> Ton an/aus · <span className="cb-key">?</span> diese Hilfe</div>
           </div>
         </Modal>
@@ -11912,7 +12041,7 @@ export default function CastleBuilder() {
             onContextMenu={(e) => e.preventDefault()}
             style={{ position: 'absolute', inset: 0, background: '#1b1f15', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
             <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
-              <svg width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
+              <svg key={`view-${viewRot}`} width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
                 <SceneDefs />
                 <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
                 <MapBase />
@@ -12187,6 +12316,10 @@ export default function CastleBuilder() {
             <span style={{ fontSize: '0.78rem', minWidth: 38, textAlign: 'center' }}>{Math.round(zoom * 100)} %</span>
             <button className="cb-btn-dark" title="Hineinzoomen (+)" onClick={() => zoomBy(1.2)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>+</button>
             <button className="cb-btn-dark" title="Auf den Burgfried zentrieren (H)" onClick={centerOnCastle} style={{ height: 28, padding: '0 8px', fontSize: '0.85rem' }}>🏰</button>
+            <button className="cb-btn-dark" title="Kamera nach links drehen (,)" onClick={() => rotateView(-1)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>⟲</button>
+            <span title="Blickrichtung" style={{ fontSize: '0.78rem', minWidth: 22, textAlign: 'center' }}>{VIEW_DIR_LABELS[viewRot]}</span>
+            <button className="cb-btn-dark" title="Kamera nach rechts drehen (.)" onClick={() => rotateView(1)} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '1rem' }}>⟳</button>
+            <button className="cb-btn-dark" title={isFullscreen ? 'Vollbild verlassen (V)' : 'Vollbild (V)'} onClick={toggleFullscreen} style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '0.95rem' }}>{isFullscreen ? '🗗' : '⛶'}</button>
             <button className="cb-btn-dark" title={settings.muted ? 'Ton einschalten (M)' : 'Ton ausschalten (M)'} onClick={() => updateSettings({ muted: !settings.muted })} style={{ height: 28, padding: '0 8px', fontSize: '0.85rem' }}>{settings.muted ? '🔇' : '🔊'}</button>
           </div>
           {/* Alerts */}
@@ -12198,6 +12331,7 @@ export default function CastleBuilder() {
             {desertionAlarm && <div className="cb-pill is-bad">⚠️ Kein Gold oder keine Nahrung — Verteidiger desertieren!</div>}
             {blockedCount > 0 && <div className="cb-pill">🚫 {blockedCount} Baustelle{blockedCount > 1 ? 'n warten' : ' wartet'} auf Material</div>}
             {isPaused && !blockingEventActive && <div className="cb-pill">⏸ Pausiert — Leertaste zum Fortsetzen</div>}
+            {hudHint && <div className="cb-pill">{hudHint}</div>}
           </div>
           {/* Toasts */}
           <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 11, width: 280, pointerEvents: 'none' }}>
@@ -12214,7 +12348,7 @@ export default function CastleBuilder() {
               <span style={{ lineHeight: 1.35 }}><strong>{activeToolInfo.label}:</strong> {activeToolInfo.hint} <span style={{ color: '#b8a888' }}>Rechtsklick oder Esc: abwählen.</span></span>
             </div>
           )}
-          <Minimap structures={structures} workers={workerUnits} pan={pan} zoom={zoom} viewport={viewportSize} onJump={jumpTo} battleUnits={battlePhase ? battleUnits : null} />
+          <Minimap structures={structures} workers={workerUnits} pan={pan} zoom={zoom} viewport={viewportSize} onJump={jumpTo} battleUnits={battlePhase ? battleUnits : null} viewRot={viewRot} />
         </div>
 
         <div className="cb-sidebar" style={{ width: 290, flexShrink: 0, overflowY: 'auto', paddingRight: 2, display: 'flex', flexDirection: 'column', gap: 12 }}>
