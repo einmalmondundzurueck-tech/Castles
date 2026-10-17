@@ -2294,7 +2294,7 @@ const RiverOverlay = React.memo(function RiverOverlay() { // eslint-disable-line
         <polygon points={band(RIVER_HALF_WIDTH + 0.2)} fill="#a99a6c" />
         <polygon points={band(RIVER_HALF_WIDTH)} fill="#3f7189" />
         <polygon points={band(RIVER_HALF_WIDTH * 0.55)} fill="#4f86a0" />
-        <path d={center} fill="none" stroke="rgba(214,236,242,0.35)" strokeWidth="1.4" strokeDasharray="7 19" strokeLinejoin="round" className="cb-river-flow" />
+        <path d={center} fill="none" stroke="rgba(214,236,242,0.3)" strokeWidth="1.4" strokeDasharray="7 19" strokeLinejoin="round" />
       </g>
       {bridges.map(([i, j]) => {
         // The deck runs along the road: across i, or (dir 'j') across j.
@@ -2347,7 +2347,7 @@ const TileFace = React.memo(function TileFace({ i, j }) {
       const w = isWaterAt(s.n[0], s.n[1]);
       if (w !== false) return;
       const A = at(...s.a), Bp = at(...s.b), IA = at(...s.inA), IB = at(...s.inB);
-      deco.push(<polygon key={`sh${k}`} points={ptsStr([A, Bp, IB, IA])} fill="#a99a6c" opacity="0.92" />);
+      deco.push(<polygon key={`sh${k}`} points={ptsStr([A, Bp, IB, IA])} fill="#a99a6c" fillOpacity="0.92" strokeOpacity="0.92" />);
       deco.push(<line key={`fo${k}`} x1={IA.x} y1={IA.y} x2={IB.x} y2={IB.y} stroke="rgba(232,240,235,0.55)" strokeWidth="1.1" strokeLinecap="round" />);
     });
     for (let k = 0; k < 2; k++) {
@@ -2367,7 +2367,7 @@ const TileFace = React.memo(function TileFace({ i, j }) {
           const a = at(0.2, 0.25 + r * 0.16), b = at(0.8, 0.25 + r * 0.16);
           d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
         }
-        deco.push(<path key="rows" d={d} stroke="#5d6b35" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="2,1.6" fill="none" opacity="0.75" />);
+        deco.push(<path key="rows" d={d} stroke="#5d6b35" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="2,1.6" fill="none" fillOpacity="0.75" strokeOpacity="0.75" />);
       }
     } else {
       const tufts = rnd(3) < 0.55 ? 1 + Math.floor(rnd(4) * 3) : 0;
@@ -2376,7 +2376,7 @@ const TileFace = React.memo(function TileFace({ i, j }) {
         const c = at(0.15 + rnd(40 + k) * 0.7, 0.15 + rnd(50 + k) * 0.7);
         d += `M${c.x.toFixed(1)} ${c.y.toFixed(1)}l-1.6 -3.6M${c.x.toFixed(1)} ${c.y.toFixed(1)}l0.2 -4.6M${c.x.toFixed(1)} ${c.y.toFixed(1)}l1.8 -3.4`;
       }
-      if (d) deco.push(<path key="tuft" d={d} stroke="#4f6a33" strokeWidth="0.9" strokeLinecap="round" fill="none" opacity="0.85" />);
+      if (d) deco.push(<path key="tuft" d={d} stroke="#4f6a33" strokeWidth="0.9" strokeLinecap="round" fill="none" fillOpacity="0.85" strokeOpacity="0.85" />);
       if (rnd(5) < 0.12) {
         const cols = ['#f1ead2', '#e8c94a', '#b58ad6', '#e57b6a'];
         for (let k = 0; k < 4; k++) {
@@ -2414,7 +2414,7 @@ const TileFace = React.memo(function TileFace({ i, j }) {
       const a = at(0.08, 0.14 + r * 0.17), b = at(0.92, 0.14 + r * 0.17);
       d += `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
     }
-    deco.push(<path key="furrows" d={d} stroke="#8a7432" strokeWidth="1.3" strokeLinecap="round" opacity="0.7" />);
+    deco.push(<path key="furrows" d={d} stroke="#8a7432" strokeWidth="1.3" strokeLinecap="round" fillOpacity="0.7" strokeOpacity="0.7" />);
   } else if (terrain === 'road') {
     const a = at(0.1, 0.38), b = at(0.9, 0.38), c = at(0.1, 0.62), e = at(0.9, 0.62);
     deco.push(<path key="ruts" d={`M${a.x} ${a.y}L${b.x} ${b.y}M${c.x} ${c.y}L${e.x} ${e.y}`} stroke="rgba(70,52,30,0.4)" strokeWidth="1.2" fill="none" />);
@@ -2449,7 +2449,7 @@ const TileFace = React.memo(function TileFace({ i, j }) {
       const c = at(0.1 + rnd(40 + k) * 0.8, 0.1 + rnd(50 + k) * 0.8);
       d += `M${c.x.toFixed(1)} ${c.y.toFixed(1)}h1.6`;
     }
-    deco.push(<path key="leaves" d={d} stroke="#8a6a35" strokeWidth="1.3" strokeLinecap="round" opacity="0.6" />);
+    deco.push(<path key="leaves" d={d} stroke="#8a6a35" strokeWidth="1.3" strokeLinecap="round" fillOpacity="0.6" strokeOpacity="0.6" />);
     let f = '';
     for (let k = 0; k < 2; k++) {
       const c = at(0.2 + rnd(70 + k) * 0.6, 0.2 + rnd(80 + k) * 0.6);
@@ -2568,6 +2568,76 @@ function SceneDefs() {
 }
 
 // Slow-drifting cloud shadows gliding across the whole board.
+// Everything under the buildings and people — the board, the ground, the river, the fog over
+// foreign land and the outer regions' scenery — is its own SVG, drawn once and left alone by
+// the browser while the game moves on above it.
+const MapBackdrop = React.memo(function MapBackdrop({ viewRot, ownedKey, outerProps }) { // eslint-disable-line no-unused-vars
+  const owned = new Set((ownedKey || '').split(','));
+  return (
+    <svg width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block', position: 'absolute', left: 0, top: 0 }} pointerEvents="none">
+      <SceneDefs />
+      <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
+      <MapBase />
+      <GroundLayer viewRot={viewRot} />
+      <RiverOverlay />
+      <StaticLayer nodes={outerProps} />
+      <g>
+        {REGION_IDS.filter((id) => !owned.has(id)).map((id) => {
+          const d = REGION_DEFS[id];
+          const pts = [[d.i0, d.j0], [d.i1 + 1, d.j0], [d.i1 + 1, d.j1 + 1], [d.i0, d.j1 + 1]].map(([a, b]) => gridToScreen(a, b, 0));
+          return <polygon key={`fog-${id}`} points={ptsStr(pts)} fill="rgba(14,16,10,0.5)" stroke="rgba(201,162,75,0.35)" strokeWidth="2" strokeDasharray="10 8" />;
+        })}
+      </g>
+    </svg>
+  );
+});
+// The backdrop is rendered once (hidden), serialised and shown as a single vector image: the
+// browser then handles one element instead of tens of thousands every time anything moves.
+// It is rebuilt only when it changes — a turn of the view, land won, a tree felled out there.
+function BackdropImage({ viewRot, ownedKey, outerProps }) {
+  const holder = useRef(null);
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    const svg = holder.current && holder.current.querySelector('svg');
+    if (!svg) return;
+    try {
+      let text = new XMLSerializer().serializeToString(svg);
+      if (!text.includes('xmlns="http://www.w3.org/2000/svg"')) text = text.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      setSrc(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`);
+    } catch (e) {
+      setSrc(null);
+    }
+  }, [viewRot, ownedKey, outerProps]);
+  return (
+    <>
+      <div ref={holder} style={{ display: src ? 'none' : 'block', position: 'absolute', left: 0, top: 0 }}>
+        <MapBackdrop key={`back-${viewRot}`} viewRot={viewRot} ownedKey={ownedKey} outerProps={outerProps} />
+      </div>
+      {src && <img src={src} alt="" width={VIEW_W} height={VIEW_H} draggable={false} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', userSelect: 'none' }} />}
+    </>
+  );
+}
+// Cloud shadows drift over the land on a layer of their own, moved by the compositor — they
+// never make the map underneath redraw.
+const CLOUDS = [
+  { y: 0.3, rx: 260, ry: 95, dur: 150, begin: -20 },
+  { y: 0.62, rx: 340, ry: 120, dur: 190, begin: -110 },
+  { y: 0.85, rx: 220, ry: 80, dur: 170, begin: -60 },
+];
+const CloudLayer = React.memo(function CloudLayer() { // eslint-disable-line no-unused-vars
+  return (
+    <div style={{ position: 'absolute', left: 0, top: 0, width: VIEW_W, height: VIEW_H, overflow: 'hidden', pointerEvents: 'none' }}>
+      <style>{CLOUDS.map((c, k) => `@keyframes cb-cloud-${k} { from { transform: translateX(${-c.rx * 3}px); } to { transform: translateX(${VIEW_W + c.rx}px); } }`).join('\n')}</style>
+      {CLOUDS.map((c, k) => (
+        <div key={k} style={{
+          position: 'absolute', left: 0, top: VIEW_H * c.y - c.ry, width: c.rx * 2, height: c.ry * 2, borderRadius: '50%',
+          background: 'radial-gradient(closest-side, rgba(10,13,6,0.16), rgba(10,13,6,0.08) 60%, rgba(10,13,6,0) 100%)',
+          animation: `cb-cloud-${k} ${c.dur}s linear ${c.begin}s infinite`,
+        }} />
+      ))}
+    </div>
+  );
+});
 function CloudShadows() {
   const clouds = [
     { y: VIEW_H * 0.3, rx: 260, ry: 95, dur: 150, begin: -20 },
@@ -2592,7 +2662,7 @@ function ConiferShape({ x, y, s, hue = 0 }) {
   const tier = (top, bottom, w, k) => (
     <g key={k}>
       <path d={`M ${x} ${y - top * s} L ${x - w * s} ${y - bottom * s} L ${x + w * s} ${y - bottom * s} Z`} fill={mid} stroke={dark} strokeWidth="0.8" strokeLinejoin="round" />
-      <path d={`M ${x} ${y - top * s} L ${x + w * s} ${y - bottom * s} L ${x + w * 0.15 * s} ${y - bottom * s + 1.5 * s} Z`} fill={lit} opacity="0.8" />
+      <path d={`M ${x} ${y - top * s} L ${x + w * s} ${y - bottom * s} L ${x + w * 0.15 * s} ${y - bottom * s + 1.5 * s} Z`} fill={lit} fillOpacity="0.8" strokeOpacity="0.8" />
     </g>
   );
   return (
@@ -2612,8 +2682,8 @@ function DeciduousShape({ x, y, s, hue = 0 }) {
       <circle cx={x - 6 * s} cy={y - 17 * s} r={7.5 * s} fill={dark} />
       <circle cx={x + 6 * s} cy={y - 18 * s} r={7.5 * s} fill={mid} />
       <circle cx={x} cy={y - 25 * s} r={8.5 * s} fill={mid} />
-      <circle cx={x + 3.5 * s} cy={y - 27 * s} r={5 * s} fill={lit} opacity="0.9" />
-      <circle cx={x + 7.5 * s} cy={y - 20 * s} r={3.6 * s} fill={lit} opacity="0.7" />
+      <circle cx={x + 3.5 * s} cy={y - 27 * s} r={5 * s} fill={lit} fillOpacity="0.9" strokeOpacity="0.9" />
+      <circle cx={x + 7.5 * s} cy={y - 20 * s} r={3.6 * s} fill={lit} fillOpacity="0.7" strokeOpacity="0.7" />
     </g>
   );
 }
@@ -10718,6 +10788,8 @@ export default function CastleBuilder() {
     return () => window.removeEventListener('keydown', onKey);
   }, [blockingEventActive, openPanel, infoTarget, helpOpen, zoomBy, centerOnCastle, rotateView, toggleFullscreen, battlePhase]);
 
+  // How many simulation steps one board update covers: one at normal speed, up to four at 8×.
+  const stepsPerTick = Math.max(1, Math.round(gameSpeed / 2));
   useEffect(() => {
     const id = setInterval(() => {
       if (isPausedRef.current || gameOverEventRef.current) return;
@@ -10725,26 +10797,40 @@ export default function CastleBuilder() {
       // brief pre-battle warning and then froze in place once fighting actually started.
       const fleeMode = !!battlePhaseRef.current;
       const onStrike = happinessRef.current < STRIKE_THRESHOLD;
-      const result = computeTick(structuresRef.current, workersRef.current, resourcesRef.current, pilesRef.current, onStrike, haulPriorityRef.current, fleeMode, forestTreesRef.current, hillRocksRef.current, dayRef.current, (baumeisterHiredRef.current ? BAUMEISTER_BUILD_SPEED : 1) * rulerFx(rulerRef.current).buildMult);
-      setStructures(result.structures);
-      setWorkerUnits(result.workers);
-      setForestTrees(result.trees);
-      setHillRocks(result.rocks);
-      if (result.resourceDelta.wood !== 0 || result.resourceDelta.stone !== 0) {
-        const cap = storageCapacity(result.structures);
+      // At high speed several steps run per update: the browser can't redraw the board 60
+      // times a second, and one step per redraw made everyone crawl at 4× and 8×.
+      let result = null;
+      let structs = structuresRef.current, workers = workersRef.current, trees = forestTreesRef.current, rocks = hillRocksRef.current;
+      let res = resourcesRef.current, pls = pilesRef.current;
+      const delta = { wood: 0, stone: 0 }, pDelta = { wood: 0, stone: 0 };
+      for (let k = 0; k < stepsPerTick; k++) {
+        result = computeTick(structs, workers, res, pls, onStrike, haulPriorityRef.current, fleeMode, trees, rocks, dayRef.current, (baumeisterHiredRef.current ? BAUMEISTER_BUILD_SPEED : 1) * rulerFx(rulerRef.current).buildMult);
+        ({ structures: structs, workers, trees, rocks } = result);
+        const cap = storageCapacity(structs);
+        res = { ...res, wood: Math.min(cap, Math.max(0, res.wood + result.resourceDelta.wood)), stone: Math.min(cap, Math.max(0, res.stone + result.resourceDelta.stone)) };
+        pls = { stone: Math.max(0, pls.stone + result.pileDelta.stone), wood: Math.max(0, pls.wood + result.pileDelta.wood) };
+        delta.wood += result.resourceDelta.wood; delta.stone += result.resourceDelta.stone;
+        pDelta.wood += result.pileDelta.wood; pDelta.stone += result.pileDelta.stone;
+      }
+      setStructures(structs);
+      setWorkerUnits(workers);
+      setForestTrees(trees);
+      setHillRocks(rocks);
+      if (delta.wood !== 0 || delta.stone !== 0) {
+        const cap = storageCapacity(structs);
         setResources((prev) => ({
           ...prev,
-          wood: Math.min(cap, Math.max(0, prev.wood + result.resourceDelta.wood)),
-          stone: Math.min(cap, Math.max(0, prev.stone + result.resourceDelta.stone)),
+          wood: Math.min(cap, Math.max(0, prev.wood + delta.wood)),
+          stone: Math.min(cap, Math.max(0, prev.stone + delta.stone)),
         }));
       }
-      if (result.pileDelta.stone !== 0 || result.pileDelta.wood !== 0) {
+      if (pDelta.stone !== 0 || pDelta.wood !== 0) {
         setPiles((prev) => ({
-          stone: Math.max(0, prev.stone + result.pileDelta.stone),
-          wood: Math.max(0, prev.wood + result.pileDelta.wood),
+          stone: Math.max(0, prev.stone + pDelta.stone),
+          wood: Math.max(0, prev.wood + pDelta.wood),
         }));
       }
-    }, TICK_MS / gameSpeed);
+    }, (TICK_MS / gameSpeed) * stepsPerTick);
     return () => clearInterval(id);
   }, [gameSpeed]);
 
@@ -11122,6 +11208,19 @@ export default function CastleBuilder() {
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
 
+  // Several combat steps per board update at high speed, like the workers' loop above.
+  // tickNow is the first of the steps run, so sounds still fire for anything that happened.
+  const runBattleSteps = (step) => {
+    const tickNow = battleTickCountRef.current || 0;
+    let units = battleUnitsRef.current, obstacles = battleObstaclesRef.current, morale, shots = [];
+    for (let k = 0; k < stepsPerTick; k++) {
+      const r = step(units, obstacles, tickNow + k);
+      ({ units, obstacles } = r);
+      morale = r.attackerMorale;
+      shots = shots.concat(r.shots);
+    }
+    return { units, obstacles, shots, attackerMorale: morale, tickNow };
+  };
   useEffect(() => {
     if (battlePhase !== 'fighting') return;
     const id = setInterval(() => {
@@ -11136,25 +11235,24 @@ export default function CastleBuilder() {
       // that just keeps paying off forever).
       const armbrustPresent = armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust;
       const crossbowMult = armbrustPresent ? ((crossbowUpgradedRef.current ? CROSSBOW_DAMAGE_MULT : 1) * (crossbowUpgraded2Ref.current ? CROSSBOW_DAMAGE_MULT_2 : 1)) : 1;
-      const { units, shots, obstacles, attackerMorale: morale } = battleTickStep(battleUnitsRef.current, battleObstaclesRef.current, battleKeepPosRef.current, smithDamageMult, battleTickCountRef.current, moraleDebuffActive, kapelleBonus, moorishHiredRef.current && !capturedCourtiersRef.current.moorish, courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD, crossbowMult, 1 + knightRaisesRef.current * 0.06);
+      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, smithDamageMult, t, moraleDebuffActive, kapelleBonus, moorishHiredRef.current && !capturedCourtiersRef.current.moorish, courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD, crossbowMult, 1 + knightRaisesRef.current * 0.06));
       setBattleUnits(units);
       setBattleObstacles(obstacles);
       setAttackerMorale(morale);
-      const tickNow = battleTickCountRef.current || 0;
       const heavyShots = shots.filter((sh) => sh.heavy).length;
       if (heavyShots) SOUND.play('catapult');
       for (let k = 0; k < Math.min(3, shots.length - heavyShots); k++) setTimeout(() => SOUND.play('bow'), k * 70);
-      const hits = units.filter((u) => u.hitTick === tickNow && u.hp > 0).length;
+      const hits = units.filter((u) => u.hitTick >= tickNow && u.hp > 0).length;
       for (let k = 0; k < Math.min(3, hits); k++) setTimeout(() => SOUND.play('clash'), k * 90);
-      if (obstacles.some((o) => o.breachTick === tickNow)) SOUND.play('crumble');
+      if (obstacles.some((o) => o.breachTick >= tickNow)) SOUND.play('crumble');
       if (shots.length > 0) {
         // Only the newly-fired shots are appended here — their in-flight progress is
         // advanced separately, on a much faster loop (see below), so the arc actually
         // gets enough animation frames to read as a smooth curve instead of 2-3 jumps.
         setArrows((prev) => [...prev, ...shots.map((s) => ({ id: arrowIdSeqRef.current++, ...s, progress: 0 }))]);
       }
-      setBattleTickCount((c) => c + 1);
-    }, BATTLE_TICK_MS / gameSpeed);
+      setBattleTickCount((c) => c + stepsPerTick);
+    }, (BATTLE_TICK_MS / gameSpeed) * stepsPerTick);
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
 
@@ -11196,18 +11294,17 @@ export default function CastleBuilder() {
     if (battlePhase !== 'siege') return;
     const id = setInterval(() => {
       if (isPausedRef.current) return;
-      const { units, shots, obstacles, attackerMorale: morale } = battleTickStep(battleUnitsRef.current, battleObstaclesRef.current, battleKeepPosRef.current, 1, battleTickCountRef.current, false, 0, false, false, 1, 1);
+      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, 1, t, false, 0, false, false, 1, 1));
       setBattleUnits(units);
       setBattleObstacles(obstacles);
       setAttackerMorale(morale);
-      const tickNow = battleTickCountRef.current || 0;
       for (let k = 0; k < Math.min(3, shots.length); k++) setTimeout(() => SOUND.play('bow'), k * 70);
-      const hits = units.filter((u) => u.hitTick === tickNow && u.hp > 0).length;
+      const hits = units.filter((u) => u.hitTick >= tickNow && u.hp > 0).length;
       for (let k = 0; k < Math.min(3, hits); k++) setTimeout(() => SOUND.play('clash'), k * 90);
-      if (obstacles.some((o) => o.breachTick === tickNow)) SOUND.play('crumble');
+      if (obstacles.some((o) => o.breachTick >= tickNow)) SOUND.play('crumble');
       if (shots.length > 0) setArrows((prev) => [...prev, ...shots.map((sh) => ({ id: arrowIdSeqRef.current++, ...sh, progress: 0 }))]);
-      setBattleTickCount((c) => c + 1);
-    }, BATTLE_TICK_MS / gameSpeed);
+      setBattleTickCount((c) => c + stepsPerTick);
+    }, (BATTLE_TICK_MS / gameSpeed) * stepsPerTick);
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
   useEffect(() => {
@@ -11515,18 +11612,21 @@ export default function CastleBuilder() {
   // Everything standing in the outer regions — their woods, rocks and cottages — lives in a
   // layer of its own under the heartland's, redrawn only when it changes (a tree felled, land
   // won). The heartland's props are sorted in with the buildings and people as before.
+  // Only the outer regions' own trees and rocks matter here — the heartland's are felled and
+  // quarried every day, and redrawing the whole backdrop for that would undo the point of it.
+  const outerNatureKey = forestTrees.filter((t) => t.region && !t.felled).length + '/' + hillRocks.filter((r) => r.region && !r.depleted).length;
+  const outerPropsVillage = OWNED_REGIONS.has('markt') ? -1 : Math.ceil(villagePop / 2);
   const outerProps = useMemo(() => {
     const list = [];
-    const foreign = (n) => !OWNED_REGIONS.has(n.region || 'kern');
     forestTrees.forEach((t) => {
       if (t.felled || !t.region) return;
       const node = <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} />;
-      list.push({ depth: viewDepth(t.i, t.j) + 0.5, node: foreign(t) ? <g key={`tree-${t.id}`} opacity="0.5">{node}</g> : node });
+      list.push({ depth: viewDepth(t.i, t.j) + 0.5, node });
     });
     hillRocks.forEach((r) => {
       if (r.depleted || !r.region) return;
       const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
-      list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: foreign(r) ? <g key={`rock-${r.id}`} opacity="0.5">{node}</g> : node });
+      list.push({ depth: viewDepth(r.i, r.j) + 0.5, node });
     });
     // The outer lords' villages.
     Object.values(FOE_CASTLE_SITES).forEach((c) => c.village.forEach(([vi, vj], idx) => {
@@ -11541,7 +11641,7 @@ export default function CastleBuilder() {
       });
     }
     return list.sort((a, b) => a.depth - b.depth).map((d) => d.node);
-  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [outerNatureKey, outerPropsVillage, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
   const props = useMemo(() => {
     const list = [];
     forestTrees.forEach((t) => {
@@ -11563,6 +11663,12 @@ export default function CastleBuilder() {
   const vertexInteractive = !battlePhase && (tool === 'tower' || tool === 'delete' || tool === null);
   const vertexPointerActive = vertexInteractive || (!battlePhase && (tool === 'wall' || tool === 'gate' || tool === 'graben'));
   const tileInteractive = !battlePhase && (AMENITY_IDS.includes(tool) || tool === 'keep' || tool === 'delete' || tool === null);
+  const sparseHits = tool === null || tool === 'delete';
+  const occupiedTiles = useMemo(() => {
+    const set = new Set();
+    Object.values(structures).forEach((st) => { if (st.type === 'keep' || st.type === 'amenity') structureTiles(st).forEach(([a, b]) => set.add(`${a},${b}`)); });
+    return set;
+  }, [structures]);
 
   const isVertexOccupied = useCallback((key) => {
     return !!structures[`v:${key}`];
@@ -12024,7 +12130,8 @@ export default function CastleBuilder() {
       list.push({ depth: viewDepth(DEPOT_I + 1.2, DEPOT_J + 0.9) + 0.5, node: <PileProp key="storage-wood" i={DEPOT_I + 1.2} j={DEPOT_J + 0.9} amount={resources.wood} kind="wood" /> });
     }
 
-    workerUnits.forEach((w) => {
+    // While the army storms a castle far away, the folk at home aren't drawn at all.
+    if (battlePhase !== 'siege') workerUnits.forEach((w) => {
       let wMode;
       if (battlePhase === 'fleeing') wMode = w.atTarget ? 'idle' : 'walk';
       else if (w.type === 'quarrier' || w.type === 'lumberjack') wMode = w.atTarget ? 'work' : 'walk';
@@ -12593,7 +12700,7 @@ export default function CastleBuilder() {
         @keyframes cb-walk-bob { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-1.2px); } }
         .cb-person-work .cb-arm { animation: cb-hammer 0.5s ease-in-out infinite; transform-box: fill-box; transform-origin: top center; }
         @keyframes cb-hammer { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-30deg); } }
-        .cb-person-idle { animation: cb-idle-sway 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+        .cb-person-idle { transform-box: fill-box; transform-origin: bottom center; }
         @keyframes cb-idle-sway { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(1.5deg); } }
         .cb-tree-fell { animation: cb-tree-fall 3.2s ease-in-out infinite; }
         @keyframes cb-tree-fall { 0%, 55% { transform: rotate(0deg); } 65% { transform: rotate(78deg); } 85% { transform: rotate(78deg); } 92% { transform: rotate(0deg); } 100% { transform: rotate(0deg); } }
@@ -12617,11 +12724,11 @@ export default function CastleBuilder() {
         .cb-clash { animation: cb-clash 0.5s ease-out infinite; transform-box: fill-box; transform-origin: center; }
         @keyframes cb-clash { 0% { opacity: 1; transform: scale(0.6); } 40% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0; transform: scale(1.3); } }
         .cb-game-paused .cb-clash { animation-play-state: paused; }
-        .cb-glint { animation: cb-glint 3.4s ease-in-out infinite; }
+        .cb-glint { opacity: 0.5; }
         .cb-river-flow { animation: cb-river-flow 6s linear infinite; }
         @keyframes cb-river-flow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -52; } }
         @keyframes cb-glint { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
-        .cb-window-glow { animation: cb-window-flicker 2.8s ease-in-out infinite; }
+        .cb-window-glow { opacity: 0.85; }
         @keyframes cb-window-flicker { 0%, 100% { opacity: 0.85; } 40% { opacity: 1; } 70% { opacity: 0.7; } }
         .cb-game-paused .cb-glint, .cb-game-paused .cb-window-glow { animation-play-state: paused; }
         .cb-wall-preview-line { animation: cb-wall-preview-shimmer 0.7s linear infinite; }
@@ -14739,22 +14846,10 @@ export default function CastleBuilder() {
             onContextMenu={(e) => e.preventDefault()}
             style={{ position: 'absolute', inset: 0, background: '#1b1f15', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
             <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
-              <svg key={`view-${viewRot}`} width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
+              <BackdropImage viewRot={viewRot} ownedKey={ownedKey} outerProps={outerProps} />
+              <svg key={`view-${viewRot}`} width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block', position: 'relative' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
                 <SceneDefs />
-                <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="url(#cbBackdrop)" />
-                <MapBase />
-                <GroundLayer viewRot={viewRot} />
-                <RiverOverlay key={`river-${viewRot}`} />
-                <g pointerEvents="none">
-                  {REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
-                    const d = REGION_DEFS[id];
-                    const pts = [[d.i0, d.j0], [d.i1 + 1, d.j0], [d.i1 + 1, d.j1 + 1], [d.i0, d.j1 + 1]].map(([a, b]) => gridToScreen(a, b, 0));
-                    return <polygon key={`fog-${id}`} points={ptsStr(pts)} fill="rgba(14,16,10,0.5)" stroke="rgba(201,162,75,0.35)" strokeWidth="2" strokeDasharray="10 8" />;
-                  })}
-                </g>
-                <StaticLayer nodes={outerProps} />
                 <g>{drawables.map((d) => d.node)}</g>
-                <CloudShadows />
                 <g>
                   {!battlePhase && REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
                     const d = REGION_DEFS[id];
@@ -14775,7 +14870,10 @@ export default function CastleBuilder() {
                   })}
                 </g>
                 <g>
-                  {edges.map((e) => {
+                  {edgeInteractive && edges.map((e) => {
+                    // Without a build tool only what already stands can be clicked, so the
+                    // thousands of empty edges, corners and tiles aren't drawn at all.
+                    if (sparseHits && !structures[e.key]) return null;
                     // Previously the click target sat only at ground level, but a finished
                     // wall/gate renders up to ~45px "tall" on screen — clicking the visible
                     // upper body (which is what people naturally do) missed the hit area
@@ -14823,8 +14921,9 @@ export default function CastleBuilder() {
                       );
                     });
                   })}
-                  {vertices.map((v) => {
+                  {vertexPointerActive && vertices.map((v) => {
                     const towerHere = structures[`v:${v.key}`];
+                    if (sparseHits && !towerHere) return null;
                     const levels = towerHere ? [0, TOWER_H * 0.5, TOWER_H + MERLON_H] : [0];
                     return levels.map((lvl) => {
                       const p = gridToScreen(v.i, v.j, lvl);
@@ -14840,7 +14939,8 @@ export default function CastleBuilder() {
                       );
                     });
                   })}
-                  {tiles.map((tl) => {
+                  {tileInteractive && tiles.map((tl) => {
+                    if (sparseHits && !occupiedTiles.has(`${tl.i},${tl.j}`)) return null;
                     const c = gridToScreen(tl.i + 0.5, tl.j + 0.5, 0);
                     return (
                       <rect key={`hitt-${tl.i}-${tl.j}`} x={c.x - 20} y={c.y - 12} width="40" height="24" fill="transparent"
@@ -15008,6 +15108,7 @@ export default function CastleBuilder() {
                   })}
                 </g>
               </svg>
+              <CloudLayer />
             </div>
           </div>
 
