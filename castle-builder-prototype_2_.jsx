@@ -230,6 +230,42 @@ function foeCastleStructures(id) {
   return st;
 }
 const FOE_CASTLES = Object.fromEntries(REGION_IDS.map((id) => [id, foeCastleStructures(id)]));
+// The lord's garrison: archers on the towers, the keep and any stone wall, the foot soldiers
+// drawn up just inside the gate. It grows with the region's strength.
+const FOE_GARRISON_SHARE = 0.6;
+function foeGarrison(id, year) {
+  const fc = FOE_CASTLES[id], c = FOE_CASTLE_SITES[id];
+  const total = Math.max(4, Math.round(regionStrength(id, year) * FOE_GARRISON_SHARE));
+  const nArch = Math.round(total * 0.35), nSol = total - nArch;
+  const offs = [[-0.12, -0.12], [0.12, 0.12], [-0.12, 0.12], [0.12, -0.12]];
+  const slots = [];
+  Object.values(fc).filter((t) => t.type === 'tower').forEach((t) => {
+    const n = Math.min(4, STRUCT_LEVELS.tower.slots[t.level] || 2);
+    for (let k = 0; k < n; k++) slots.push({ i: t.i + offs[k][0], j: t.j + offs[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level) });
+  });
+  for (let k = 0; k < KEEP_ARCHER_SLOTS; k++) slots.push({ i: fc.keep.i + offs[k][0] * 2, j: fc.keep.j + offs[k][1] * 2, elev: keepHeightFor(fc.keep.level) + 3 });
+  Object.values(fc).filter((w) => w.type === 'wall' && w.level >= 2).forEach((w) => slots.push({ i: (w.i1 + w.i2) / 2, j: (w.j1 + w.j2) / 2, elev: wallHeightFor(w.level) + 2 }));
+  const out = [];
+  for (let k = 0; k < nArch; k++) {
+    if (k < slots.length) out.push({ ...slots[k], type: 'archer' });
+    else out.push({ i: fc.keep.i + ((k % 4) - 1.5) * 0.3, j: fc.keep.j + 0.7, elev: 0, type: 'archer' });
+  }
+  const gateMid = c.gate === 'w' ? { i: c.i0, j: Math.floor((c.j0 + c.j1) / 2) + 0.5 } : { i: Math.floor((c.i0 + c.i1) / 2) + 0.5, j: c.j0 };
+  const inward = c.gate === 'w' ? { i: 1, j: 0 } : { i: 0, j: 1 };
+  const along = { i: inward.j, j: inward.i };
+  for (let k = 0; k < nSol; k++) {
+    const row = Math.floor(k / 5), col = k % 5;
+    const off = (col - 2) * 0.28;
+    out.push({ i: gateMid.i + inward.i * (0.6 + row * 0.3) + along.i * off, j: gateMid.j + inward.j * (0.6 + row * 0.3) + along.j * off, elev: 0, type: 'soldier' });
+  }
+  return out;
+}
+function siegeSurrendered(id, units) {
+  const c = FOE_CASTLE_SITES[id];
+  const groundFoes = units.some((u) => u.foe && u.hp > 0 && !(u.elev > 0));
+  const inside = units.some((u) => u.own && u.hp > 0 && !u.routed && !u.exited && u.i > c.i0 && u.i < c.i1 && u.j > c.j0 && u.j < c.j1);
+  return !groundFoes && inside;
+}
 // Where a Feldzug forms up before the assault: a few tiles out in front of the gate.
 function foeApproachPoint(id) {
   const c = FOE_CASTLE_SITES[id];
@@ -894,7 +930,8 @@ function elevationDefenseMult(elev) {
   return Math.max(0.35, 1 - elev / 65);
 }
 // Any attacker type that fights at range with a bow, regardless of which faction sent them.
-const ATTACKER_ARCHER_TYPES = new Set(['saxonArcher', 'robinArcher']);
+// (The king's own archers count here too when they are the ones storming a castle.)
+const ATTACKER_ARCHER_TYPES = new Set(['saxonArcher', 'robinArcher', 'archer']);
 // Units that fight hand-to-hand — these are the ones subject to the per-target crowding cap
 // below, since "ganging up" only really means anything when swords are involved; archers and
 // catapults shooting the same target from range don't physically crowd anyone out.
@@ -6560,8 +6597,11 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       // lies directly on that line, they have to smash through it first (ladder-carriers
       // climb straight over a plain wall); if there's a genuine gap, they walk through it.
       let destUnit = null, bestD = Infinity;
+      // The king's own men storming a castle don't stand about under a tower they can't climb:
+      // with only archers left up on the walls and towers, they make for the keep instead.
+      const reachOnly = u.own && isMeleeUnit(u);
       units.forEach((o) => {
-        if (o.side === 'defender' && o.hp > 0) {
+        if (o.side === 'defender' && o.hp > 0 && !(reachOnly && o.elev > 0)) {
           const d = distance2(u, o);
           if (d < bestD) { bestD = d; destUnit = o; }
         }
@@ -6811,7 +6851,7 @@ function Minimap({ structures, workers, pan, zoom, viewport, onJump, battleUnits
         <MinimapTerrain ownedKey={[...OWNED_REGIONS].join(',')} viewRot={viewRot} />
         {marks}
         {workers.map((w) => { const p = gridToScreen(w.curI, w.curJ, 0); return <circle key={w.id} cx={p.x} cy={p.y} r="9" fill="#ffe08a" />; })}
-        {(battleUnits || []).filter((u) => u.hp > 0).map((u) => { const p = gridToScreen(u.i, u.j, 0); return <circle key={`b${u.id}`} cx={p.x} cy={p.y} r="12" fill={u.side === 'attacker' ? '#e0452f' : '#5fb2e8'} />; })}
+        {(battleUnits || []).filter((u) => u.hp > 0).map((u) => { const p = gridToScreen(u.i, u.j, 0); return <circle key={`b${u.id}`} cx={p.x} cy={p.y} r="12" fill={u.foe || (u.side === 'attacker' && !u.own) ? '#e0452f' : '#5fb2e8'} />; })}
         <rect x={vx} y={vy} width={vw} height={vh} fill="rgba(255,240,200,0.08)" stroke="#f1e6c8" strokeWidth="10" />
       </svg>
     </div>
@@ -7938,7 +7978,11 @@ export default function CastleBuilder() {
   const [viewRot, setViewRot] = useState(0);
   const [expedition, setExpedition] = useState(null);
   const [reichFocus, setReichFocus] = useState(null);
-  const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0 });
+  const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0, knights: true });
+  // A Feldzug under way: the region and who marched out ({ region, soldier, archer, knights }).
+  const [siege, setSiege] = useState(null);
+  const siegeRef = useRef(null);
+  useEffect(() => { siegeRef.current = siege; }, [siege]);
   const ownedRegionsRef = useRef(ownedRegions);
   useEffect(() => { ownedRegionsRef.current = ownedRegions; }, [ownedRegions]);
   setOwnedRegionsGlobal(ownedRegions); // keep the module-level helpers in step, every render
@@ -8645,6 +8689,97 @@ export default function CastleBuilder() {
     setExpedition({ region: id, soldier, archer, power, strength, chance: expeditionWinChance(power, strength), departDay: dayRef.current, returnDay: dayRef.current + EXPEDITION_DAYS });
     logEvent('⚔️', `Feldzug gegen ${REGION_DEFS[id].acc} aufgebrochen (${soldier + archer} Mann)`, 'neutral');
     SOUND.play('warhorn');
+  };
+  // ---- Feldzug: the king's men storm the lord's castle -----------------------------------------
+  const startSiege = (id, soldier, archer, withKnights) => {
+    const year = getCalendarDate(dayRef.current).year;
+    const fc = FOE_CASTLES[id];
+    const obstacles = buildBattleObstacles(fc).map((o) => ({ ...o, key: `foe:${id}:${o.key}`, structureKey: `foe:${id}:${o.structureKey}` }));
+    const keepPos = { i: fc.keep.i, j: fc.keep.j };
+    const units = [];
+    foeGarrison(id, year).forEach((p) => {
+      units.push({ id: battleUnitIdSeq++, side: 'defender', foe: true, type: p.type, i: p.i, j: p.j, hp: UNIT_MAX_HP, maxHp: UNIT_MAX_HP, elev: p.elev || 0, targetId: null, dmgMult: p.dmgMult || 1 });
+    });
+    // The host forms up in front of the gate: foot soldiers in the first ranks, knights on the
+    // wings, the archers behind.
+    const A = foeApproachPoint(id);
+    const L = Math.hypot(keepPos.i - A.i, keepPos.j - A.j) || 1;
+    const fwd = { i: (keepPos.i - A.i) / L, j: (keepPos.j - A.j) / L }, side = { i: -fwd.j, j: fwd.i };
+    const spot = (row, col, n) => dryPointNear(A.i + side.i * (col - (n - 1) / 2) * 0.42 - fwd.i * row * 0.5, A.j + side.j * (col - (n - 1) / 2) * 0.42 - fwd.j * row * 0.5);
+    const home = { homeI: A.i - fwd.i * 4, homeJ: A.j - fwd.j * 4 };
+    const fxr = rulerFx(rulerRef.current).expeditionMult;
+    const smith = (SMITH_DAMAGE_MULT[smithTier] || 1) * smithyLevelDamageMult(structures) * fxr;
+    const moor = moorishHired && !capturedCourtiers.moorish ? MOORISH_COMBAT_BONUS : 1;
+    const ownUnit = (type, pt, extra) => ({ id: battleUnitIdSeq++, side: 'attacker', own: true, type, i: pt.i, j: pt.j, hp: UNIT_MAX_HP, maxHp: UNIT_MAX_HP, elev: 0, targetId: null, ...home, ...extra });
+    for (let k = 0; k < soldier; k++) units.push(ownUnit('soldier', spot(Math.floor(k / 6), k % 6, Math.min(6, soldier - Math.floor(k / 6) * 6)), { strengthMult: smith * moor }));
+    const soldierRows = Math.ceil(soldier / 6);
+    for (let k = 0; k < archer; k++) units.push(ownUnit('archer', spot(soldierRows + Math.floor(k / 6), k % 6, Math.min(6, archer - Math.floor(k / 6) * 6)), { strengthMult: smith * bowyerArcherMult(structures) }));
+    const knights = withKnights ? recruitedKnightIds.filter((kid) => !(kid === MOOR_KNIGHT_ID && capturedCourtiers.moorish)) : [];
+    knights.forEach((kid, k) => {
+      const st = knightBattleStats(knightProgress[kid]);
+      const hp = Math.round(CHAMPION_MAX_HP * stallKnightHpMult(structures) * st.hpMult);
+      const wing = k % 2 === 0 ? 1 : -1;
+      const pt = dryPointNear(A.i + side.i * wing * (1.6 + Math.floor(k / 2) * 0.45), A.j + side.j * wing * (1.6 + Math.floor(k / 2) * 0.45));
+      units.push(ownUnit('champion', pt, { knightId: kid, hp, maxHp: hp, armor: st.armor, strengthMult: CHAMPION_DAMAGE_MULT * smith * st.dmgMult * (1 + knightRaises * 0.1) }));
+    });
+    setSoldiers((sv) => ({ soldier: sv.soldier - soldier, archer: sv.archer - archer }));
+    setSiege({ region: id, soldier, archer, knights });
+    setBattleUnits(units);
+    battleUnitsRef.current = units;
+    setBattleObstacles(obstacles);
+    battleObstaclesRef.current = obstacles;
+    setBattleKeepPos(keepPos);
+    battleKeepPosRef.current = keepPos;
+    setArrows([]);
+    setBattleTickCount(0);
+    setAttackerMorale(1);
+    setBattlePhase('siege');
+    setIsPaused(false);
+    const c = gridToScreen(keepPos.i - 2, keepPos.j, 0);
+    jumpTo(c.x, c.y);
+    logEvent('⚔️', `Feldzug gegen ${REGION_DEFS[id].acc}: ${soldier + archer + knights.length} Mann stürmen die Burg`, 'neutral');
+    SOUND.play('warhorn');
+  };
+  const finishSiege = (won) => {
+    const sg = siegeRef.current;
+    if (!sg) return;
+    siegeRef.current = null;
+    const def = REGION_DEFS[sg.region];
+    const ours = battleUnitsRef.current.filter((u) => u.own);
+    const aliveS = ours.filter((u) => u.type === 'soldier' && u.hp > 0).length;
+    const aliveA = ours.filter((u) => u.type === 'archer' && u.hp > 0).length;
+    const fallenK = ours.filter((u) => u.type === 'champion' && u.hp <= 0).map((u) => u.knightId);
+    const aliveK = ours.filter((u) => u.type === 'champion' && u.hp > 0).map((u) => u.knightId);
+    setSoldiers((sv) => ({ soldier: sv.soldier + aliveS, archer: sv.archer + aliveA }));
+    if (fallenK.length) setRecruitedKnights((k) => { const n = { ...k }; fallenK.forEach((kid) => { n[kid] = false; }); return n; });
+    setKnightProgress((kp) => {
+      const n = { ...kp };
+      fallenK.forEach((kid) => { delete n[kid]; });
+      aliveK.forEach((kid) => { n[kid] = { talent: null, ...(n[kid] || {}), xp: ((n[kid] && n[kid].xp) || 0) + (won ? 2 : 1) }; });
+      return n;
+    });
+    const lost = sg.soldier + sg.archer - aliveS - aliveA;
+    const fallenNames = fallenK.map((kid) => KNIGHT_DEFS[kid] && KNIGHT_DEFS[kid].name).filter(Boolean);
+    const losses = `${lost ? `${lost} Eurer Männer sind gefallen` : 'Kein Mann ist gefallen'}${fallenNames.length ? `, dazu Ritter ${fallenNames.join(' und ')}` : ''}.`;
+    setBattlePhase(null);
+    setBattleUnits([]);
+    setBattleObstacles([]);
+    setArrows([]);
+    setSiege(null);
+    if (won) {
+      claimRegion(sg.region, 'erobert');
+      adjustRep(3);
+      setEventOutcome({ emoji: def.icon, tone: 'good', title: `${def.name} ${def.plural ? 'sind' : 'ist'} erobert!`, text: `Die Burg ist gefallen, über ihrem Bergfried weht nun Euer Banner. ${def.lord} beugt das Knie. ${losses}` });
+    } else {
+      adjustRep(-4);
+      logEvent('🏴', `Der Sturm auf ${def.acc} ist gescheitert`, 'bad');
+      setEventOutcome({ emoji: '🏴', tone: 'bad', title: 'Der Sturm ist gescheitert', text: `${def.holder.charAt(0).toUpperCase() + def.holder.slice(1)} ${def.holder.startsWith('die ') ? 'haben' : 'hat'} die Burg gehalten. ${losses} Die Überlebenden kehren heim.` });
+    }
+    setTimeout(() => { if (centerOnCastleRef.current) centerOnCastleRef.current(); }, 60);
+  };
+  const retreatSiege = () => {
+    setBattleUnits((prev) => prev.map((u) => (u.own && u.hp > 0 && !u.exited ? { ...u, routed: true, targetId: null } : u)));
+    setSiege((sg) => (sg ? { ...sg, retreat: true } : sg));
   };
   const oathTerms = (id) => {
     const f = rulerFx(rulerRef.current);
@@ -10734,7 +10869,7 @@ export default function CastleBuilder() {
   // so the parabolic arc has enough frames (roughly 15-25 over a flight) to actually read
   // as a smooth curve rather than jumping between two or three positions.
   useEffect(() => {
-    if (battlePhase !== 'fighting') return;
+    if (battlePhase !== 'fighting' && battlePhase !== 'siege') return;
     const id = setInterval(() => {
       if (isPausedRef.current) return;
       const now = performance.now();
@@ -10761,6 +10896,40 @@ export default function CastleBuilder() {
     }, ARROW_ANIM_MS);
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
+
+  // The storming of a foreign castle runs on the same combat rules, with the sides swapped:
+  // the king's men attack, the lord's garrison defends.
+  useEffect(() => {
+    if (battlePhase !== 'siege') return;
+    const id = setInterval(() => {
+      if (isPausedRef.current) return;
+      const { units, shots, obstacles, attackerMorale: morale } = battleTickStep(battleUnitsRef.current, battleObstaclesRef.current, battleKeepPosRef.current, 1, battleTickCountRef.current, false, 0, false, false, 1, 1);
+      setBattleUnits(units);
+      setBattleObstacles(obstacles);
+      setAttackerMorale(morale);
+      const tickNow = battleTickCountRef.current || 0;
+      for (let k = 0; k < Math.min(3, shots.length); k++) setTimeout(() => SOUND.play('bow'), k * 70);
+      const hits = units.filter((u) => u.hitTick === tickNow && u.hp > 0).length;
+      for (let k = 0; k < Math.min(3, hits); k++) setTimeout(() => SOUND.play('clash'), k * 90);
+      if (obstacles.some((o) => o.breachTick === tickNow)) SOUND.play('crumble');
+      if (shots.length > 0) setArrows((prev) => [...prev, ...shots.map((sh) => ({ id: arrowIdSeqRef.current++, ...sh, progress: 0 }))]);
+      setBattleTickCount((c) => c + 1);
+    }, BATTLE_TICK_MS / gameSpeed);
+    return () => clearInterval(id);
+  }, [battlePhase, gameSpeed]);
+  useEffect(() => {
+    if (battlePhase !== 'siege' || !siege || battleUnits.length === 0) return;
+    const active = battleUnits.filter((u) => u.own && u.hp > 0 && !u.exited).length;
+    const foes = battleUnits.filter((u) => u.foe && u.hp > 0).length;
+    const keepO = battleObstacles.find((o) => o.type === 'keep');
+    const keepFell = !!keepO && keepO.hp <= 0;
+    const timedOut = battleTickCount >= MAX_BATTLE_TICKS;
+    // With nobody left to hold the courtyard and the king's men inside the walls, the archers
+    // up on the towers lay down their bows.
+    const surrendered = siegeSurrendered(siege.region, battleUnits);
+    if (!(keepFell || foes === 0 || surrendered || active === 0 || timedOut)) return;
+    finishSiege((keepFell || foes === 0 || surrendered) && active > 0 && !siege.retreat);
+  }, [battleUnits, battleTickCount, battlePhase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const battleEndPendingTickRef = useRef(null);
   useEffect(() => {
@@ -11416,7 +11585,7 @@ export default function CastleBuilder() {
   // tower segments are currently under attack, so the model itself visibly crumbles.
   const battleDamageByKey = useMemo(() => {
     const map = {};
-    if (battlePhase === 'fighting') {
+    if (battlePhase === 'fighting' || battlePhase === 'siege') {
       battleObstacles.forEach((o) => { map[o.structureKey] = o.breached ? 1 : 1 - o.hp / o.maxHp; });
     }
     return map;
@@ -11566,9 +11735,9 @@ export default function CastleBuilder() {
     const garrisonPositions = siegeActive
       ? computeSiegePositions(structures, soldiers, garrisonAnchorI, garrisonAnchorJ, recruitedKnightIds, getCalendarDate(day).year - START_YEAR + 1)
       : computeGarrisonPositions(garrisonAnchorI, garrisonAnchorJ, soldiers.soldier, soldiers.archer);
-    if (!battlePhase) list.push({ depth: viewDepth(garrisonAnchorI, garrisonAnchorJ) + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
+    if (!battlePhase || battlePhase === 'siege') list.push({ depth: viewDepth(garrisonAnchorI, garrisonAnchorJ) + 0.8, node: <GarrisonSprites key="garrison" positions={garrisonPositions} /> });
     // During a battle the villagers have fled behind the walls: a crowd around the keep.
-    if (battlePhase && structures.keep) {
+    if (battlePhase && battlePhase !== 'siege' && structures.keep) {
       const n = Math.min(12, villagePop);
       for (let k = 0; k < n; k++) {
         const ang = (k / n) * Math.PI * 2 + 0.4, r = 0.95 + (k % 3) * 0.18;
@@ -12562,6 +12731,28 @@ export default function CastleBuilder() {
         </div>
       )}
 
+      {battlePhase === 'siege' && siege && (() => {
+        const mine = battleUnits.filter((u) => u.own && u.hp > 0 && !u.exited && !u.routed).length;
+        const foes = battleUnits.filter((u) => u.foe && u.hp > 0).length;
+        const def = REGION_DEFS[siege.region];
+        return (
+          <div style={{ position: 'absolute', top: 10, right: 300, background: 'rgba(20,16,10,0.85)', border: '2px solid #C9A24B', borderRadius: 4, padding: '10px 14px', zIndex: 40, maxWidth: 270 }}>
+            <div className="cb-title" style={{ color: '#C9A24B', fontSize: '0.9rem', marginBottom: 6 }}>⚔️ Sturm auf {def.acc}</div>
+            <div style={{ fontSize: '0.8rem', color: '#EAE0C4' }}>🛡️ Eure Männer: <strong>{mine}</strong> · 🏰 Verteidiger: <strong>{foes}</strong></div>
+            <div style={{ fontSize: '0.78rem', color: '#EAE0C4', marginTop: 4 }}>Moral Eures Heeres: {Math.round(attackerMorale * 100)}%</div>
+            <div style={{ width: '100%', height: 8, background: '#2b2118', borderRadius: 3, overflow: 'hidden', marginTop: 3 }}>
+              <div style={{ width: `${Math.round(attackerMorale * 100)}%`, height: '100%', background: attackerMorale < ATTACKER_MORALE_BREAK ? '#a8402c' : attackerMorale < 0.6 ? '#c9a24b' : '#4a7a3c' }} />
+            </div>
+            <p style={{ color: '#C9BFA8', fontSize: '0.72rem', marginTop: 6, lineHeight: 1.4, fontStyle: 'italic' }}>
+              Die Burg fällt, wenn ihre Besatzung besiegt ist oder Eure Männer den Bergfried erreichen. Bogenschützen auf den Türmen holt nur Euer eigener Pfeil herunter. Sinkt die Moral zu tief, flieht Euer Heer.
+            </p>
+            <button onClick={retreatSiege} disabled={!!siege.retreat}
+              style={{ width: '100%', marginTop: 6, padding: '6px 10px', borderRadius: 3, border: '2px solid #a8402c', background: 'rgba(168,64,44,0.15)', color: '#EAE0C4', fontFamily: "'Cinzel', serif", fontSize: '0.78rem', cursor: 'pointer' }}>
+              {siege.retreat ? 'Rückzug läuft …' : '🏳️ Rückzug blasen'}
+            </button>
+          </div>
+        );
+      })()}
       {battlePhase === 'fighting' && (
         <div style={{ position: 'absolute', top: 10, right: 300, background: 'rgba(20,16,10,0.85)', border: '2px solid #C9A24B', borderRadius: 4, padding: '10px 14px', zIndex: 40, maxWidth: 260 }}>
           <div className="cb-title" style={{ color: '#C9A24B', fontSize: '0.9rem', marginBottom: 6 }}>⚔️ Kampf</div>
@@ -13275,7 +13466,7 @@ export default function CastleBuilder() {
             return (
               <>
                 <div style={{ fontSize: '0.92rem', lineHeight: 1.55, marginBottom: 10 }}>
-                  Euer Reich umfasst <strong>{ownedRegions.length + 1} von {REGION_IDS.length + 1}</strong> Landstrichen. Fremdes Land lässt sich <strong>erobern</strong> — mit einem Feldzug, für den Ihr einen Teil der Garnison {EXPEDITION_DAYS} Tage lang entbehren müsst — oder sein Herr leistet Euch den <strong>Lehnseid</strong>, wenn Euer Ruf groß genug ist und das Gold stimmt.
+                  Euer Reich umfasst <strong>{ownedRegions.length + 1} von {REGION_IDS.length + 1}</strong> Landstrichen. Fremdes Land lässt sich <strong>erobern</strong> — im Sturm auf die Burg seines Herrn, den Ihr selbst führt — oder sein Herr leistet Euch den <strong>Lehnseid</strong>, wenn Euer Ruf groß genug ist und das Gold stimmt.
                 </div>
                 {expedition && (
                   <div className="cb-parch" style={{ padding: '8px 12px', marginBottom: 10, background: 'rgba(168,64,44,0.12)', boxShadow: 'none' }}>
@@ -13302,16 +13493,19 @@ export default function CastleBuilder() {
                         {open && reachable && (() => {
                           const maxS = soldiers.soldier, maxA = soldiers.archer;
                           const sendS = Math.min(expDraft.soldier, maxS), sendA = Math.min(expDraft.archer, maxA);
-                          const power = expeditionPower(sendS, sendA, smithTier) * fx.expeditionMult;
+                          const sendK = expDraft.knights ? recruitedKnightIds.length : 0;
+                          const power = (expeditionPower(sendS, sendA, smithTier) + sendK * 3) * fx.expeditionMult;
                           const chance = expeditionWinChance(power, strength);
-                          const canSend = !expedition && !busy && sendS + sendA > 0;
+                          const canSend = !expedition && !busy && sendS + sendA + sendK > 0;
+                          const site = FOE_CASTLE_SITES[id];
+                          const wallName = levelName('wall', site.wall);
                           const terms = oathTerms(id);
                           const repOk = reputation >= terms.rep, goldOk = resources.gold >= terms.gold;
                           return (
                             <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 12, marginTop: 10 }}>
                               <div style={{ borderRight: '1px solid rgba(59,46,31,0.2)', paddingRight: 12 }}>
                                 <div className="cb-section-title" style={{ marginBottom: 6 }}>⚔️ Feldzug</div>
-                                <div style={{ fontSize: '0.8rem', marginBottom: 6 }}>Stärke der Verteidiger: <strong>{strength}</strong></div>
+                                <div style={{ fontSize: '0.8rem', marginBottom: 6 }}>Burg mit {wallName} · etwa <strong>{Math.max(4, Math.round(strength * FOE_GARRISON_SHARE))}</strong> Verteidiger</div>
                                 {[['soldier', '🛡️ Soldaten', maxS, sendS], ['archer', '🏹 Bogenschützen', maxA, sendA]].map(([key, label, max, val]) => (
                                   <label key={key} style={{ display: 'grid', gridTemplateColumns: '108px 1fr 30px', alignItems: 'center', gap: 6, fontSize: '0.82rem', marginBottom: 3 }}>
                                     <span>{label}</span>
@@ -13319,16 +13513,22 @@ export default function CastleBuilder() {
                                     <span style={{ textAlign: 'right' }}>{val}</span>
                                   </label>
                                 ))}
+                                {recruitedKnightIds.length > 0 && (
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', marginBottom: 3 }}>
+                                    <input type="checkbox" checked={!!expDraft.knights} onChange={(e) => setExpDraft((x) => ({ ...x, knights: e.target.checked }))} />
+                                    🐎 Die Ritter reiten mit ({recruitedKnightIds.map((kid) => KNIGHT_DEFS[kid].name).join(', ')})
+                                  </label>
+                                )}
                                 <div style={{ fontSize: '0.8rem', margin: '4px 0 6px' }}>
-                                  Kampfkraft <strong>{power.toFixed(0)}</strong> · Aussicht auf Sieg <strong style={{ color: chance >= 0.7 ? '#3d5a2c' : chance >= 0.4 ? '#7a5a20' : '#8a2d20' }}>{Math.round(chance * 100)} %</strong>
+                                  Kampfkraft <strong>{power.toFixed(0)}</strong> · grobe Aussicht <strong style={{ color: chance >= 0.7 ? '#3d5a2c' : chance >= 0.4 ? '#7a5a20' : '#8a2d20' }}>{Math.round(chance * 100)} %</strong>
                                   <div className="cb-meter" style={{ marginTop: 4 }}><div style={{ width: `${chance * 100}%`, background: chance >= 0.7 ? '#5d8a3c' : chance >= 0.4 ? '#c9a24b' : '#a8402c' }} /></div>
                                 </div>
-                                <button className="cb-btn is-active" disabled={!canSend} onClick={() => { startExpedition(id, sendS, sendA); setExpDraft({ soldier: 0, archer: 0 }); setOpenPanel(null); setReichFocus(null); }}
+                                <button className="cb-btn is-active" disabled={!canSend} onClick={() => { startSiege(id, sendS, sendA, !!expDraft.knights); setExpDraft({ soldier: 0, archer: 0, knights: true }); setOpenPanel(null); setReichFocus(null); }}
                                   style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem' }}
                                   title={expedition ? 'Es ist schon ein Feldzug unterwegs' : busy ? 'Nicht während einer Schlacht' : ''}>
-                                  {expedition ? 'Ein Feldzug ist schon unterwegs' : `Aufbrechen (${EXPEDITION_DAYS} Tage)`}
+                                  {expedition ? 'Ein Feldzug ist schon unterwegs' : '⚔️ Zum Sturm aufbrechen'}
                                 </button>
-                                <div style={{ fontSize: '0.72rem', color: '#6b5536', fontStyle: 'italic', marginTop: 4, lineHeight: 1.35 }}>Wer auszieht, fehlt so lange daheim — auch wenn die Sachsen kommen.</div>
+                                <div style={{ fontSize: '0.72rem', color: '#6b5536', fontStyle: 'italic', marginTop: 4, lineHeight: 1.35 }}>Ihr führt den Sturm selbst: Eure Männer greifen die Burg an, Ihr könnt jederzeit zum Rückzug blasen. Wer fällt, fehlt danach im Dorf.</div>
                               </div>
                               <div>
                                 <div className="cb-section-title" style={{ marginBottom: 6 }}>📜 Lehnseid</div>
@@ -14111,7 +14311,7 @@ export default function CastleBuilder() {
                 <g>{drawables.map((d) => d.node)}</g>
                 <CloudShadows />
                 <g>
-                  {REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
+                  {!battlePhase && REGION_IDS.filter((id) => !ownedRegions.includes(id)).map((id) => {
                     const d = REGION_DEFS[id];
                     // The sign hangs above the lord's castle, clear of its walls.
                     const site = FOE_CASTLE_SITES[id];
@@ -14265,7 +14465,7 @@ export default function CastleBuilder() {
                         {isSelected && !dead && <circle cx="0" cy="-10" r="15" fill="none" stroke="#C9A24B" strokeWidth="1.6" />}
                         <g transform={dead ? `rotate(${fallAngle})` : undefined} style={{ transformOrigin: '0px 2px' }} opacity={bodyOpacity}>
                           <g transform={u.faceLeft ? 'scale(-1,1)' : undefined}>
-                            <PersonFigure type={u.type} mode={u.side === 'attacker' && battlePhase === 'fighting' ? 'walk' : 'idle'} />
+                            <PersonFigure type={u.foe ? (u.type === 'archer' ? 'saxonArcher' : 'saxon') : u.type} mode={u.side === 'attacker' && (battlePhase === 'fighting' || battlePhase === 'siege') ? 'walk' : 'idle'} />
                           </g>
                         </g>
                         {!dead && u.hitTick != null && battleTickCount - u.hitTick <= 1 && <HitFlash />}
@@ -14281,14 +14481,14 @@ export default function CastleBuilder() {
                           return (
                             <>
                               <rect x={-w / 2} y={top} width={w} height="3" fill="#2b2118" />
-                              <rect x={-w / 2} y={top} width={w * (u.hp / u.maxHp)} height="3" fill={u.side === 'attacker' ? '#a8402c' : '#4a7a3c'} />
+                              <rect x={-w / 2} y={top} width={w * (u.hp / u.maxHp)} height="3" fill={u.foe || (u.side === 'attacker' && !u.own) ? '#a8402c' : '#4a7a3c'} />
                             </>
                           );
                         })()}
                       </g>
                     );
                   })}
-                  {battlePhase === 'fighting' && battleObstacles.filter((o) => !o.breached && o.hp < o.maxHp).map((o) => {
+                  {(battlePhase === 'fighting' || battlePhase === 'siege') && battleObstacles.filter((o) => !o.breached && o.hp < o.maxHp).map((o) => {
                     const mid = obstacleMidpoint(o);
                     const elev = o.type === 'gate' ? PILLAR_H + 14 : o.type === 'tower' ? TOWER_H + 14 : o.type === 'keep' ? KEEP_H + 14 : WALL_H + 10;
                     const gp = gridToScreen(mid.i, mid.j, elev);
@@ -14302,19 +14502,19 @@ export default function CastleBuilder() {
                       </g>
                     );
                   })}
-                  {battlePhase === 'fighting' && arrows.map((a) => (
+                  {(battlePhase === 'fighting' || battlePhase === 'siege') && arrows.map((a) => (
                     a.heavy
                       ? <BoulderSprite key={`arrow-${a.id}`} fromI={a.fromI} fromJ={a.fromJ} fromElev={a.fromElev} toI={a.toI} toJ={a.toJ} toElev={a.toElev} progress={a.progress} />
                       : <ArrowSprite key={`arrow-${a.id}`} fromI={a.fromI} fromJ={a.fromJ} fromElev={a.fromElev} toI={a.toI} toJ={a.toJ} toElev={a.toElev} progress={a.progress} />
                   ))}
-                  {battlePhase === 'fighting' && impacts.map((im) => {
+                  {(battlePhase === 'fighting' || battlePhase === 'siege') && impacts.map((im) => {
                     const p = gridToScreen(im.i, im.j, im.heavy ? 0 : im.elev);
                     const age = (performance.now() - im.t) / (im.heavy ? 800 : 420);
                     return im.heavy
                       ? <g key={`imp-${im.id}`}><DustBurst x={p.x} y={p.y} age={age} size={1.1} /><DebrisBurst x={p.x} y={p.y} age={age} /></g>
                       : <DustBurst key={`imp-${im.id}`} x={p.x} y={p.y} age={age} size={0.35} />;
                   })}
-                  {battlePhase === 'fighting' && battleObstacles.map((o) => {
+                  {(battlePhase === 'fighting' || battlePhase === 'siege') && battleObstacles.map((o) => {
                     // Dust where a wall is being battered, and a big collapse cloud (with flying
                     // stone) the moment it gives way.
                     const mid = obstacleMidpoint(o);
@@ -14330,7 +14530,7 @@ export default function CastleBuilder() {
                     }
                     return out.length ? <g key={`ofx-${o.key}`}>{out}</g> : null;
                   })}
-                  {battlePhase === 'fighting' && battleUnits.filter((u) => u.side === 'attacker' && u.hp > 0 && u.targetId != null && isMeleeUnit(u)).map((u) => {
+                  {(battlePhase === 'fighting' || battlePhase === 'siege') && battleUnits.filter((u) => u.side === 'attacker' && u.hp > 0 && u.targetId != null && isMeleeUnit(u)).map((u) => {
                     const t = battleUnits.find((o) => o.id === u.targetId);
                     if (!t || t.hp <= 0 || distance2(u, t) > MELEE_RANGE + 0.05) return null;
                     const p = gridToScreen((u.i + t.i) / 2, (u.j + t.j) / 2, ((u.elev || 0) + (t.elev || 0)) / 2 + 12);
