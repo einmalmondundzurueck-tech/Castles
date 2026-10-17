@@ -405,6 +405,39 @@ const AMENITY_TYPES = {
   turnierplatz: { label: 'Turnierplatz', top: '#c9b98a', left: '#8a6a42', right: '#5d432a' },
 };
 const AMENITY_IDS = Object.keys(AMENITY_TYPES);
+// Most buildings stand on one tile; the Turnierplatz is a long yard over two (along i). Such
+// a building is stored under the key of its first tile, with its centre in the middle of all.
+const AMENITY_WIDTH = { turnierplatz: 2 };
+function amenityWidth(kind) { return AMENITY_WIDTH[kind] || 1; }
+function amenityCenter(kind, ti, tj) { return { i: ti + amenityWidth(kind) / 2, j: tj + 0.5 }; }
+function amenityTiles(kind, ti, tj) { return Array.from({ length: amenityWidth(kind) }, (_, k) => [ti + k, tj]); }
+// The tiles a keep or building covers.
+function structureTiles(s) {
+  if (s.type === 'keep') return [[Math.floor(s.i), Math.floor(s.j)]];
+  const w = amenityWidth(s.kind);
+  return amenityTiles(s.kind, Math.floor(s.i - w / 2 + 0.5), Math.floor(s.j));
+}
+// Which keep or building (its key) stands on a tile, if any.
+function structureKeyOnTile(structures, i, j) {
+  for (const [k, s] of Object.entries(structures)) {
+    if (s.type !== 'keep' && s.type !== 'amenity') continue;
+    if (structureTiles(s).some(([a, b]) => a === i && b === j)) return k;
+  }
+  return null;
+}
+// A wall or ditch along the edge between two tiles of the same building would cut it in two.
+function edgeSplitsBuilding(structures, i1, j1, i2, j2) {
+  if (i1 !== i2 && j1 !== j2) {
+    const k = structureKeyOnTile(structures, Math.min(i1, i2), Math.min(j1, j2));
+    return !!k && k !== 'keep' && amenityWidth(structures[k].kind) > 1;
+  }
+  const [a, b] = j1 === j2 ? [[Math.min(i1, i2), j1 - 1], [Math.min(i1, i2), j1]] : [[i1 - 1, Math.min(j1, j2)], [i1, Math.min(j1, j2)]];
+  const ka = structureKeyOnTile(structures, a[0], a[1]);
+  return !!ka && ka === structureKeyOnTile(structures, b[0], b[1]);
+}
+function amenityCorners(kind, i, j) {
+  return amenityWidth(kind) > 1 ? orientedRect(i, j, 1, 0, amenityWidth(kind) / 2 - 0.04, 0.46) : sq(i, j, amenityHalf(kind));
+}
 function hasDoneAmenity(structures, kind) {
   return Object.values(structures).some((s) => s.type === 'amenity' && s.kind === kind && s.stage === 'done');
 }
@@ -3309,7 +3342,7 @@ function AmenityBody({ i, j, kind, level }) {
   const info = AMENITY_TYPES[kind];
   const seed = i * 11.3 + j * 3.7;
   const H = amenityWallHeight(kind, L);
-  const corners = sq(i, j, half);
+  const corners = amenityCorners(kind, i, j);
   const quads = computeFaceQuads(corners, 0, H);
   const P = (a, b, e = 0) => gridToScreen(a, b, e);
   const els = [];
@@ -3630,20 +3663,32 @@ function AmenityBody({ i, j, kind, level }) {
       break;
     }
     case 'turnierplatz': {
-      // The lists: a sanded yard, the tilt barrier down the middle, banners and a stand.
+      // The lists over two tiles: a sanded yard, the tilt barrier down the middle, stands
+      // for the court along one side (a second one opposite from Stufe 2), banners at the
+      // corners and a rack of lances.
+      const hI = amenityWidth(kind) / 2 - 0.04, hJ = 0.46;
+      const R = (a, b2, e = 0) => P(i + a * hI, j + b2 * hJ, e);
       els.push(<Block key="sand" corners={corners} baseElev={0} topElev={1} topFill="#d8c79a" faceLeft="#b8a47a" faceRight="#9a8862" shadowHeight={0} />);
-      els.push(<Block key="tilt" corners={orientedRect(i, j, 1, 0, half * 0.85, 0.025)} baseElev={1} topElev={6} topFill="#e8e0cc" faceLeft="#c0392b" faceRight="#8f2a20" shadowHeight={6} />);
-      const fence = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b2]) => P(i + a * half, j + b2 * half, 4));
-      els.push(<polygon key="fence" points={ptsStr(fence)} fill="none" stroke="#6b4d2e" strokeWidth="1.2" pointerEvents="none" />);
-      els.push(<Block key="stand" corners={orientedRect(i, j - half + 0.12, 1, 0, half * 0.6, 0.1)} baseElev={0} topElev={9} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed} shadowHeight={14} />);
-      const cv = [[-0.6, -0.04], [0.6, -0.04], [0.6, 0.18], [-0.6, 0.18]].map(([a, b2]) => P(i + a * half, j - half + 0.12 + b2, 17));
-      els.push(<polygon key="canopy" points={ptsStr(cv)} fill={L >= 2 ? '#2f5d8a' : '#a83a2c'} stroke="#3a1a12" strokeWidth="0.6" pointerEvents="none" />);
-      const cols = ['#c0392b', '#c9a24b', '#2f5d8a', '#3d6b3a'];
-      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b2], k) => {
-        const pb = P(i + a * half * 0.95, j + b2 * half * 0.95, 0), pt = P(i + a * half * 0.95, j + b2 * half * 0.95, 20);
+      els.push(<Block key="tilt" corners={orientedRect(i, j, 1, 0, hI * 0.78, 0.025)} baseElev={1} topElev={6} topFill="#e8e0cc" faceLeft="#c0392b" faceRight="#8f2a20" shadowHeight={6} />);
+      els.push(<polygon key="fence" points={ptsStr([R(-1, -1, 4), R(1, -1, 4), R(1, 1, 4), R(-1, 1, 4)])} fill="none" stroke="#6b4d2e" strokeWidth="1.2" pointerEvents="none" />);
+      const stand = (sideJ, colour, key) => {
+        const cj = j + sideJ * (hJ - 0.1);
+        els.push(<Block key={`${key}-b`} corners={orientedRect(i, cj, 1, 0, hI * 0.45, 0.09)} baseElev={0} topElev={9} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" texture="wood" seed={seed + key.length} shadowHeight={14} />);
+        const cv = [[-0.47, -0.12], [0.47, -0.12], [0.47, 0.12], [-0.47, 0.12]].map(([a, b2]) => P(i + a * hI, cj + b2, 18));
+        els.push(<polygon key={`${key}-c`} points={ptsStr(cv)} fill={colour} stroke="#3a1a12" strokeWidth="0.6" pointerEvents="none" />);
+      };
+      stand(-1, L >= 3 ? '#6a2a6a' : '#a83a2c', 'stand1');
+      if (L >= 2) stand(1, '#2f5d8a', 'stand2');
+      const cols = ['#c0392b', '#c9a24b', '#2f5d8a', '#3d6b3a', '#c0392b', '#c9a24b'];
+      const poles = [[-1, -1], [1, -1], [1, 1], [-1, 1], ...(L >= 2 ? [[0, -1], [0, 1]] : [])];
+      poles.forEach(([a, b2], k) => {
+        const pb = R(a * 0.97, b2 * 0.95, 0), pt = R(a * 0.97, b2 * 0.95, 22);
         els.push(<g key={`bn${k}`} pointerEvents="none"><line x1={pb.x} y1={pb.y} x2={pt.x} y2={pt.y} stroke="#3a2614" strokeWidth="1" /><path d={`M ${pt.x} ${pt.y} l 9 3 l -9 3 z`} fill={cols[k]} stroke="#2b2118" strokeWidth="0.4" /></g>);
       });
-      top = 20;
+      // Lance rack at the near end.
+      const lr = R(0.9, 0.3, 0);
+      els.push(<g key="lances" pointerEvents="none">{[0, 1, 2].map((k) => <line key={k} x1={lr.x - 4 + k * 3} y1={lr.y} x2={lr.x - 6 + k * 3} y2={lr.y - 20} stroke={k % 2 ? '#e8e0cc' : '#c0392b'} strokeWidth="1.3" />)}</g>);
+      top = 22;
       break;
     }
     default:
@@ -3653,9 +3698,8 @@ function AmenityBody({ i, j, kind, level }) {
 }
 
 const AmenityNode = React.memo(function AmenityNode({ i, j, kind, ghost, ghostBlocked, stage = 'done', progress = 1, blocked = false, ruined = false, level = 1, upgrading = false }) {
-  const half = amenityHalf(kind);
   const finalHeight = amenityWallHeight(kind, level);
-  const corners = sq(i, j, half);
+  const corners = amenityCorners(kind, i, j);
   const info = AMENITY_TYPES[kind];
   const seed = i * 11.3 + j * 3.7;
   const finalPal = ghost ? (ghostBlocked ? PALETTE.ghostBlocked : PALETTE.ghost) : info;
@@ -4224,13 +4268,28 @@ const RESEARCH = {
   wehrturm: { name: 'Wehrtürme', icon: '🗼', gold: 140, days: 90, needs: ['steinbau'], text: 'Türme auf Stufe 3: höher, 3 Schützenplätze, +20 % Schaden.' },
   wehrgang: { name: 'Wehrgang', icon: '🏹', gold: 180, days: 120, needs: ['steinbau'], text: 'Wehrmauern: Die Bogenschützen laufen auf dem Wehrgang dorthin, wo der Feind angreift.' },
   palas: { name: 'Palasbau', icon: '🏛️', gold: 150, days: 100, needs: ['steinbau'], text: 'Der Palas — die große Halle für Feste, Brautschau und Gäste.' },
+  // Ausbau of the buildings (Stufe 2 and 3), in three trades.
+  handwerk: { name: 'Handwerk', icon: '🔧', group: 'bauten', gold: 70, days: 60, needs: [], text: 'Stufe 2 für Bäckerei, Brauhaus, Brunnen und Lagerhaus.' },
+  kriegshandwerk: { name: 'Kriegshandwerk', icon: '⚔️', group: 'bauten', gold: 90, days: 70, needs: [], text: 'Stufe 2 für Schmiede, Stallungen, Bogenmacher und Turnierplatz.' },
+  hofkultur: { name: 'Hofkultur', icon: '🎭', group: 'bauten', gold: 90, days: 70, needs: [], text: 'Stufe 2 für Kemenate, Kapelle, Palas und Falknerei.' },
+  zunftwesen: { name: 'Zunftwesen', icon: '⚖️', group: 'bauten', gold: 160, days: 120, needs: ['handwerk', 'steinbau'], text: 'Stufe 3 für Bäckerei, Brauhaus, Brunnen und Lagerhaus.' },
+  ritterwesen: { name: 'Ritterwesen', icon: '🛡️', group: 'bauten', gold: 180, days: 120, needs: ['kriegshandwerk', 'steinbau'], text: 'Stufe 3 für Schmiede, Stallungen, Bogenmacher und Turnierplatz.' },
+  prachtbau: { name: 'Prachtbau', icon: '👑', group: 'bauten', gold: 180, days: 120, needs: ['hofkultur', 'steinbau'], text: 'Stufe 3 für Kemenate, Kapelle, Palas und Falknerei.' },
   bastion: { name: 'Bastionen', icon: '🏰', gold: 260, days: 150, needs: ['wehrturm'], text: 'Türme auf Stufe 4: noch höher, 4 Schützenplätze, +40 % Schaden.' },
 };
 const RESEARCH_IDS = Object.keys(RESEARCH);
 const RESEARCH_SLOW_MULT = 2; // without a Baumeister
 // Everything an older save already had (stone walls and towers up to the Bastion) counts as
 // researched there.
-const LEGACY_RESEARCH = ['steinbau', 'wehrturm', 'bastion'];
+const LEGACY_RESEARCH = ['steinbau', 'wehrturm', 'bastion', 'handwerk', 'kriegshandwerk', 'hofkultur', 'zunftwesen', 'ritterwesen', 'prachtbau'];
+// Which trade a building's Ausbau belongs to, and the research each level needs.
+const AMENITY_TRADE = {
+  baeckerei: 'wirtschaft', brauhaus: 'wirtschaft', brunnen: 'wirtschaft', lagerhaus: 'wirtschaft',
+  schmied: 'krieg', stallungen: 'krieg', bogenmacher: 'krieg', turnierplatz: 'krieg',
+  kemenate: 'hof', kapelle: 'hof', palas: 'hof', falknerei: 'hof',
+};
+const TRADE_RESEARCH = { wirtschaft: { 2: 'handwerk', 3: 'zunftwesen' }, krieg: { 2: 'kriegshandwerk', 3: 'ritterwesen' }, hof: { 2: 'hofkultur', 3: 'prachtbau' } };
+function amenityUpgradeNeeds(kind, level) { return (TRADE_RESEARCH[AMENITY_TRADE[kind]] || {})[level] || null; }
 // The highest level of a structure the realm knows how to build.
 function maxKnownLevel(type, known) {
   const needs = STRUCT_LEVELS[type].needs;
@@ -4917,7 +4976,7 @@ function buildWorkerNav(structures) {
       navAddTower(nav, s.i, s.j);
       nav.sig.push(key);
     } else if (s.type === 'keep' || s.type === 'amenity') {
-      nav.cell[navIdx(...navCellOf(s.i, s.j))] = Infinity;
+      structureTiles(s).forEach(([a, b]) => { if (a >= 0 && b >= 0 && a < NAV_W && b < NAV_H) nav.cell[navIdx(a, b)] = Infinity; });
       nav.sig.push(key);
     }
   });
@@ -10323,6 +10382,7 @@ export default function CastleBuilder() {
     if (tool === 'delete') { askDemolish([key]); return; }
     if ((tool === 'wall' || tool === 'gate') && !structuresRef.current.keep) return;
     if ((tool === 'wall' || tool === 'gate') && !isBuildableEdge(effInfo.i1, effInfo.j1, effInfo.i2, effInfo.j2)) return;
+    if ((tool === 'wall' || tool === 'gate' || tool === 'graben') && edgeSplitsBuilding(structuresRef.current, effInfo.i1, effInfo.j1, effInfo.i2, effInfo.j2)) return;
     if (tool === 'graben' && !moatUnlocked) return;
     if (tool === 'graben' && !isBuildableEdge(info.i1, info.j1, info.i2, info.j2, true)) return;
     SOUND.play('place');
@@ -10375,7 +10435,7 @@ export default function CastleBuilder() {
           const next = { ...prev };
           pathEdges.forEach((e) => {
             if (next[e.key]) return; // leave whatever's already built (or a different structure) alone
-            if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2)) return;
+            if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2) || edgeSplitsBuilding(next, e.i1, e.j1, e.i2, e.j2)) return;
             next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, level: levelFor('wall'), diagonal: !!e.diagonal };
           });
           return next;
@@ -10399,15 +10459,14 @@ export default function CastleBuilder() {
   const handleTileClick = useCallback((i, j) => {
     const key = `amenity:${i},${j}`;
     const structs = structuresRef.current;
-    const keepHere = structs.keep && Math.floor(structs.keep.i) === i && Math.floor(structs.keep.j) === j;
+    const hereKey = structureKeyOnTile(structs, i, j);
     if (tool === null) {
-      if (keepHere) { setInfoTarget({ kind: 'structure', data: structs.keep, structKey: 'keep' }); return; }
-      const site = structs[key];
-      if (site) setInfoTarget({ kind: 'structure', data: site, structKey: key });
+      if (hereKey) setInfoTarget({ kind: 'structure', data: structs[hereKey], structKey: hereKey });
       return;
     }
     if (tool === 'keep') {
       if (terrainAt(i, j) !== 'grass') return;
+      if (hereKey && hereKey !== 'keep') return;
       SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
@@ -10422,16 +10481,19 @@ export default function CastleBuilder() {
       if (terrainAt(i, j) !== 'grass') return;
       if (tool === 'kemenate' && !isKemenateAllowed(structuresRef.current, i, j)) return;
       if (tool === 'palas' && !researchRef.current.done.includes('palas')) return;
+      const current = structs[key];
+      const removing = current && current.kind === tool;
+      // Every tile of the new building must be free grass.
+      if (!removing && !amenityTiles(tool, i, j).every(([a, b]) => terrainAt(a, b) === 'grass' && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
       SOUND.play('place');
       setStructures((prev) => {
-        const current = prev[key];
         const next = { ...prev };
-        if (current && current.kind === tool) delete next[key];
-        else next[key] = { type: 'amenity', kind: tool, i: i + 0.5, j: j + 0.5, stage: 'foundation', progress: 0 };
+        if (removing) delete next[key];
+        else next[key] = { type: 'amenity', kind: tool, ...amenityCenter(tool, i, j), stage: 'foundation', progress: 0 };
         return next;
       });
     } else if (tool === 'delete') {
-      askDemolish([keepHere ? 'keep' : key]);
+      if (hereKey) askDemolish([hereKey]);
     }
   }, [tool, askDemolish]);
 
@@ -10460,7 +10522,7 @@ export default function CastleBuilder() {
       setStructures((prev) => {
         const next = { ...prev };
         pathEdges.forEach((e) => {
-          if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2, tool === 'graben')) return;
+          if (!isBuildableEdge(e.i1, e.j1, e.i2, e.j2, tool === 'graben') || edgeSplitsBuilding(next, e.i1, e.j1, e.i2, e.j2)) return;
           const current = next[e.key];
           if (tool === 'wall') {
             if (!current) next[e.key] = { type: 'wall', i1: e.i1, j1: e.j1, i2: e.i2, j2: e.j2, stage: 'foundation', progress: 0, level: levelFor('wall') };
@@ -10720,10 +10782,10 @@ export default function CastleBuilder() {
       }
       if (hoverKey.startsWith('tile:') && AMENITY_IDS.includes(tool)) {
         const [ti, tj] = hoverKey.slice(5).split(',').map(Number);
-        const occKey = `amenity:${ti},${tj}`;
-        if (!structures[occKey]) {
-          const okBuild = !!structures.keep && terrainAt(ti, tj) === 'grass' && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
-          list.push({ depth: viewDepth(ti + 0.5, tj + 0.5) - 0.4, node: <AmenityNode key="ghost-t" i={ti + 0.5} j={tj + 0.5} kind={tool} ghost ghostBlocked={!okBuild} /> });
+        if (!structureKeyOnTile(structures, ti, tj)) {
+          const okBuild = !!structures.keep && amenityTiles(tool, ti, tj).every(([a, b]) => terrainAt(a, b) === 'grass' && isOwnedTile(a, b) && !structureKeyOnTile(structures, a, b)) && (tool !== 'kemenate' || isKemenateAllowed(structures, ti, tj));
+          const c = amenityCenter(tool, ti, tj);
+          list.push({ depth: viewDepth(c.i, c.j) - 0.4, node: <AmenityNode key="ghost-t" i={c.i} j={c.j} kind={tool} ghost ghostBlocked={!okBuild} /> });
         }
       }
       // Abriss (delete): previously hovering a wall/tower/building with the demolish tool
@@ -10777,15 +10839,14 @@ export default function CastleBuilder() {
         }
         if (hoverKey.startsWith('tile:')) {
           const [ti, tj] = hoverKey.slice(5).split(',').map(Number);
-          const keepHere = structures.keep && Math.floor(structures.keep.i) === ti && Math.floor(structures.keep.j) === tj;
-          const amenHere = structures[`amenity:${ti},${tj}`];
-          const target = keepHere ? structures.keep : amenHere;
+          const hereKey = structureKeyOnTile(structures, ti, tj);
+          const target = hereKey ? structures[hereKey] : null;
           if (target) {
-            const heightGuess = keepHere ? KEEP_H + MERLON_H : AMENITY_H;
-            const c = gridToScreen(ti + 0.5, tj + 0.5, 0);
-            const gp = gridToScreen(ti + 0.5, tj + 0.5, heightGuess + 16);
+            const heightGuess = hereKey === 'keep' ? KEEP_H + MERLON_H : AMENITY_H;
+            const c = gridToScreen(target.i, target.j, 0);
+            const gp = gridToScreen(target.i, target.j, heightGuess + 16);
             list.push({
-              depth: viewDepth(ti + 0.5, tj + 0.5) - 0.05,
+              depth: viewDepth(target.i, target.j) - 0.05,
               node: (
                 <g key="del-hover-t" pointerEvents="none">
                   <ellipse cx={c.x.toFixed(1)} cy={c.y.toFixed(1)} rx="26" ry="15" fill="rgba(192,57,43,0.35)" stroke="#c0392b" strokeWidth="3" />
@@ -11802,7 +11863,7 @@ export default function CastleBuilder() {
                 const nextLvl = lvl + 1;
                 const goldCost = (lv ? lv.upgradeGold : AMENITY_UPGRADE_GOLD)[nextLvl];
                 const matCost = lvl < maxL ? getBuildCost({ type: st.type, kind: st.kind, level: nextLvl }) : null;
-                const needs = lv && lvl < maxL ? lv.needs[nextLvl - 1] : null;
+                const needs = lvl < maxL ? (lv ? lv.needs[nextLvl - 1] : amenityUpgradeNeeds(st.kind, nextLvl)) : null;
                 const unknown = needs && !research.done.includes(needs);
                 const canUpgrade = st.stage === 'done' && lvl < maxL && infoTarget.structKey && !(lv && battlePhase) && !unknown;
                 const affordable = canUpgrade && resources.gold >= goldCost;
@@ -12002,8 +12063,11 @@ export default function CastleBuilder() {
                 <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4 }}>noch etwa {Math.ceil((1 - cur.progress) * RESEARCH[cur.id].days * speed)} Tage</div>
               </div>
             )}
+            {[['Befestigung', RESEARCH_IDS.filter((id) => !RESEARCH[id].group)], ['Ausbau der Gebäude (Stufe 2 und 3)', RESEARCH_IDS.filter((id) => RESEARCH[id].group === 'bauten')]].map(([title, ids]) => (
+            <React.Fragment key={title}>
+            <div className="cb-section-title" style={{ marginTop: 10 }}>{title}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {RESEARCH_IDS.map((id) => {
+              {ids.map((id) => {
                 const def = RESEARCH[id];
                 const done = research.done.includes(id);
                 const missing = def.needs.filter((n) => !research.done.includes(n));
@@ -12026,6 +12090,8 @@ export default function CastleBuilder() {
                 );
               })}
             </div>
+            </React.Fragment>
+            ))}
             {upgradable.length > 0 && (
               <>
                 <div className="cb-section-title" style={{ marginTop: 14 }}>Bestehendes ausbauen</div>
