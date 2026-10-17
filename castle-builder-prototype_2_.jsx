@@ -581,6 +581,7 @@ const AMENITY_TYPES = {
   palas: { label: 'Palas', top: '#a49d90', left: '#8f887a', right: '#6c665a' },
   bogenmacher: { label: 'Bogenmacher', top: '#8a6a42', left: '#86643c', right: '#5d432a' },
   falknerei: { label: 'Falknerei', top: '#7d6a4a', left: '#8a7350', right: '#5f4e34' },
+  belagerung: { label: 'Belagerungswerkstatt', top: '#8a6a42', left: '#7a5a34', right: '#553a22' },
   turnierplatz: { label: 'Turnierplatz', top: '#c9b98a', left: '#8a6a42', right: '#5d432a' },
   vogtei: { label: 'Vogtei', top: '#a49d90', left: '#938c7c', right: '#6f695c' },
   kirche: { label: 'Kirche', top: '#b0aa9c', left: '#9a9484', right: '#757062' },
@@ -701,6 +702,7 @@ const AMENITY_LEVEL_TEXT = {
   palas: ['Feste feiern: Brautschau und Gäste an den Hof laden; +0,8 Stimmung bei Hofe pro Monat.', '+1,6 Stimmung bei Hofe pro Monat, prächtigere Feste.', '+2,4 Stimmung bei Hofe pro Monat, die prächtigsten Feste.'],
   bogenmacher: ['Bogenschützen +10 % Schaden.', 'Bogenschützen +15 % Schaden.', 'Bogenschützen +20 % Schaden.'],
   falknerei: ['Jagden veranstalten; +3 Nahrung pro Monat.', '+6 Nahrung pro Monat, reichere Jagd.', '+9 Nahrung pro Monat, die reichste Jagd.'],
+  belagerung: ['Sturmleitern und Rammböcke bauen (Katapulte nach der Belagerungskunst).', 'Baut anderthalbmal so schnell.', 'Baut doppelt so schnell.'],
   turnierplatz: ['Eigene Turniere ausrichten: Ruhm, Erfahrung für Eure Ritter, neue Ritter.', 'Größere Turniere: mehr Ruhm.', 'Die großen Turniere des Reiches.'],
   vogtei: ['Steuern +10 %, Platz für 4 Dorfbewohner mehr. Nötig für die Stadt.', 'Steuern +20 %, +8 Plätze.', 'Rathaus: Steuern +30 %, +12 Plätze.'],
   kirche: ['Zufriedenheit +0,8/Monat, Wachstum +5 %, +3 Plätze. Nötig für die Stadt.', 'Zufriedenheit +1,6/Monat, Wachstum +10 %, +6 Plätze.', 'Kathedrale: Zufriedenheit +2,4/Monat, Wachstum +15 %, +9 Plätze.'],
@@ -762,6 +764,7 @@ const BUILD_COST = {
   palas: { wood: 14, stone: 32 },
   bogenmacher: { wood: 10, stone: 4 },
   falknerei: { wood: 9, stone: 4 },
+  belagerung: { wood: 16, stone: 4 },
   turnierplatz: { wood: 16, stone: 2 },
   vogtei: { wood: 12, stone: 14 },
   kirche: { wood: 8, stone: 26 },
@@ -1000,6 +1003,15 @@ const BUERGER_GOOD_PROMOTION = 0.08;
 const HOCHAMT_COST = 3; // Weihrauch
 const HOCHAMT_COOLDOWN = 180;
 const SMITH_TIER_IRON = { 1: 4, 2: 10 };
+// Belagerungsgerät from the Belagerungswerkstatt, taken along on a Feldzug. A ladder goes to one
+// of the soldiers sent; rams and catapults come with their own crews.
+const SIEGE_ENGINES = {
+  ladder: { name: 'Sturmleiter', plural: 'Sturmleitern', icon: '🪜', unit: 'saxonLadder', gold: 8, wood: 4, days: 6, text: 'Ein Soldat trägt sie und steigt damit über die Mauer, statt auf eine Bresche zu warten.' },
+  ram: { name: 'Rammbock', plural: 'Rammböcke', icon: '🐏', unit: 'saxonRam', gold: 50, wood: 20, iron: 1, days: 25, text: 'Rennt das Tor ein — viel schneller als Fäuste und Äxte.' },
+  catapult: { name: 'Katapult', plural: 'Katapulte', icon: '🎯', unit: 'saxonCatapult', gold: 120, wood: 30, stone: 10, iron: 2, days: 45, research: 'belagerungskunst', text: 'Schlägt aus der Ferne Breschen in Mauern und Tore.' },
+};
+const SIEGE_ENGINE_IDS = Object.keys(SIEGE_ENGINES);
+const SIEGE_WORKS_INIT = { ladder: 0, ram: 0, catapult: 0, queue: [] };
 const AMENITY_UPGRADE_GOODS = { kirche: { 3: { glas: 6 } }, kapelle: { 3: { glas: 3 } }, palas: { 3: { glas: 4, seide: 2 } } };
 const MARKET_INIT = { mult: Object.fromEntries(GOOD_IDS.map((g) => [g, 1])), caravan: null, nextCaravanDay: 75, supply: { hof: true, buerger: true }, status: { hof: [], buerger: [] }, auto: {}, autoReserve: 150 };
 function goodsProduction(owned) {
@@ -1555,6 +1567,7 @@ const GATE_DAMAGE_PER_TICK = 0.3;
 const RAM_DAMAGE_MULT = 2.6;
 const CATAPULT_RANGE = 5.2;
 const CATAPULT_DAMAGE_PER_TICK = 0.55;
+const CATAPULT_SPLASH_PER_TICK = 0.1; // the king's catapults: damage to the men around the target
 const ARROW_STEP = 0.07;
 const ARROW_ANIM_MS = 40;
 
@@ -3949,6 +3962,7 @@ function amenityWallHeight(kind, level) {
     case 'palas': return level >= 2 ? 30 : 26;
     case 'bogenmacher': return 16;
     case 'falknerei': return 15;
+    case 'belagerung': return 15;
     case 'turnierplatz': return 6;
     case 'vogtei': return level >= 3 ? 30 : 24;
     case 'kirche': return level >= 3 ? 28 : 20;
@@ -3957,7 +3971,7 @@ function amenityWallHeight(kind, level) {
     default: return AMENITY_H;
   }
 }
-const AMENITY_TEXTURE = { kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood', palas: 'stone', bogenmacher: 'wood', falknerei: 'wood', turnierplatz: 'wood', vogtei: 'stone', kirche: 'stone', kloster: 'stone', marktplatz: 'wood' };
+const AMENITY_TEXTURE = { belagerung: 'wood', kemenate: 'stone', stallungen: 'wood', schmied: 'stone', baeckerei: null, lagerhaus: 'wood', brunnen: 'stone', kapelle: 'stone', brauhaus: 'wood', palas: 'stone', bogenmacher: 'wood', falknerei: 'wood', turnierplatz: 'wood', vogtei: 'stone', kirche: 'stone', kloster: 'stone', marktplatz: 'wood' };
 
 function FlowerBox({ face, u, v }) {
   const a = facePt(face, u - 0.11, v), b = facePt(face, u + 0.11, v);
@@ -4339,6 +4353,19 @@ function AmenityBody({ i, j, kind, level, rot = 0 }) {
       top = H + 11;
       break;
     }
+    case 'belagerung': {
+      // An open-fronted timber shed with a half-built ladder and a ram on the trestles outside.
+      els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="wood" seed={seed} shadowHeight={H + 10} />);
+      els.push(<ArchOpening key="door" face={quads.faceB} u={0.5} v0={0.15} dv={0.85} du={0.32} fill="#2a1d12" />);
+      const l0 = P(i + half + 0.12, j - 0.3, 0), l1 = P(i + half + 0.12, j + 0.3, 0);
+      els.push(<g key="ladder" pointerEvents="none"><line x1={l0.x} y1={l0.y} x2={l1.x} y2={l1.y} stroke="#7a5530" strokeWidth="1.4" /><line x1={l0.x + 4} y1={l0.y + 2} x2={l1.x + 4} y2={l1.y + 2} stroke="#6b4a28" strokeWidth="1.4" />{[0.2, 0.4, 0.6, 0.8].map((t) => <line key={t} x1={l0.x + (l1.x - l0.x) * t} y1={l0.y + (l1.y - l0.y) * t} x2={l0.x + (l1.x - l0.x) * t + 4} y2={l0.y + (l1.y - l0.y) * t + 2} stroke="#5a3d20" strokeWidth="1" />)}</g>);
+      const r0 = P(i - 0.3, j + half + 0.18, 5), r1 = P(i + 0.3, j + half + 0.18, 5);
+      const t0 = P(i - 0.2, j + half + 0.18, 0), t1 = P(i + 0.2, j + half + 0.18, 0);
+      els.push(<g key="ram" pointerEvents="none"><line x1={t0.x} y1={t0.y} x2={t0.x} y2={t0.y - 5} stroke="#5a3d20" strokeWidth="1.5" /><line x1={t1.x} y1={t1.y} x2={t1.x} y2={t1.y - 5} stroke="#5a3d20" strokeWidth="1.5" /><line x1={r0.x} y1={r0.y} x2={r1.x} y2={r1.y} stroke="#6b4a28" strokeWidth="4" strokeLinecap="round" /><circle cx={r1.x} cy={r1.y} r="2.6" fill="#8a8f94" stroke="#3a3f45" strokeWidth="0.6" /></g>);
+      els.push(<GableRoof key="roof" i={i} j={j} half={half} baseElev={H} roofH={10} color="#6e5136" wallPal={info} axis="j" overhang={0.1} />);
+      top = H + 10;
+      break;
+    }
     case 'falknerei': {
       els.push(<Block key="b" corners={corners} baseElev={0} topElev={H} topFill={info.top} faceLeft={info.left} faceRight={info.right} texture="wood" seed={seed} shadowHeight={H + 12} />);
       // The mews: slatted openings for air, perches with hooded falcons out front.
@@ -4541,6 +4568,7 @@ const PERSON_COLORS = {
   quarrier: { body: '#8a7a5c', accent: '#5c5138', skin: '#d9b98a' },
   lumberjack: { body: '#5c6b3f', accent: '#3a4527', skin: '#d9b98a' },
   soldier: { body: '#425064', accent: '#2a3340', skin: '#d9b98a' },
+  ownLadder: { body: '#425064', accent: '#2a3340', skin: '#d9b98a' },
   archer: { body: '#465c3c', accent: '#2c3a25', skin: '#d9b98a' },
   champion: { body: '#7a2318', accent: '#c9a24b', skin: '#d9b98a' },
   // A hostile mounted knight — used for the "besonders starke Ritter" a rival lord sends
@@ -4587,6 +4615,7 @@ function Headgear({ type, c }) {
     case 'lumberjack':
       return <path d="M -3.9 -19 Q -4.2 -25.6 0.5 -25.2 Q 5 -25 5.6 -21 L 6.8 -18.6 L 3.6 -19.6 Q 3 -23 0 -23.2 Q -2.8 -23 -2.6 -19.4 Z" fill="#4c6a2e" stroke="#26391a" strokeWidth="0.5" />;
     case 'soldier':
+    case 'ownLadder':
       // Steel kettle helmet with a nasal guard.
       return (
         <g>
@@ -4704,7 +4733,7 @@ function HeldTool({ type, c }) {
 // A soldier on foot (any type except the mounted knights and siege engines).
 function FootFigure({ type, c, mode }) {
   const legClass = mode === 'walk' ? 'cb-leg-walk' : '';
-  const isSoldier = type === 'soldier';
+  const isSoldier = type === 'soldier' || type === 'ownLadder';
   const isSaxon = type === 'saxon' || type === 'saxonLadder' || type === 'saxonArcher';
   const isArcher = type === 'archer' || type === 'saxonArcher' || type === 'robinArcher';
   const trousers = isSoldier ? '#5c636b' : shade(c.accent, -0.1);
@@ -4769,7 +4798,7 @@ function FootFigure({ type, c, mode }) {
         <circle cx="6.3" cy="-9.9" r="1.15" fill={c.skin} />
         <HeldTool type={type} c={c} />
       </g>
-      {type === 'saxonLadder' && (
+      {(type === 'saxonLadder' || type === 'ownLadder') && (
         // A siege ladder carried over the shoulders.
         <g transform="translate(0,-19) rotate(-14)">
           <line x1="-15" y1="-1.6" x2="14" y2="-1.6" stroke="#7a5530" strokeWidth="1.3" strokeLinecap="round" />
@@ -5049,6 +5078,7 @@ const RESEARCH = {
   wehrturm: { name: 'Wehrtürme', icon: '🗼', gold: 140, days: 90, needs: ['steinbau'], text: 'Türme auf Stufe 3: höher, 3 Schützenplätze, +20 % Schaden.' },
   wehrgang: { name: 'Wehrgang', icon: '🏹', gold: 180, days: 120, needs: ['steinbau'], text: 'Wehrmauern: Die Bogenschützen laufen auf dem Wehrgang dorthin, wo der Feind angreift.' },
   palas: { name: 'Palasbau', icon: '🏛️', gold: 150, days: 100, needs: ['steinbau'], text: 'Der Palas — die große Halle für Feste, Brautschau und Gäste.' },
+  belagerungskunst: { name: 'Belagerungskunst', icon: '🎯', gold: 180, days: 150, needs: ['steinbau'], text: 'Katapulte in der Belagerungswerkstatt bauen — sie schlagen aus der Ferne Breschen in Mauern und Tore.' },
   // Ausbau of the buildings (Stufe 2 and 3), in three trades.
   handwerk: { name: 'Handwerk', icon: '🔧', group: 'bauten', gold: 70, days: 60, needs: [], text: 'Stufe 2 für Bäckerei, Brauhaus, Brunnen und Lagerhaus.' },
   kriegshandwerk: { name: 'Kriegshandwerk', icon: '⚔️', group: 'bauten', gold: 90, days: 70, needs: [], text: 'Stufe 2 für Schmiede, Stallungen, Bogenmacher und Turnierplatz.' },
@@ -5067,7 +5097,7 @@ const LEGACY_RESEARCH = ['steinbau', 'wehrturm', 'bastion', 'handwerk', 'kriegsh
 const AMENITY_TRADE = {
   baeckerei: 'wirtschaft', brauhaus: 'wirtschaft', brunnen: 'wirtschaft', lagerhaus: 'wirtschaft',
   schmied: 'krieg', stallungen: 'krieg', bogenmacher: 'krieg', turnierplatz: 'krieg',
-  kemenate: 'hof', kapelle: 'hof', palas: 'hof', falknerei: 'hof',
+  kemenate: 'hof', kapelle: 'hof', palas: 'hof', falknerei: 'hof', belagerung: 'krieg',
   vogtei: 'wirtschaft', marktplatz: 'wirtschaft', kirche: 'hof', kloster: 'hof',
 };
 const TRADE_RESEARCH = { wirtschaft: { 2: 'handwerk', 3: 'zunftwesen' }, krieg: { 2: 'kriegshandwerk', 3: 'ritterwesen' }, hof: { 2: 'hofkultur', 3: 'prachtbau' } };
@@ -6651,7 +6681,8 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       // stone themselves; they only get to work on something hand-choppable (namely,
       // shovelling a ditch full of dirt) regardless. Once no ram or catapult is left standing
       // the infantry goes back to battering a way through on their own.
-      const engineHandlesIt = u.type !== 'saxonRam' && ((blocker.type === 'gate' && hasRam) || (blocker.type === 'wall' && hasCatapult));
+      // (The king's own men don't wait for their engines — they climb and hack on regardless.)
+      const engineHandlesIt = !u.own && u.type !== 'saxonRam' && ((blocker.type === 'gate' && hasRam) || (blocker.type === 'wall' && hasCatapult));
       if (engineHandlesIt) return false;
       // Filling in a ditch means standing out in the open shovelling dirt for a while —
       // defenders get a clean shot at anyone doing it.
@@ -6778,9 +6809,12 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       // on, this means even a fully-sealed ring is no longer a permanent solution.
       if (u.type === 'saxonCatapult') {
         let target = null, bestD = Infinity;
+        // The king's own engines aim at the towers first, where the archers stand.
+        const ownTowers = u.own && obstacles.some((o) => o.type === 'tower' && !o.breached && o.hp > 0);
         obstacles.forEach((o) => {
           // A stone thrown into a ditch does nothing — catapults aim at masonry.
           if (o.breached || o.hp <= 0 || o.type === 'graben') return;
+          if (ownTowers && o.type !== 'tower') return;
           const mid = obstacleMidpoint(o);
           const d = distance2(u, mid);
           if (d < bestD) { bestD = d; target = o; }
@@ -6792,6 +6826,14 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
           target.hp = Math.max(0, target.hp - CATAPULT_DAMAGE_PER_TICK * moraleDmgMult * (u.strengthMult || 1));
           if (target.hp <= 0) target.breached = true;
           shots.push({ fromI: u.i, fromJ: u.j, fromElev: 4, toI: mid.i, toJ: mid.j, toElev: 0, heavy: true });
+          if (u.own) {
+            // Stones hit whoever stands up there, and a tower that comes down takes its archers with it.
+            units.forEach((f) => {
+              if (!f.foe || f.hp <= 0 || distance2(f, mid) > 0.7) return;
+              f.hp = target.breached && target.type === 'tower' && f.elev > 0 ? 0 : Math.max(0, f.hp - CATAPULT_SPLASH_PER_TICK);
+              if (f.hp <= 0) f.diedAtTick = tickCount || 0;
+            });
+          }
         } else {
           stepToward(u, battleRoute(navFor(u), u, mid).waypoint);
         }
@@ -8228,6 +8270,7 @@ const TOOLS = [
   { id: 'palas', label: 'Palas', emoji: '🏛️', hint: 'Die große Halle. Hier feiert Ihr Feste: Brautschau für Euch oder Eure Kinder, oder Gäste an den Hof laden. Erst nach der Erforschung des Palasbaus (Baukunst).' },
   { id: 'bogenmacher', label: 'Bogenmacher', emoji: '🏹', hint: 'Klicke auf ein Feld im Grasland für den Bogenmacher. Seine Bögen machen Eure Bogenschützen stärker.' },
   { id: 'falknerei', label: 'Falknerei', emoji: '🦅', hint: 'Klicke auf ein Feld im Grasland für die Falknerei. Ermöglicht Jagden, die Nahrung bringen und den Hof erfreuen.' },
+  { id: 'belagerung', label: 'Belagerungswerkstatt', emoji: '🪜', hint: 'Klicke auf ein Feld im Grasland für die Belagerungswerkstatt. Hier entstehen Sturmleitern, Rammböcke und — nach der Belagerungskunst — Katapulte für Eure Feldzüge.' },
   { id: 'turnierplatz', label: 'Turnierplatz', emoji: '🏇', hint: 'Klicke auf ein Feld im Grasland für den Turnierplatz. Eigene Turniere bringen Ruhm, stärken Eure Ritter und locken neue an.' },
   { id: 'vogtei', label: 'Vogtei', emoji: '🏛️', hint: 'Sitz des Vogtes im Dorf (später Rathaus): mehr Steuern und Platz für mehr Dorfbewohner. Auf ein Feld im Dorf oder auf Grasland.' },
   { id: 'kirche', label: 'Kirche', emoji: '⛪', hint: 'Die Dorfkirche (auf Stufe 3 eine Kathedrale): Zufriedenheit, Wachstum, Platz. Auf ein Feld im Dorf oder auf Grasland.' },
@@ -8271,7 +8314,7 @@ export default function CastleBuilder() {
   const [viewRot, setViewRot] = useState(0);
   const [expedition, setExpedition] = useState(null);
   const [reichFocus, setReichFocus] = useState(null);
-  const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0, knights: true });
+  const [expDraft, setExpDraft] = useState({ soldier: 0, archer: 0, knights: true, ladder: 0, ram: 0, catapult: 0 });
   // A Feldzug under way: the region and who marched out ({ region, soldier, archer, knights }).
   const [siege, setSiege] = useState(null);
   const siegeRef = useRef(null);
@@ -8647,6 +8690,7 @@ export default function CastleBuilder() {
   // Waren & Handel: the realm's stock of goods, and the market (prices, the Fernhändler, whom
   // to supply).
   const [goods, setGoods] = useState({ eisen: 2 });
+  const [siegeWorks, setSiegeWorks] = useState(SIEGE_WORKS_INIT);
   const goodsRef = useRef(goods);
   useEffect(() => { goodsRef.current = goods; }, [goods]);
   const [market, setMarket] = useState(MARKET_INIT);
@@ -8687,7 +8731,7 @@ export default function CastleBuilder() {
   const saveSnapshotRef = useRef(null);
   const initialSnapshotRef = useRef(null);
   useEffect(() => {
-    saveSnapshotRef.current = { research, estateLast, structures, workerUnits, villagePop, buerger, stageReached, court, goods, market, militia, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress };
+    saveSnapshotRef.current = { research, estateLast, structures, workerUnits, villagePop, buerger, stageReached, court, goods, market, militia, frohndienstCount, happiness, soldiers, soldierWageMultiplier, resources, piles, forestTrees, hillRocks, taxRate, haulPriority, day, nextPetitionDay, taxLockedUntilYear, frohndienstLockedUntilYear, unhappinessPenaltyUntilYear, churchBlessingUntilYear, churchUnrestUntilYear, soldierMoraleDebuffUntilYear, recruitedKnights, knightRaises, moorishHired, monkHired, waffenschmiedHired, smithTier, hofnarrHired, pendingFeudAttacks, delegationStage, royalFamily, kingAge, kingHealth, kingSick, courtMorale, medicusHired, ladyHired, falconerHired, bakeryUpgraded, crossbowUpgraded, armbrustHired, crossbowUpgraded2, capturedCourtiers, kingName, kingOrdinal, dynastyAncestors, reputation, storyQueue, contracts, baumeisterHired, mercenaryCount, nextAttackMult, chronicle, chronicleSeen, gameSpeed, zoom, pan, toolsPanelOpen, desertionAlarm, act, actFinaleYear, actGoalsDone, campaignDone, realmStats, ownedRegions, expedition, ruler, knightProgress, siegeWorks };
     if (!initialSnapshotRef.current) initialSnapshotRef.current = saveSnapshotRef.current;
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -8748,7 +8792,7 @@ export default function CastleBuilder() {
     setArrows([]); setImpacts([]); setSelectedUnitId(null); setTool(null); setOpenPanel(null);
     prevDoneRef.current = null; prevPopRef.current = null;
     desertionForecastWarnedRef.current = false;
-    const saveSetters = { research: setResearch, estateLast: setEstateLast, structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, buerger: setBuerger, stageReached: setStageReached, court: setCourt, goods: setGoods, market: setMarket, militia: setMilitia, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress };
+    const saveSetters = { research: setResearch, estateLast: setEstateLast, structures: setStructures, workerUnits: setWorkerUnits, villagePop: setVillagePop, buerger: setBuerger, stageReached: setStageReached, court: setCourt, goods: setGoods, market: setMarket, militia: setMilitia, frohndienstCount: setFrohndienstCount, happiness: setHappiness, soldiers: setSoldiers, soldierWageMultiplier: setSoldierWageMultiplier, resources: setResources, piles: setPiles, forestTrees: setForestTrees, hillRocks: setHillRocks, taxRate: setTaxRate, haulPriority: setHaulPriority, day: setDay, nextPetitionDay: setNextPetitionDay, taxLockedUntilYear: setTaxLockedUntilYear, frohndienstLockedUntilYear: setFrohndienstLockedUntilYear, unhappinessPenaltyUntilYear: setUnhappinessPenaltyUntilYear, churchBlessingUntilYear: setChurchBlessingUntilYear, churchUnrestUntilYear: setChurchUnrestUntilYear, soldierMoraleDebuffUntilYear: setSoldierMoraleDebuffUntilYear, recruitedKnights: setRecruitedKnights, knightRaises: setKnightRaises, moorishHired: setMoorishHired, monkHired: setMonkHired, waffenschmiedHired: setWaffenschmiedHired, smithTier: setSmithTier, hofnarrHired: setHofnarrHired, pendingFeudAttacks: setPendingFeudAttacks, delegationStage: setDelegationStage, royalFamily: setRoyalFamily, kingAge: setKingAge, kingHealth: setKingHealth, kingSick: setKingSick, courtMorale: setCourtMorale, medicusHired: setMedicusHired, ladyHired: setLadyHired, falconerHired: setFalconerHired, bakeryUpgraded: setBakeryUpgraded, crossbowUpgraded: setCrossbowUpgraded, armbrustHired: setArmbrustHired, crossbowUpgraded2: setCrossbowUpgraded2, capturedCourtiers: setCapturedCourtiers, kingName: setKingName, kingOrdinal: setKingOrdinal, dynastyAncestors: setDynastyAncestors, reputation: setReputation, storyQueue: setStoryQueue, contracts: setContracts, baumeisterHired: setBaumeisterHired, mercenaryCount: setMercenaryCount, nextAttackMult: setNextAttackMult, chronicle: setChronicle, chronicleSeen: setChronicleSeen, gameSpeed: setGameSpeed, zoom: setZoom, pan: setPan, toolsPanelOpen: setToolsPanelOpen, desertionAlarm: setDesertionAlarm, act: setAct, actFinaleYear: setActFinaleYear, actGoalsDone: setActGoalsDone, campaignDone: setCampaignDone, realmStats: setRealmStats, ownedRegions: setOwnedRegions, expedition: setExpedition, ruler: setRuler, knightProgress: setKnightProgress, siegeWorks: setSiegeWorks };
     Object.entries(saveSetters).forEach(([k, set]) => set(k in st ? st[k] : init[k]));
     if (!('act' in st)) {
       const y = getCalendarDate(st.day).year;
@@ -8848,6 +8892,35 @@ export default function CastleBuilder() {
     setChronicle((c) => [{ id: `${Date.now()}-${Math.random()}`, day: dayRef.current, at: Date.now(), icon, text, tone }, ...c].slice(0, 80));
   }, []);
   const toasts = chronicle.filter((c) => toastNow - c.at < 6000).slice(0, 4);
+  // ---- Belagerungswerkstatt: one engine at a time, day by day ---------------------------------
+  const lastWorksDayRef = useRef(null);
+  useEffect(() => {
+    const prev = lastWorksDayRef.current;
+    lastWorksDayRef.current = day;
+    if (prev == null || day <= prev || !siegeWorks.queue.length) return;
+    const L = amenityLevel(structures, 'belagerung');
+    if (!L) return;
+    const speed = (day - prev) * (L >= 3 ? 2 : L >= 2 ? 1.5 : 1);
+    const head = siegeWorks.queue[0];
+    const left = head.left - speed;
+    if (left > 0) { setSiegeWorks((w) => ({ ...w, queue: [{ ...w.queue[0], left }, ...w.queue.slice(1)] })); return; }
+    setSiegeWorks((w) => ({ ...w, [head.type]: (w[head.type] || 0) + 1, queue: w.queue.slice(1) }));
+    if (head.type !== 'ladder' || siegeWorks.queue.length === 1) logEvent(SIEGE_ENGINES[head.type].icon, `Belagerungswerkstatt: ${head.type === 'ladder' ? 'Sturmleiter' : SIEGE_ENGINES[head.type].name} fertig`, 'good');
+  }, [day]); // eslint-disable-line react-hooks/exhaustive-deps
+  const engineCost = (type) => { const d = SIEGE_ENGINES[type]; return { gold: d.gold, wood: d.wood || 0, stone: d.stone || 0, iron: d.iron || 0 }; };
+  const canOrderEngine = (type) => {
+    const c = engineCost(type), d = SIEGE_ENGINES[type];
+    return hasDoneAmenity(structures, 'belagerung') && (!d.research || research.done.includes(d.research)) && siegeWorks.queue.length < 8
+      && resources.gold >= c.gold && resources.wood >= c.wood && resources.stone >= c.stone && (goods.eisen || 0) >= c.iron;
+  };
+  const orderEngine = (type) => {
+    if (!canOrderEngine(type)) return;
+    const c = engineCost(type);
+    setResources((r) => ({ ...r, gold: r.gold - c.gold, wood: r.wood - c.wood, stone: r.stone - c.stone }));
+    if (c.iron) setGoods((g) => ({ ...g, eisen: (g.eisen || 0) - c.iron }));
+    setSiegeWorks((w) => ({ ...w, queue: [...w.queue, { type, left: SIEGE_ENGINES[type].days }] }));
+    SOUND.play('place');
+  };
   // ---- Baukunst: research advances day by day -------------------------------------------------
   useEffect(() => {
     const prev = lastResearchDayRef.current;
@@ -9134,7 +9207,7 @@ export default function CastleBuilder() {
     SOUND.play('warhorn');
   };
   // ---- Feldzug: the king's men storm the lord's castle -----------------------------------------
-  const startSiege = (id, soldier, archer, withKnights) => {
+  const startSiege = (id, soldier, archer, withKnights, engines = {}) => {
     const year = getCalendarDate(dayRef.current).year;
     const fc = FOE_CASTLES[id];
     const obstacles = buildBattleObstacles(fc).map((o) => ({ ...o, key: `foe:${id}:${o.key}`, structureKey: `foe:${id}:${o.structureKey}` }));
@@ -9154,7 +9227,13 @@ export default function CastleBuilder() {
     const smith = (SMITH_DAMAGE_MULT[smithTier] || 1) * smithyLevelDamageMult(structures) * fxr;
     const moor = moorishHired && !capturedCourtiers.moorish ? MOORISH_COMBAT_BONUS : 1;
     const ownUnit = (type, pt, extra) => ({ id: battleUnitIdSeq++, side: 'attacker', own: true, type, i: pt.i, j: pt.j, hp: UNIT_MAX_HP, maxHp: UNIT_MAX_HP, elev: 0, targetId: null, ...home, ...extra });
-    for (let k = 0; k < soldier; k++) units.push(ownUnit('soldier', spot(Math.floor(k / 6), k % 6, Math.min(6, soldier - Math.floor(k / 6) * 6)), { strengthMult: smith * moor }));
+    const eng = { ladder: Math.min(engines.ladder || 0, soldier, siegeWorks.ladder || 0), ram: Math.min(engines.ram || 0, siegeWorks.ram || 0), catapult: Math.min(engines.catapult || 0, siegeWorks.catapult || 0) };
+    // The first soldiers in line carry the ladders.
+    for (let k = 0; k < soldier; k++) units.push(ownUnit(k < eng.ladder ? 'saxonLadder' : 'soldier', spot(Math.floor(k / 6), k % 6, Math.min(6, soldier - Math.floor(k / 6) * 6)), { strengthMult: smith * moor }));
+    // Rams in front of the host, catapults well behind it.
+    for (let k = 0; k < eng.ram; k++) units.push(ownUnit('saxonRam', dryPointNear(A.i - side.i * (k - (eng.ram - 1) / 2) * 0.6 + fwd.i * 0.6, A.j - side.j * (k - (eng.ram - 1) / 2) * 0.6 + fwd.j * 0.6), { strengthMult: 1, engine: true }));
+    for (let k = 0; k < eng.catapult; k++) units.push(ownUnit('saxonCatapult', dryPointNear(A.i - fwd.i * 3.5 + side.i * (k - (eng.catapult - 1) / 2) * 0.9, A.j - fwd.j * 3.5 + side.j * (k - (eng.catapult - 1) / 2) * 0.9), { strengthMult: 1, engine: true, hp: UNIT_MAX_HP * 2, maxHp: UNIT_MAX_HP * 2 }));
+    if (eng.ladder || eng.ram || eng.catapult) setSiegeWorks((w) => ({ ...w, ladder: w.ladder - eng.ladder, ram: w.ram - eng.ram, catapult: w.catapult - eng.catapult }));
     const soldierRows = Math.ceil(soldier / 6);
     for (let k = 0; k < archer; k++) units.push(ownUnit('archer', spot(soldierRows + Math.floor(k / 6), k % 6, Math.min(6, archer - Math.floor(k / 6) * 6)), { strengthMult: smith * bowyerArcherMult(structures) }));
     const knights = withKnights ? recruitedKnightIds.filter((kid) => !(kid === MOOR_KNIGHT_ID && capturedCourtiers.moorish)) : [];
@@ -9166,7 +9245,7 @@ export default function CastleBuilder() {
       units.push(ownUnit('champion', pt, { knightId: kid, hp, maxHp: hp, armor: st.armor, strengthMult: CHAMPION_DAMAGE_MULT * smith * st.dmgMult * (1 + knightRaises * 0.1) }));
     });
     setSoldiers((sv) => ({ soldier: sv.soldier - soldier, archer: sv.archer - archer }));
-    setSiege({ region: id, soldier, archer, knights });
+    setSiege({ region: id, soldier, archer, knights, engines: eng });
     setBattleUnits(units);
     battleUnitsRef.current = units;
     setBattleObstacles(obstacles);
@@ -9189,7 +9268,12 @@ export default function CastleBuilder() {
     siegeRef.current = null;
     const def = REGION_DEFS[sg.region];
     const ours = battleUnitsRef.current.filter((u) => u.own);
-    const aliveS = ours.filter((u) => u.type === 'soldier' && u.hp > 0).length;
+    const aliveS = ours.filter((u) => (u.type === 'soldier' || u.type === 'saxonLadder') && u.hp > 0).length;
+    // What survives of the Belagerungsgerät comes home again.
+    const back = { ladder: ours.filter((u) => u.type === 'saxonLadder' && u.hp > 0).length, ram: ours.filter((u) => u.type === 'saxonRam' && u.hp > 0).length, catapult: ours.filter((u) => u.type === 'saxonCatapult' && u.hp > 0).length };
+    if (back.ladder || back.ram || back.catapult) setSiegeWorks((w) => ({ ...w, ladder: w.ladder + back.ladder, ram: w.ram + back.ram, catapult: w.catapult + back.catapult }));
+    const eng = sg.engines || {};
+    const lostEngines = [['ram', 'Rammbock', 'Rammböcke'], ['catapult', 'Katapult', 'Katapulte']].map(([t, one, many]) => { const n = (eng[t] || 0) - back[t]; return n > 0 ? `${n} ${n === 1 ? one : many}` : null; }).filter(Boolean);
     const aliveA = ours.filter((u) => u.type === 'archer' && u.hp > 0).length;
     const fallenK = ours.filter((u) => u.type === 'champion' && u.hp <= 0).map((u) => u.knightId);
     const aliveK = ours.filter((u) => u.type === 'champion' && u.hp > 0).map((u) => u.knightId);
@@ -9207,6 +9291,7 @@ export default function CastleBuilder() {
     const losses = lost
       ? `${lost === 1 ? 'Einer Eurer Männer ist' : `${lost} Eurer Männer sind`} gefallen${knightsFell ? `, dazu ${knightsFell}` : ''}.`
       : knightsFell ? `${knightsFell} ${fallenNames.length > 1 ? 'sind' : 'ist'} gefallen.` : 'Kein Mann ist gefallen.';
+    const enginesNote = lostEngines.length ? ` Verloren: ${lostEngines.join(' und ')}.` : '';
     setBattlePhase(null);
     setBattleUnits([]);
     setBattleObstacles([]);
@@ -9215,11 +9300,11 @@ export default function CastleBuilder() {
     if (won) {
       claimRegion(sg.region, 'erobert');
       adjustRep(3);
-      setEventOutcome({ image: COURT_IMG_SUBMISSION, tone: 'good', title: `${def.name} ${def.plural ? 'sind' : 'ist'} erobert!`, text: `Die Burg ist gefallen, über ihrem Bergfried weht nun Euer Banner. ${def.lord} beugt das Knie. ${losses}` });
+      setEventOutcome({ image: COURT_IMG_SUBMISSION, tone: 'good', title: `${def.name} ${def.plural ? 'sind' : 'ist'} erobert!`, text: `Die Burg ist gefallen, über ihrem Bergfried weht nun Euer Banner. ${def.lord} beugt das Knie. ${losses}${enginesNote}` });
     } else {
       adjustRep(-4);
       logEvent('🏴', `Der Sturm auf ${def.acc} ist gescheitert`, 'bad');
-      setEventOutcome({ image: COURT_IMG_STORM, tone: 'bad', title: 'Der Sturm ist gescheitert', text: `${def.holder.charAt(0).toUpperCase() + def.holder.slice(1)} ${def.holder.startsWith('die ') ? 'haben' : 'hat'} die Burg gehalten. ${losses} Die Überlebenden kehren heim.` });
+      setEventOutcome({ image: COURT_IMG_STORM, tone: 'bad', title: 'Der Sturm ist gescheitert', text: `${def.holder.charAt(0).toUpperCase() + def.holder.slice(1)} ${def.holder.startsWith('die ') ? 'haben' : 'hat'} die Burg gehalten. ${losses}${enginesNote} Die Überlebenden kehren heim.` });
     }
     setTimeout(() => { if (centerOnCastleRef.current) centerOnCastleRef.current(); }, 60);
   };
@@ -11431,7 +11516,7 @@ export default function CastleBuilder() {
   }, [battlePhase, gameSpeed]);
   useEffect(() => {
     if (battlePhase !== 'siege' || !siege || battleUnits.length === 0) return;
-    const active = battleUnits.filter((u) => u.own && u.hp > 0 && !u.exited).length;
+    const active = battleUnits.filter((u) => u.own && !u.engine && u.hp > 0 && !u.exited).length;
     const foes = battleUnits.filter((u) => u.foe && u.hp > 0).length;
     const keepO = battleObstacles.find((o) => o.type === 'keep');
     const keepFell = !!keepO && keepO.hp <= 0;
@@ -13275,7 +13360,8 @@ export default function CastleBuilder() {
       )}
 
       {battlePhase === 'siege' && siege && (() => {
-        const mine = battleUnits.filter((u) => u.own && u.hp > 0 && !u.exited && !u.routed).length;
+        const mine = battleUnits.filter((u) => u.own && !u.engine && u.hp > 0 && !u.exited && !u.routed).length;
+        const engs = battleUnits.filter((u) => u.own && u.engine && u.hp > 0).length;
         const foes = battleUnits.filter((u) => u.foe && u.hp > 0).length;
         const def = REGION_DEFS[siege.region];
         return (
@@ -13284,7 +13370,7 @@ export default function CastleBuilder() {
               <img src={LORD_PORTRAITS[siege.region]} alt="" style={{ width: 36, height: 36, borderRadius: '50%', border: '2px solid #C9A24B' }} />
               <span>⚔️ Sturm auf {def.acc}<span style={{ display: 'block', fontSize: '0.7rem', color: '#C9BFA8', fontFamily: "'EB Garamond', serif", textTransform: 'none', letterSpacing: 0 }}>gegen {LORD_ACC[siege.region]}</span></span>
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#EAE0C4' }}>🛡️ Eure Männer: <strong>{mine}</strong> · 🏰 Verteidiger: <strong>{foes}</strong></div>
+            <div style={{ fontSize: '0.8rem', color: '#EAE0C4' }}>🛡️ Eure Männer: <strong>{mine}</strong>{engs ? <> · 🐏 Gerät: <strong>{engs}</strong></> : null} · 🏰 Verteidiger: <strong>{foes}</strong></div>
             <div style={{ fontSize: '0.78rem', color: '#EAE0C4', marginTop: 4 }}>Moral Eures Heeres: {Math.round(attackerMorale * 100)}%</div>
             <div style={{ width: '100%', height: 8, background: '#2b2118', borderRadius: 3, overflow: 'hidden', marginTop: 3 }}>
               <div style={{ width: `${Math.round(attackerMorale * 100)}%`, height: '100%', background: attackerMorale < ATTACKER_MORALE_BREAK ? '#a8402c' : attackerMorale < 0.6 ? '#c9a24b' : '#4a7a3c' }} />
@@ -13316,7 +13402,7 @@ export default function CastleBuilder() {
           <p style={{ color: '#C9BFA8', fontSize: '0.72rem', marginTop: 6, lineHeight: 1.4, fontStyle: 'italic' }}>
             Verteidiger kämpfen immer bis zum Schluss. Sinkt die Moral der Sachsen zu tief, brechen sie zusammen und fliehen.
           </p>
-          {battleUnits.some((u) => u.side === 'attacker' && u.type === 'saxonCatapult' && u.hp > 0 && !u.exited) && (
+          {battlePhase === 'fighting' && battleUnits.some((u) => u.side === 'attacker' && !u.own && u.type === 'saxonCatapult' && u.hp > 0 && !u.exited) && (
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(201,162,75,0.35)' }}>
               {!sortieUsed ? (
                 <button onClick={() => {
@@ -13629,6 +13715,33 @@ export default function CastleBuilder() {
                   })())}
                   {smithTier >= 2 && (
                     <p style={{ fontSize: '0.82rem', color: '#3d5a2c', fontWeight: 700 }}>Höchste Stufe erreicht.</p>
+                  )}
+                </div>
+              )}
+              {infoTarget.data.type === 'amenity' && infoTarget.data.kind === 'belagerung' && infoTarget.data.stage === 'done' && (
+                <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(92,85,74,0.3)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>🪜 Belagerungsgerät für Eure Feldzüge</div>
+                  <div style={{ fontSize: '0.82rem', marginBottom: 8 }}>
+                    Bereit: {SIEGE_ENGINE_IDS.map((t) => `${SIEGE_ENGINES[t].icon} ${siegeWorks[t] || 0} ${(siegeWorks[t] || 0) === 1 ? SIEGE_ENGINES[t].name : SIEGE_ENGINES[t].plural}`).join(' · ')}
+                  </div>
+                  {SIEGE_ENGINE_IDS.map((t) => {
+                    const d = SIEGE_ENGINES[t], c = engineCost(t);
+                    const locked = d.research && !research.done.includes(d.research);
+                    const ok = canOrderEngine(t);
+                    return (
+                      <div key={t} style={{ marginBottom: 6 }}>
+                        <button className="cb-btn" disabled={!ok} onClick={() => orderEngine(t)}
+                          style={{ width: '100%', padding: '6px 10px', fontSize: '0.84rem', textAlign: 'left', opacity: ok ? 1 : 0.5 }}>
+                          {d.icon} {d.name} bauen — {c.gold} 🪙, {c.wood} 🪵{c.stone ? `, ${c.stone} 🪨` : ''}{c.iron ? `, ${c.iron} ⛓️` : ''} · {d.days} Tage
+                        </button>
+                        <div style={{ fontSize: '0.74rem', color: locked ? '#7a5a20' : '#5A5044', marginTop: 2 }}>{locked ? `📐 Erst „${RESEARCH[d.research].name}“ erforschen (Baukunst).` : d.text}</div>
+                      </div>
+                    );
+                  })}
+                  {siegeWorks.queue.length > 0 && (
+                    <div style={{ fontSize: '0.78rem', color: '#4a4034', marginTop: 6 }}>
+                      In Arbeit: {siegeWorks.queue.map((q, k) => `${SIEGE_ENGINES[q.type].icon}${k === 0 ? ` (noch ${Math.ceil(q.left / (amenityLevel(structures, 'belagerung') >= 3 ? 2 : amenityLevel(structures, 'belagerung') >= 2 ? 1.5 : 1))} Tage)` : ''}`).join(' ')}
+                    </div>
                   )}
                 </div>
               )}
@@ -14078,7 +14191,9 @@ export default function CastleBuilder() {
                           const maxS = soldiers.soldier, maxA = soldiers.archer;
                           const sendS = Math.min(expDraft.soldier, maxS), sendA = Math.min(expDraft.archer, maxA);
                           const sendK = expDraft.knights ? recruitedKnightIds.length : 0;
-                          const power = (expeditionPower(sendS, sendA, smithTier) + sendK * 3) * fx.expeditionMult;
+                          const engMax = { ladder: Math.min(siegeWorks.ladder || 0, sendS), ram: siegeWorks.ram || 0, catapult: siegeWorks.catapult || 0 };
+                          const sendE = Object.fromEntries(SIEGE_ENGINE_IDS.map((t) => [t, Math.min(expDraft[t] || 0, engMax[t])]));
+                          const power = (expeditionPower(sendS, sendA, smithTier) + sendK * 3 + sendE.ladder * 0.4 + sendE.ram * 3 + sendE.catapult * 5) * fx.expeditionMult;
                           const chance = expeditionWinChance(power, strength);
                           const canSend = !expedition && !busy && sendS + sendA + sendK > 0;
                           const site = FOE_CASTLE_SITES[id];
@@ -14097,6 +14212,14 @@ export default function CastleBuilder() {
                                     <span style={{ textAlign: 'right' }}>{val}</span>
                                   </label>
                                 ))}
+                                {SIEGE_ENGINE_IDS.filter((t) => (siegeWorks[t] || 0) > 0).map((t) => (
+                                  <label key={t} style={{ display: 'grid', gridTemplateColumns: '108px 1fr 30px', alignItems: 'center', gap: 6, fontSize: '0.82rem', marginBottom: 3 }}>
+                                    <span>{SIEGE_ENGINES[t].icon} {SIEGE_ENGINES[t].plural}</span>
+                                    <input type="range" min="0" max={engMax[t]} value={sendE[t]} disabled={!engMax[t] || !!expedition} onChange={(e) => setExpDraft((x) => ({ ...x, [t]: Number(e.target.value) }))} style={{ accentColor: '#a8822e' }} />
+                                    <span style={{ textAlign: 'right' }}>{sendE[t]}</span>
+                                  </label>
+                                ))}
+                                {(siegeWorks.ladder || 0) > 0 && <div style={{ fontSize: '0.72rem', color: '#6b5536', marginBottom: 3 }}>Jede Leiter trägt einer der Soldaten.</div>}
                                 {recruitedKnightIds.length > 0 && (
                                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', marginBottom: 3 }}>
                                     <input type="checkbox" checked={!!expDraft.knights} onChange={(e) => setExpDraft((x) => ({ ...x, knights: e.target.checked }))} />
@@ -14107,7 +14230,7 @@ export default function CastleBuilder() {
                                   Kampfkraft <strong>{power.toFixed(0)}</strong> · grobe Aussicht <strong style={{ color: chance >= 0.7 ? '#3d5a2c' : chance >= 0.4 ? '#7a5a20' : '#8a2d20' }}>{Math.round(chance * 100)} %</strong>
                                   <div className="cb-meter" style={{ marginTop: 4 }}><div style={{ width: `${chance * 100}%`, background: chance >= 0.7 ? '#5d8a3c' : chance >= 0.4 ? '#c9a24b' : '#a8402c' }} /></div>
                                 </div>
-                                <button className="cb-btn is-active" disabled={!canSend} onClick={() => { startSiege(id, sendS, sendA, !!expDraft.knights); setExpDraft({ soldier: 0, archer: 0, knights: true }); setOpenPanel(null); setReichFocus(null); }}
+                                <button className="cb-btn is-active" disabled={!canSend} onClick={() => { startSiege(id, sendS, sendA, !!expDraft.knights, sendE); setExpDraft({ soldier: 0, archer: 0, knights: true, ladder: 0, ram: 0, catapult: 0 }); setOpenPanel(null); setReichFocus(null); }}
                                   style={{ width: '100%', padding: '6px 8px', fontSize: '0.88rem' }}
                                   title={expedition ? 'Es ist schon ein Feldzug unterwegs' : busy ? 'Nicht während einer Schlacht' : ''}>
                                   {expedition ? 'Ein Feldzug ist schon unterwegs' : '⚔️ Zum Sturm aufbrechen'}
@@ -15178,7 +15301,7 @@ export default function CastleBuilder() {
                         {isSelected && !dead && <circle cx="0" cy="-10" r="15" fill="none" stroke="#C9A24B" strokeWidth="1.6" />}
                         <g transform={dead ? `rotate(${fallAngle})` : undefined} style={{ transformOrigin: '0px 2px' }} opacity={bodyOpacity}>
                           <g transform={u.faceLeft ? 'scale(-1,1)' : undefined}>
-                            <PersonFigure type={u.foe ? (u.type === 'archer' ? 'saxonArcher' : 'saxon') : u.type} mode={u.side === 'attacker' && (battlePhase === 'fighting' || battlePhase === 'siege') ? 'walk' : 'idle'} />
+                            <PersonFigure type={u.foe ? (u.type === 'archer' ? 'saxonArcher' : 'saxon') : u.own && u.type === 'saxonLadder' ? 'ownLadder' : u.type} mode={u.side === 'attacker' && (battlePhase === 'fighting' || battlePhase === 'siege') ? 'walk' : 'idle'} />
                           </g>
                         </g>
                         {!dead && u.hitTick != null && battleTickCount - u.hitTick <= 1 && <HitFlash />}
