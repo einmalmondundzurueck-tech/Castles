@@ -2883,6 +2883,59 @@ const HouseProp = React.memo(function HouseProp({ i, j }) {
   );
 });
 
+// A farmstead for five Bauern: the house, a lean-to shed and a haystack in the yard.
+const FarmhouseProp = React.memo(function FarmhouseProp({ i, j }) {
+  const r = (k) => hash2(i, j, k);
+  const ci = i + 0.5, cj = j + 0.5;
+  const half = 0.24;
+  const corners = sq(ci, cj, half);
+  const wallH = 11;
+  const wallPal = { top: '#e3d6b4', left: '#e0d2ad', right: '#bfae88' };
+  const roofCol = r(1) < 0.5 ? '#b59552' : '#9c7a3e';
+  const axis = r(2) < 0.5 ? 'i' : 'j';
+  const door = computeFaceQuads(corners, 0, wallH);
+  const shedI = ci + (axis === 'i' ? 0 : half + 0.12), shedJ = cj + (axis === 'i' ? half + 0.12 : 0);
+  const hay = gridToScreen(ci - half - 0.1, cj + half + 0.05, 0);
+  return (
+    <g pointerEvents="none">
+      <Block corners={sq(shedI, shedJ, 0.12)} baseElev={0} topElev={7} topFill="#8a6a42" faceLeft="#7a5a34" faceRight="#553a22" shadowHeight={8} />
+      <Block corners={corners} baseElev={0} topElev={wallH} topFill={wallPal.top} faceLeft={wallPal.left} faceRight={wallPal.right} shadowHeight={wallH + 9} />
+      <TimberFrameDecor corners={corners} baseElev={0} topElev={wallH} />
+      <ArchOpening face={door.faceB} u={0.5} v0={0.35} dv={0.65} du={0.28} fill="#4e3420" />
+      {r(3) < 0.5 && <ArchOpening face={door.faceA} u={0.5} v0={0.25} dv={0.4} du={0.26} fill="#3a2e22" glow />}
+      <GableRoof i={ci} j={cj} half={half} baseElev={wallH} roofH={10} color={roofCol} wallPal={wallPal} axis={axis} overhang={0.05} />
+      <path d={`M ${hay.x - 6} ${hay.y} q 6 -10 12 0 z`} fill="#d8b860" stroke="#9c7a3e" strokeWidth="0.6" />
+    </g>
+  );
+});
+// A Bürger's town house for five: stone ground floor, timber-framed upper storey, steep roof.
+const TownhouseProp = React.memo(function TownhouseProp({ i, j }) {
+  const r = (k) => hash2(i, j, k);
+  const ci = i + 0.5, cj = j + 0.5;
+  const half = 0.25;
+  const corners = sq(ci, cj, half);
+  const groundH = 9, upperH = 20;
+  const stonePal = { top: '#9a938a', left: '#8a8378', right: '#68625a' };
+  const wallPal = { top: '#ece0c0', left: '#e8dcb8', right: '#c8b892' };
+  const roofCol = r(1) < 0.5 ? '#9a3a2c' : '#56606b';
+  const axis = r(2) < 0.5 ? 'i' : 'j';
+  const q0 = computeFaceQuads(corners, 0, groundH), q1 = computeFaceQuads(corners, groundH, upperH);
+  return (
+    <g pointerEvents="none">
+      <Block corners={corners} baseElev={0} topElev={groundH} topFill={stonePal.top} faceLeft={stonePal.left} faceRight={stonePal.right} texture="stone" seed={Math.round(r(4) * 100)} shadowHeight={upperH + 14} />
+      <ArchOpening face={q0.faceB} u={0.5} v0={0.3} dv={0.7} du={0.3} fill="#3a2a1a" />
+      <Block corners={corners} baseElev={groundH} topElev={upperH} topFill={wallPal.top} faceLeft={wallPal.left} faceRight={wallPal.right} shadowHeight={0} />
+      <TimberFrameDecor corners={corners} baseElev={groundH} topElev={upperH} />
+      <ArchOpening face={q1.faceA} u={0.35} v0={0.25} dv={0.45} du={0.18} fill="#3a2e22" glow={r(3) < 0.6} />
+      <ArchOpening face={q1.faceB} u={0.65} v0={0.25} dv={0.45} du={0.18} fill="#3a2e22" />
+      <GableRoof i={ci} j={cj} half={half} baseElev={upperH} roofH={14} color={roofCol} wallPal={wallPal} axis={axis} overhang={0.05} />
+    </g>
+  );
+});
+// Five to a house: the Bürger in town houses round the square, the Bauern in farmsteads
+// further out.
+const PEOPLE_PER_HOUSE = 5;
+
 function FellingTree({ i, j, active }) {
   const b = gridToScreen(i, j, 0);
   return (
@@ -12026,7 +12079,7 @@ export default function CastleBuilder() {
     }));
     // Lindenau keeps its own townsfolk until it becomes part of the realm.
     if (!OWNED_REGIONS.has('markt')) {
-      const used = Math.ceil(villagePop / 2);
+      const used = Math.ceil(villagePop / PEOPLE_PER_HOUSE) + 1;
       VILLAGE_HOUSE_SPOTS.forEach((spot, idx) => {
         if (regionAt(spot.i, spot.j) !== 'markt' || idx < used || idx % 2) return;
         list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`lhouse-${idx}`} i={spot.i} j={spot.j} /> });
@@ -12044,12 +12097,15 @@ export default function CastleBuilder() {
       if (r.depleted || r.region) return;
       list.push({ depth: viewDepth(r.i, r.j) + 0.5, node: <QuarryRockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} /> });
     });
-    // One house per family (two people), leaving out spots where a village building stands.
-    VILLAGE_HOUSE_SPOTS.filter((spot) => !structureKeyOnTile(structures, spot.i, spot.j)).slice(0, Math.ceil(villagePop / 2)).forEach((spot, idx) => {
-      list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node: <HouseProp key={`house-${idx}`} i={spot.i} j={spot.j} /> });
+    // Town houses take the spots nearest the square, farmsteads the ones beyond — leaving out
+    // spots where a village building stands.
+    const townN = Math.ceil(buerger / PEOPLE_PER_HOUSE), farmN = Math.ceil(Math.max(0, villagePop - buerger) / PEOPLE_PER_HOUSE);
+    VILLAGE_HOUSE_SPOTS.filter((spot) => !structureKeyOnTile(structures, spot.i, spot.j)).slice(0, townN + farmN).forEach((spot, idx) => {
+      const node = idx < townN ? <TownhouseProp key={`town-${spot.i}-${spot.j}`} i={spot.i} j={spot.j} /> : <FarmhouseProp key={`farm-${spot.i}-${spot.j}`} i={spot.i} j={spot.j} />;
+      list.push({ depth: viewDepth(spot.i, spot.j) + 0.5, node });
     });
     return list;
-  }, [forestTrees, hillRocks, villagePop, ownedKey, viewRot, amenityKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [forestTrees, hillRocks, villagePop, buerger, ownedKey, viewRot, amenityKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edgeInteractive = !battlePhase && (tool === 'wall' || tool === 'gate' || tool === 'graben' || tool === 'delete' || tool === null);
   const vertexInteractive = !battlePhase && (tool === 'tower' || tool === 'delete' || tool === null);
