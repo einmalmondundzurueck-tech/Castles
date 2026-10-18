@@ -1361,6 +1361,11 @@ const PETITIONER_DEFS = {
     text: '„König! Lösegeld oder Feuer! Wir halten Eure Leute gefangen und fordern Gold für ihre Freiheit."',
     image: COURT_IMG_SAXONCHIEF,
   },
+  geisel: {
+    title: 'Ein sächsischer Unterhändler bittet um Gehör:',
+    text: '„König! Mein Herr, der Sachsenfürst, rüstet zum Sturm auf Eure Burg. Doch er ist ein Mann des Handels: Gebt uns eines Eurer Kinder als Geisel und Gold für seine Mühen — dann zieht sein Heer dieses Jahr an Euch vorbei."',
+    image: COURT_IMG_SAXONCHIEF,
+  },
   loesegeld: {
     title: 'Ein sächsischer Bote überbringt eine Forderung:',
     text: '„Mein König! Wir halten eine/n der Euren gefangen. Zahlt Lösegeld, oder seht zu, wie es ihr/ihm ergeht!"',
@@ -1545,6 +1550,12 @@ const MAIDEN_FACES = () => [COURT_FACE_GIRL_3, COURT_FACE_GIRL_4];
 // years later.
 const KNIGHT_SUCCESSOR_NAMES = ['Ulrich', 'Reinhard', 'Gerhard', 'Burkhard', 'Hugo', 'Walram', 'Otto', 'Friedrich', 'Bertold', 'Eckhard'];
 const KNIGHT_SUCCESSOR_YEARS = 5;
+// A child given to the Sachsen as a hostage buys one year without their attack; it comes
+// home after HOSTAGE_YEARS. The price in gold rises with the years of the reign.
+const HOSTAGE_YEARS = 3;
+const HOSTAGE_MIN_AGE = 4;
+const hostageGold = (reignYear) => Math.min(500, 200 + 25 * Math.max(0, reignYear - 1));
+const hostageCandidates = (fam, year) => fam.children.filter((c) => !c.imprisoned && !c.spouseName && year - c.bornYear >= HOSTAGE_MIN_AGE && year - c.bornYear < 16);
 function fallenEntries(court) { return (court.fallen || []).map((f) => (typeof f === 'string' ? { look: f, day: 0 } : f)); }
 function faceByName(name, pool) { let h = 0; for (const ch of String(name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return pool[h % pool.length]; }
 function registerCourtKnights(extra) {
@@ -10091,13 +10102,38 @@ export default function CastleBuilder() {
         ],
       };
     }
+    if (type === 'geisel') {
+      const reignYear = currentYear - START_YEAR + 1;
+      const demand = hostageGold(reignYear);
+      const kids = hostageCandidates(royalFamilyRef.current, currentYear);
+      setCourt((c) => ({ ...c, hostageOfferYear: currentYear }));
+      return {
+        type, ...def,
+        options: [
+          ...kids.map((k) => ({
+            label: `${k.name} (${currentYear - k.bornYear} Jahre) und ${demand} 🪙 geben`,
+            desc: `Der Sachsenangriff zum Jahreswechsel bleibt aus. ${k.gender === 'f' ? 'Sie' : 'Er'} lebt ${HOSTAGE_YEARS} Jahre am Hof der Sachsen und kann solange nicht erben. Ruf −3, Hofstimmung −8.`,
+            disabled: resourcesRef.current.gold < demand,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: Math.max(0, r.gold - demand) }));
+              setRoyalFamily((f) => ({ ...f, children: f.children.map((c) => (c.name === k.name && c.bornYear === k.bornYear && c.gender === k.gender ? { ...c, imprisoned: true, hostageUntil: currentYear + 1 + HOSTAGE_YEARS } : c)) }));
+              setCourt((c) => ({ ...c, truceYear: currentYear }));
+              adjustRep(-3);
+              setCourtMorale((m) => Math.max(0, m - 8));
+              logEvent('🤝', `${k.name} geht als Geisel zu den Sachsen — dieses Jahr kein Angriff`, 'neutral');
+            },
+          })),
+          { label: 'Ablehnen', desc: 'Kein Kind des Königs wird zum Pfand. Die Sachsen kommen wie angekündigt.', apply: () => {} },
+        ],
+      };
+    }
     if (type === 'loesegeld') {
       // Only ever offered while someone is actually captive (see hasCaptives above) — picks
       // one at random each time it fires. Family members cost far more to ransom back than a
       // courtier does.
       const candidates = [];
       royalFamilyRef.current.children.forEach((c) => {
-        if (c.imprisoned) {
+        if (c.imprisoned && !c.hostageUntil) {
           candidates.push({
             name: c.name, isFamily: true,
             release: () => setRoyalFamily((f) => ({ ...f, children: f.children.map((cc) => (cc.name === c.name && cc.bornYear === c.bornYear && cc.gender === c.gender ? { ...cc, imprisoned: false } : cc)) })),
@@ -10869,7 +10905,7 @@ export default function CastleBuilder() {
     if (falconerHired && !capturedCourtiers.falconer) eligible.push('falkner_folge');
     if (hofnarrHired && !capturedCourtiers.hofnarr) eligible.push('hofnarr_folge');
     if (knightIds().some((id) => recruitedKnights[id]) && knightRaises < 3) eligible.push('ritter_folge');
-    const hasCaptives = royalFamily.children.some((c) => c.imprisoned) || royalFamily.spouseImprisoned || Object.values(capturedCourtiers).some(Boolean);
+    const hasCaptives = royalFamily.children.some((c) => c.imprisoned && !c.hostageUntil) || royalFamily.spouseImprisoned || Object.values(capturedCourtiers).some(Boolean);
     if (hasCaptives) eligible.push('loesegeld', 'loesegeld');
     if (Object.values(capturedCourtiers).some(Boolean)) eligible.push('sachse');
     eligible.push('haendler');
@@ -11525,6 +11561,13 @@ export default function CastleBuilder() {
           const newAge = kingAgeRef.current + 1;
           setKingAge(newAge);
           addRulerXp(RULER_XP.year);
+          // Hostages whose years with the Sachsen are up come home.
+          const returning = royalFamilyRef.current.children.filter((c) => c.hostageUntil && newDate.year >= c.hostageUntil);
+          if (returning.length) {
+            const back = (c) => returning.some((r) => r.name === c.name && r.bornYear === c.bornYear);
+            setRoyalFamily((fam) => ({ ...fam, children: fam.children.map((c) => (back(c) ? { ...c, imprisoned: false, hostageUntil: null } : c)) }));
+            returning.forEach((c) => logEvent('🏰', `${c.name} kehrt aus der Geiselschaft der Sachsen heim`, 'good'));
+          }
           // Children under a tutor for long enough finish their education.
           setRoyalFamily((fam) => {
             let changed = false;
@@ -11593,6 +11636,12 @@ export default function CastleBuilder() {
           }
 
           const yearIdx = newDate.year - START_YEAR;
+          const truceNow = courtRef.current.truceYear === newDate.year - 1 && !(!campaignDoneRef.current && newDate.year - 1 >= actFinaleYearRef.current);
+          if (truceNow) {
+            setNextAttackMult(1);
+            logEvent('🤝', 'Das Sachsenheer zieht an der Burg vorbei — die Geisel hält den Frieden', 'good');
+            setEventOutcome({ image: COURT_IMG_SAXONCHIEF, emoji: '🤝', tone: 'good', title: 'Das Heer zieht vorbei', text: 'Am Neujahrsmorgen ziehen die Sachsen in Sichtweite der Mauern vorüber, ohne die Waffen zu heben. Der Handel gilt — dieses Jahr fließt kein Blut. Doch am Hof der Sachsen sitzt nun ein Kind des Königs.' });
+          } else {
           // Spies, traitors and rumours from the petitions scale this one attack.
           // At the end of an act's last year the yearly raid becomes the Akt-Finale: a far
           // larger host, weakened by every Reichsziel the player has met.
@@ -11639,6 +11688,7 @@ export default function CastleBuilder() {
           setWorkerUnits((prev) => prev.map((w) => ({ ...w, siteKey: null, haulPhase: null, haulResource: null, carrying: 0, arrived: false, atTarget: false })));
           setBattlePhase('fleeing');
           battleEndPendingTickRef.current = null;
+          }
         } else {
           // A Fehde attack — the Waldläufer's archers or a rival king's own force — is a
           // fully independent assault: its own date, its own composition, never merged into
@@ -12918,6 +12968,15 @@ export default function CastleBuilder() {
   const actGoalsCount = actDef ? actDef.goals.filter((g) => actGoalsDone[g.id]).length : 0;
   const finaleMultNow = actFinaleMult(actGoalsCount);
   const finaleThisYear = !campaignDone && calDate.year >= actFinaleYear;
+  // The Sachsen offer a truce for a hostage once a year, as their host draws near. Never
+  // before the act finale, and only while a child of fitting age is at court.
+  const hostageOfferOpen = warningActive && !finaleThisYear && !battlePhase && court.truceYear !== calDate.year && hostageCandidates(royalFamily, calDate.year).length > 0;
+  useEffect(() => {
+    // A couple of days after the scouts' warning, so the two messages don't pile up.
+    if (!hostageOfferOpen || daysUntilAttack > 28 || court.hostageOfferYear === calDate.year) return;
+    if (!kingName || petitionEvent || gameOverEvent || dynastyEvent || eventOutcome || actEvent) return;
+    setPetitionEvent(buildPetitionEvent('geisel', calDate.year));
+  }, [hostageOfferOpen, daysUntilAttack, court.hostageOfferYear, calDate.year, kingName, petitionEvent, gameOverEvent, dynastyEvent, eventOutcome, actEvent]);
   const expectedAttackers = Math.round(nextAttackerCount * nextAttackMult * queenFx(royalFamily).attackMult * (finaleThisYear ? finaleMultNow : 1));
   const addReward = useCallback((r) => {
     if (r.gold) setResources((res) => ({ ...res, gold: res.gold + r.gold }));
@@ -14840,6 +14899,13 @@ export default function CastleBuilder() {
                   </div>
                 ))}
                 <div style={{ ...note, marginTop: 4 }}>{freeBauernNow} Bauern frei · ⛓️ {Math.floor(goods.eisen || 0)} Eisen im Lager. Entlassene gehen zurück auf ihren Hof, Gefallene fehlen dem Dorf.</div>
+                {hostageOfferOpen && (
+                  <button className="cb-btn" onClick={() => { setOpenPanel(null); setPetitionEvent(buildPetitionEvent('geisel', calDate.year)); }}
+                    style={{ width: '100%', marginTop: 8, padding: '5px 8px', fontSize: '0.84rem' }} title="Ein Kind als Geisel und Gold — dafür bleibt der Angriff dieses Jahr aus">
+                    🤝 Mit den Sachsen verhandeln …
+                  </button>
+                )}
+                {court.truceYear === calDate.year && <div style={{ ...note, marginTop: 6, color: '#3d5a2c' }}>🤝 Waffenruhe: Die Geisel hält die Sachsen dieses Jahr fern.</div>}
                 {warningActive && !battlePhase && (
                   <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(122,35,24,0.5)' }}>
                     <div style={row}>
@@ -14964,11 +15030,11 @@ export default function CastleBuilder() {
                       <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px dashed rgba(92,85,74,0.22)' }}>
                         <div style={{ position: 'relative', flexShrink: 0 }}>
                           <PortraitAvatar stage={lifeStage(age, c.gender === 'f' ? 'f' : 'm', false)} size={46} src={age >= 6 && age < 16 ? faceByName(`${c.name}${c.bornYear}`, c.gender === 'f' ? (age >= 12 ? MAIDEN_FACES() : GIRL_FACES()) : (age >= 12 ? TEEN_FACES() : BOY_FACES())) : null} />
-                          {c.imprisoned ? badge('⛓️', 'Von den Sachsen entführt — hinter Gittern') : c === heir ? badge('👑', 'Thronfolger') : null}
+                          {c.imprisoned ? badge(c.hostageUntil ? '🤝' : '⛓️', c.hostageUntil ? `Geisel bei den Sachsen bis ${c.hostageUntil}` : 'Von den Sachsen entführt — hinter Gittern') : c === heir ? badge('👑', 'Thronfolger') : null}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: '0.88rem' }}>
-                            <strong>{c.name}</strong> <span style={{ color: '#5A5044' }}>· {age} Jahre{c === heir ? ' · Thronfolge' : ''}{c.imprisoned ? ' · 🔒 hinter Gittern' : ''}</span>
+                            <strong>{c.name}</strong> <span style={{ color: '#5A5044' }}>· {age} Jahre{c === heir ? ' · Thronfolge' : ''}{c.imprisoned ? (c.hostageUntil ? ` · 🤝 Geisel bei den Sachsen bis ${c.hostageUntil}` : ' · 🔒 hinter Gittern') : ''}</span>
                             {c.spouseName && <span style={{ color: '#7a2f5c' }}> · 💍 {c.spouseName}</span>}
                           </div>
                           <div style={{ fontSize: '0.8rem', marginTop: 2 }}>
