@@ -5974,7 +5974,9 @@ function navSmooth(nav, pts, exA, exB) {
 
 // Everything a builder has to walk around: finished walls, shut gates, un-bridged ditches,
 // towers, the keep and finished buildings, plus the river.
-function buildWorkerNav(structures) {
+// With `wade`, ditches don't count: the route of last resort for someone who would otherwise
+// be shut out for good (say a moat was finished with him on the wrong side of it).
+function buildWorkerNav(structures, wade = false) {
   const nav = makeNavGrid();
   Object.entries(structures).forEach(([key, s]) => {
     if (!standsFinished(s)) return;
@@ -5982,8 +5984,10 @@ function buildWorkerNav(structures) {
       navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity);
       nav.sig.push(key);
     } else if (s.type === 'graben') {
+      if (wade) return;
       const gkey = edgeKeyOf(s.i1, s.j1, s.i2, s.j2);
-      const bridged = Object.values(structures).some((g) => g.type === 'gate' && g.stage === 'done' && g.doorOpen
+      // A gate being rebuilt in stone still has its drawbridge down.
+      const bridged = Object.values(structures).some((g) => g.type === 'gate' && standsFinished(g) && g.doorOpen
         && gateBridgedGrabenKey(g, structures) === gkey);
       if (!bridged) { navBlockEdge(nav, s.i1, s.j1, s.i2, s.j2, Infinity); nav.sig.push(key); }
     } else if (s.type === 'tower') {
@@ -6010,7 +6014,9 @@ function computeWorkerPath(fromI, fromJ, toI, toJ, nav) {
   const { cells, reached } = navAStar(nav, sci, scj, gci, gcj);
   const pts = [from, ...cells.map(navCenter)];
   if (reached) pts.push(to);
-  return navSmooth(nav, pts, exA, exB);
+  const path = navSmooth(nav, pts, exA, exB);
+  path.reached = reached;
+  return path;
 }
 
 function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, haulPriority, fleeMode, treesIn, rocksIn, currentDay, buildSpeed = 1) {
@@ -6155,6 +6161,8 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
   const availPile = { ...pilesIn };
   let deliveredStone = 0, deliveredWood = 0;
   const nav = buildWorkerNav(structures);
+  let wadeNav = null;
+  const getWadeNav = () => { if (!wadeNav) wadeNav = buildWorkerNav(structures, true); return wadeNav; };
   // A real content signature of everything that blocks movement — a worker's cached route is
   // recomputed the moment a wall goes up (or comes down), a gate opens, or a building finishes.
   const wallSignature = nav.signature;
@@ -6181,12 +6189,19 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     else if (w.siteKey && structures[w.siteKey]) { targetPos = slotOffset(siteAnchor(structures[w.siteKey]), w.slot); targetKey = `site:${w.siteKey}:${w.slot}`; }
     else { const jitter = ((w.id % 5) - 2) * 0.35; targetPos = { i: DEPOT_I + jitter, j: DEPOT_J }; targetKey = 'idle'; }
 
-    let path = w.path, pathIdx = w.pathIdx || 0;
+    let path = w.path, pathIdx = w.pathIdx || 0, wading = !!w.wading;
     const cacheKey = `${targetKey}|${wallSignature}`;
     // Recompute when the target or the obstacles changed — and, as a safety valve, whenever a
     // worker has made no headway for a while although it isn't where it's meant to be.
     if (w.pathTargetKey !== cacheKey || (w.stuckTicks || 0) >= 12) {
       path = computeWorkerPath(w.curI, w.curJ, targetPos.i, targetPos.j, nav);
+      wading = false;
+      // Cut off by a ditch with no bridge anywhere: climb down and through it rather than
+      // stand there forever.
+      if (path && path.reached === false) {
+        const wp = computeWorkerPath(w.curI, w.curJ, targetPos.i, targetPos.j, getWadeNav());
+        if (!wp || wp.reached) { path = wp; wading = true; }
+      }
       pathIdx = 0;
     }
 
@@ -6205,7 +6220,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     let forceReplan = false;
     if (d > 0.001) {
       // Fleeing from the Sachsen, everyone runs.
-      const t = Math.min(1, SPEED_PER_TICK * workerPace(w.id) * (fleeMode ? 1.8 : 1) / d);
+      const t = Math.min(1, SPEED_PER_TICK * workerPace(w.id) * (fleeMode ? 1.8 : 1) * (wading ? 0.6 : 1) / d);
       newI = w.curI + (moveTarget.i - w.curI) * t;
       newJ = w.curJ + (moveTarget.j - w.curJ) * t;
       // Never take a step through a wall, a shut gate or into a solid building. With proper
@@ -6213,7 +6228,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
       // where someone was walking), the worker stays put and re-plans on the next tick.
       const [sci, scj] = navCellOf(cur.i, cur.j);
       const [gci, gcj] = navCellOf(targetPos.i, targetPos.j);
-      const stepBlocked = !navLineClear(nav, cur, { i: newI, j: newJ }, navIdx(sci, scj), navIdx(gci, gcj));
+      const stepBlocked = !navLineClear(wading ? getWadeNav() : nav, cur, { i: newI, j: newJ }, navIdx(sci, scj), navIdx(gci, gcj));
       if (stepBlocked) forceReplan = true;
       if (stepBlocked) { newI = w.curI; newJ = w.curJ; }
     }
@@ -6233,7 +6248,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
       if (Math.abs(lookDx) > 0.02) faceLeft = lookDx < 0;
     }
     const stuckTicks = atTarget || madeProgress ? 0 : ((w.stuckTicks || 0) >= 12 ? 0 : (w.stuckTicks || 0) + 1);
-    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: forceReplan ? null : cacheKey, stuckTicks, faceLeft };
+    let next = { ...w, curI: newI, curJ: newJ, atTarget, arrived: atTarget && !!w.siteKey, path, pathIdx, pathTargetKey: forceReplan ? null : cacheKey, stuckTicks, faceLeft, wading };
 
     if (fleeMode) return next;
 
