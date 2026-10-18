@@ -1412,6 +1412,16 @@ const PETITIONER_DEFS = {
     text: 'Der begnadigte Wilderer hat Freunde gefunden — eine ganze Bande plündert nun Wildbestand und Vorratskammern.',
     image: COURT_IMG_POACHER_GANG,
   },
+  abt: {
+    title: 'Der Abt des Klosters tritt vor den Thron:',
+    text: '„Mein König! Unsere Brüder beten Tag und Nacht für Euer Haus. Gewährt dem Kloster Eure Gunst, und es wird Euch an Wissen und Ansehen vergolten."',
+    image: COURT_IMG_BISHOP,
+  },
+  wirt: {
+    title: 'Der Wirt aus dem Brauhaus bittet um Gehör:',
+    text: '„Mein König! Das Bier ist gut, doch die Leute trinken es im Stall. Erlaubt mir eine richtige Schenke am Dorfplatz — und ein Teil des Umsatzes gehört der Krone."',
+    image: COURT_IMG_PEASANT,
+  },
   gilde: {
     title: 'Ein Gesandter der Kaufmannsgilde bittet um Gehör:',
     text: '„Mein König! Die Gilde plant eine Handelsfahrt nach Flandern. Beteiligt Euch an der Unternehmung, und Ihr erhaltet drei Jahre lang Euren Anteil am Gewinn."',
@@ -1482,6 +1492,7 @@ const KNIGHT_DEFS = {
   balduin: { name: 'Balduin', image: COURT_IMG_KNIGHT_BALDUIN, face: COURT_FACE_KNIGHT_BALDUIN },
   lars: { name: 'Lars', image: COURT_IMG_KNIGHT_LARS, face: COURT_FACE_KNIGHT_LARS },
 };
+const BASE_KNIGHT_LOOKS = { ludwig: { image: COURT_IMG_KNIGHT, face: COURT_FACE_KNIGHT }, balduin: { image: COURT_IMG_KNIGHT_BALDUIN, face: COURT_FACE_KNIGHT_BALDUIN }, lars: { image: COURT_IMG_KNIGHT_LARS, face: COURT_FACE_KNIGHT_LARS } };
 // The knights who can be recruited by petition. Knights who join later — the knighted Moor,
 // squires who earned their spurs — are added to KNIGHT_DEFS at runtime (registerCourtKnights),
 // so everything keyed by knight id (battle, experience, wages) works for them too.
@@ -1506,13 +1517,18 @@ const COURT_WEDDING_COST = 40;
 const FEUD_CHANCE = 0.35; // a year, from the third year of the reign on
 const YOUTH_NAMES = ['Konrad', 'Dietrich', 'Hartmut', 'Ulrich', 'Gottfried', 'Eberhard', 'Rupert', 'Wolfram', 'Bernhard', 'Siegfried', 'Gerold', 'Heinrich', 'Arnold', 'Kuno'];
 const LADY_NAMES = ['Agnes', 'Gisela', 'Hedwig', 'Jutta', 'Liutgard', 'Mechthild'];
-const COURT_INIT = { ladyName: null, ladyHusband: null, wives: {}, youths: [], extraKnights: {}, nextYouthId: 1 };
+const COURT_INIT = { ladyName: null, ladyHusband: null, wives: {}, youths: [], extraKnights: {}, nextYouthId: 1, fallen: [] };
+// Knights who ride in from elsewhere once one of the first three has fallen.
+const WANDERING_KNIGHT_NAMES = ['Reinhard', 'Gerhard', 'Burkhard', 'Hugo', 'Walram', 'Otto', 'Friedrich', 'Bertold'];
 function registerCourtKnights(extra) {
   Object.entries(extra || {}).forEach(([id, k]) => {
     if (KNIGHT_DEFS[id]) return;
+    // A wandering knight who takes a fallen one's place wears that knight's armour (k.look).
+    const look = k.look && BASE_KNIGHT_LOOKS[k.look];
     KNIGHT_DEFS[id] = k.kind === 'moor'
       ? { name: k.name, image: COURT_IMG_MOOR, face: COURT_FACE_MOOR }
-      : { name: k.name, image: COURT_IMG_SQUIRES, face: COURT_FACE_SQUIRE };
+      : look ? { name: k.name, image: look.image, face: look.face }
+        : { name: k.name, image: COURT_IMG_SQUIRES, face: COURT_FACE_SQUIRE };
   });
 }
 function youthWagePerDay(court) {
@@ -8511,6 +8527,7 @@ export default function CastleBuilder() {
   useEffect(() => { ladyHiredRef.current = ladyHired; }, [ladyHired]);
   const [falconerHired, setFalconerHired] = useState(false);
   const falconerHiredRef = useRef(false);
+  const autoHuntYearRef = useRef(null);
   useEffect(() => { falconerHiredRef.current = falconerHired; }, [falconerHired]);
   const [bakeryUpgraded, setBakeryUpgraded] = useState(false);
   const bakeryUpgradedRef = useRef(false);
@@ -9326,6 +9343,7 @@ export default function CastleBuilder() {
     const aliveK = ours.filter((u) => u.type === 'champion' && u.hp > 0).map((u) => u.knightId);
     setSoldiers((sv) => ({ soldier: sv.soldier + aliveS, archer: sv.archer + aliveA }));
     if (fallenK.length) setRecruitedKnights((k) => { const n = { ...k }; fallenK.forEach((kid) => { n[kid] = false; }); return n; });
+    markFallenKnights(fallenK);
     setKnightProgress((kp) => {
       const n = { ...kp };
       fallenK.forEach((kid) => { delete n[kid]; });
@@ -9436,6 +9454,14 @@ export default function CastleBuilder() {
 
   // ---- Hofstaat ------------------------------------------------------------------------------
   // (Only setters and refs in here: buildPetitionEvent below keeps its first closure.)
+  // One of the first three knights dead: in time a stranger may come to take his place.
+  const markFallenKnights = (ids) => {
+    const base = ids.filter((id) => BASE_KNIGHT_IDS.includes(id));
+    if (!base.length) return;
+    const fallen = [...new Set([...(courtRef.current.fallen || []), ...base])];
+    courtRef.current = { ...courtRef.current, fallen };
+    setCourt((c) => ({ ...c, fallen }));
+  };
   const addCourtKnight = (id, entry, xp) => {
     const extraKnights = { ...courtRef.current.extraKnights, [id]: entry };
     registerCourtKnights(extraKnights);
@@ -9704,7 +9730,34 @@ export default function CastleBuilder() {
       };
     }
     if (type === 'ritter') {
-      const availableKnights = BASE_KNIGHT_IDS.filter((id) => !recruitedKnightsRef.current[id]);
+      const fallen = courtRef.current.fallen || [];
+      const availableKnights = BASE_KNIGHT_IDS.filter((id) => !recruitedKnightsRef.current[id] && !fallen.includes(id));
+      if (!availableKnights.length && fallen.length) {
+        // The dead don't come back — a stranger with his own name rides in instead.
+        const used = new Set(Object.values(KNIGHT_DEFS).map((k) => k.name));
+        const name = WANDERING_KNIGHT_NAMES.find((n) => !used.has(n)) || `Ritter ${WANDERING_KNIGHT_NAMES.length}`;
+        const look = fallen[Math.floor(Math.random() * fallen.length)];
+        const joinCost = data && data.discount ? Math.round(CHAMPION_JOIN_COST / 2) : CHAMPION_JOIN_COST;
+        return {
+          type, ...def, image: BASE_KNIGHT_LOOKS[look].image,
+          title: `Ein fahrender Ritter, ${name}, tritt vor den Thron:`,
+          text: '„Mein König! Man erzählt im ganzen Land, Euer Hof habe einen tapferen Ritter verloren. Mein Schwert gehört Euch, wenn Ihr es wollt."',
+          options: [
+            {
+              label: `${name} aufnehmen (${joinCost} 🪙 einmalig + höherer Unterhalt)`,
+              desc: `${name} tritt an die Stelle des Gefallenen und verstärkt die Garnison als berittener Kämpfer.`,
+              disabled: resourcesRef.current.gold < joinCost,
+              apply: () => {
+                setResources((r) => ({ ...r, gold: Math.max(0, r.gold - joinCost) }));
+                addCourtKnight(`fk${Date.now()}`, { name, kind: 'wandering', look }, 0);
+                setCourt((c) => ({ ...c, fallen: (c.fallen || []).filter((f) => f !== look) }));
+                courtRef.current = { ...courtRef.current, fallen: (courtRef.current.fallen || []).filter((f) => f !== look) };
+              },
+            },
+            { label: 'Ablehnen', desc: `${name} zieht weiter.`, apply: () => {} },
+          ],
+        };
+      }
       const knightId = availableKnights[Math.floor(Math.random() * availableKnights.length)] || BASE_KNIGHT_IDS[0];
       const knightDef = KNIGHT_DEFS[knightId];
       const joinCost = data && data.discount ? Math.round(CHAMPION_JOIN_COST / 2) : CHAMPION_JOIN_COST;
@@ -9851,7 +9904,7 @@ export default function CastleBuilder() {
         options: [
           {
             label: `Am Hofe aufnehmen (${cost} 🪙)`,
-            desc: `Er bleibt dauerhaft am Hof und hebt die Stimmung bei Hofe, kostet aber ${FALCONER_WAGE.toFixed(2)} 🪙 Sold pro Tag. Jederzeit im Hof-Überblick entlassbar.`,
+            desc: `Er bleibt am Hof, hebt die Stimmung, führt jeden September eine große Jagd an und macht Eure eigenen Jagden ergiebiger (+50 % Beute). Kostet ${FALCONER_WAGE.toFixed(2)} 🪙 Sold pro Tag. Jederzeit im Hof-Überblick entlassbar.`,
             disabled: resourcesRef.current.gold < cost,
             apply: () => {
               setResources((r) => ({ ...r, gold: Math.max(0, r.gold - cost) }));
@@ -10412,6 +10465,51 @@ export default function CastleBuilder() {
         ],
       };
     }
+    if (type === 'abt') {
+      const cur = researchRef.current.current;
+      return {
+        type, ...def,
+        options: [
+          {
+            label: 'Den Brüdern Land stiften (120 🪙)',
+            desc: 'Ruf +5 und Zufriedenheit +5 — das Kloster betet für Euer Haus.',
+            disabled: gold < 120,
+            apply: () => { setResources((r) => ({ ...r, gold: r.gold - 120 })); adjustRep(5); setHappiness((h) => Math.min(100, h + 5)); },
+          },
+          {
+            label: 'Schreiber für die Baukunst (60 🪙)',
+            desc: cur ? `Die Mönche kopieren Bücher für „${RESEARCH[cur.id].name}“: die Forschung rückt um ein Drittel voran.` : 'Gerade wird nichts erforscht — die Mönche hätten nichts zu kopieren.',
+            disabled: gold < 60 || !cur,
+            apply: () => { setResources((r) => ({ ...r, gold: r.gold - 60 })); setResearch((r) => (r.current ? { ...r, current: { ...r.current, progress: Math.min(0.99, r.current.progress + 0.34) } } : r)); },
+          },
+          { label: 'Mit Dank entlassen', desc: 'Der Abt segnet Euch und geht.', apply: () => {} },
+        ],
+      };
+    }
+    if (type === 'wirt') {
+      return {
+        type, ...def,
+        options: [
+          {
+            label: 'Die Schenke erlauben (40 🪙)',
+            desc: '+12 🪙 im Monat für drei Jahre und Zufriedenheit +4 — doch wo getrunken wird, wird auch gerauft (5 % im Monat, dass die Schenke schließen muss).',
+            disabled: gold < 40 || contractsRef.current.length >= 3,
+            apply: () => {
+              setResources((r) => ({ ...r, gold: r.gold - 40 }));
+              setHappiness((h) => Math.min(100, h + 4));
+              setContracts((cs) => [...cs, { id: Date.now(), label: 'Schenke am Dorfplatz', perMonth: 12, untilDay: dayRef.current + 36 * MONTH_LENGTH, failChance: 0.05, failText: 'Nach einer wüsten Rauferei musste die Schenke schließen.' }]);
+            },
+          },
+          {
+            label: 'Freibier für alle (30 🪙)',
+            desc: 'Ein Abend auf Kosten der Krone: Zufriedenheit +8.',
+            disabled: gold < 30,
+            apply: () => { setResources((r) => ({ ...r, gold: r.gold - 30 })); setHappiness((h) => Math.min(100, h + 8)); },
+          },
+          { label: 'Ablehnen', desc: 'Das Bier bleibt im Stall.', apply: () => {} },
+        ],
+      };
+    }
     if (type === 'gilde') {
       const deals = [
         { stake: 100, perMonth: 8, label: 'Kleiner Anteil' },
@@ -10632,13 +10730,17 @@ export default function CastleBuilder() {
     }
     if (day < nextPetitionDay) return;
     const eligible = ['bauer', 'soldat', 'hexe', 'bauer_folge'];
-    if (!hofnarrHired) eligible.push('hofnarr');
-    if (!moorishHired) eligible.push('maurischer');
-    if (!monkHired) eligible.push('moench');
-    if (!ladyHired) eligible.push('hofdame');
-    if (!falconerHired) eligible.push('falkner');
-    if (!medicusHired) eligible.push('medicus');
-    if (!armbrustHired && !capturedCourtiers.armbrust) eligible.push('armbrust');
+    // Who comes to court depends on what the castle has to offer them.
+    const has = (k) => hasDoneAmenity(structures, k);
+    if (!hofnarrHired && (has('kemenate') || has('palas'))) eligible.push('hofnarr');
+    if (!moorishHired && (has('stallungen') || has('turnierplatz'))) eligible.push('maurischer');
+    if (!monkHired && (has('kapelle') || has('kloster'))) eligible.push('moench');
+    if (!ladyHired && has('kemenate')) eligible.push('hofdame');
+    if (!falconerHired && has('falknerei')) eligible.push('falkner', 'falkner');
+    if (!medicusHired && (has('kemenate') || has('kloster'))) eligible.push('medicus');
+    if (has('kloster')) eligible.push('abt');
+    if (has('brauhaus')) eligible.push('wirt');
+    if (!armbrustHired && !capturedCourtiers.armbrust && (has('bogenmacher') || has('schmied'))) eligible.push('armbrust');
     else if (armbrustHired && !crossbowUpgraded2) eligible.push('armbrust_folge');
     if (!bakeryUpgraded && hasDoneAmenity(structures, 'baeckerei')) eligible.push('baecker');
     else if (bakeryUpgraded) eligible.push('baecker_folge');
@@ -10668,7 +10770,7 @@ export default function CastleBuilder() {
     // Neue Bittsteller und Ereignisse.
     eligible.push('alchemist', 'wilderer', 'unwetter', 'seuche');
     if (reputation >= 30) eligible.push('fluechtlinge');
-    if (reignYear >= 2 && contracts.length < 2) eligible.push('gilde');
+    if (reignYear >= 2 && contracts.length < 2 && (has('marktplatz') || has('vogtei'))) eligible.push('gilde');
     // The Baumeister leads the Baukunst research, so he turns up more often in the early years.
     if (!baumeisterHired) eligible.push('baumeister', ...(reignYear <= 4 ? ['baumeister', 'baumeister'] : []));
     if (reignYear >= 3) eligible.push('spion', 'turnier');
@@ -11259,6 +11361,16 @@ export default function CastleBuilder() {
         // Bürgerrecht, as far as the settlement's stage allows.
         if (newDay % MONTH_LENGTH === 0) {
           if (monthlyTradeRef.current) monthlyTradeRef.current(newDay);
+          // The Falkner leads a great hunt every September, without being asked.
+          const huntDate = getCalendarDate(newDay);
+          if (huntDate.month === 8 && falconerHiredRef.current && !capturedCourtiersRef.current.falconer && hasDoneAmenity(structuresRef.current, 'falknerei') && autoHuntYearRef.current !== huntDate.year) {
+            autoHuntYearRef.current = huntDate.year;
+            const L = amenityLevel(structuresRef.current, 'falknerei');
+            const food = Math.round((30 + 15 * L) * 1.5);
+            setResources((r) => ({ ...r, food: r.food + food }));
+            setCourtMorale((m) => Math.min(100, m + 5 + L));
+            logEvent('🦅', `Der Falkner führt die Herbstjagd an: +${food} 🌾, Stimmung bei Hofe +${5 + L}`, 'good');
+          }
           const pop = villagePopRef.current, st = structuresRef.current;
           if (resourcesRef.current.food < 3) {
             if (pop > 4 && Math.random() < 0.6) {
@@ -11754,6 +11866,7 @@ export default function CastleBuilder() {
         fallenKnightIds.forEach((id) => { next[id] = false; });
         return next;
       });
+      markFallenKnights(fallenKnightIds);
     }
 
     let destroyedCount = 0;
