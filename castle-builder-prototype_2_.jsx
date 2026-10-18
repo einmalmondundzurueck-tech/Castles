@@ -890,6 +890,8 @@ const LIFE_STAGE_LABEL = {
 };
 
 const DAY_MS = 1000;
+// A felled wood takes a generation to come back.
+const FOREST_REGROW_DAYS = 20 * 360;
 const START_YEAR = 1100;
 const MONTH_NAMES = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 function isLeapYear(y) { return y % 4 === 0; }
@@ -6071,7 +6073,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
           const take = Math.min(LUMBER_RATE_PER_TICK * (tree.rate || 1), tree.amount);
           tree.amount -= take;
           woodPileGain += take;
-          if (tree.amount <= 0.001) { tree.felled = true; tree.amount = 0; tree.regrowDay = currentDay + 360; }
+          if (tree.amount <= 0.001) { tree.felled = true; tree.amount = 0; tree.regrowDay = currentDay + FOREST_REGROW_DAYS; }
         }
       }
     });
@@ -7154,8 +7156,8 @@ const UI_CSS = `
   @media (max-width: 1500px) { .cb-navbtn { padding: 5px 4px !important; } .cb-topbar { gap: 5px !important; } .cb-chip { padding: 2px 6px; gap: 3px; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
   @media (max-width: 1720px) { .cb-chip .cb-cap { display: none; } }
-  @media (max-width: 1380px) { .cb-navbtn { padding: 4px 3px !important; font-size: 0.78rem !important; } .cb-chip { padding-left: 5px !important; padding-right: 5px !important; gap: 3px !important; font-size: 0.8rem !important; } .cb-datebox { width: 112px !important; } .cb-datebox span { font-size: 0.78rem !important; } }
-  .cb-datebox { width: 136px; }
+  @media (max-width: 1380px) { .cb-navbtn { padding: 4px 3px !important; font-size: 0.78rem !important; } .cb-chip { padding-left: 5px !important; padding-right: 5px !important; gap: 3px !important; font-size: 0.8rem !important; } .cb-datebox { width: 128px !important; } .cb-datebox span { font-size: 0.78rem !important; } }
+  .cb-datebox { width: 152px; }
   @media (max-width: 1500px) { .cb-perm, .cb-pause-label { display: none; } .cb-chip .cb-delta-pos, .cb-chip .cb-delta-neg { min-width: 2.4em; } }
   @media (max-width: 1960px) { .cb-navbtn { padding: 5px 6px !important; } }
   @media (max-width: 1300px) { .cb-date-sub { display: none; } .cb-topbar { gap: 4px !important; } }
@@ -9119,7 +9121,9 @@ export default function CastleBuilder() {
       caravan = null;
       logEvent('🐫', 'Die Fernhändler ziehen weiter', 'neutral');
     }
-    if (!caravan && newDay >= nextCaravanDay) {
+    // No merchant takes his wagons towards a castle the enemy is marching on.
+    const enemyNear = daysUntilYearEnd(newDay) <= 30 || !!battlePhaseRef.current || pendingFeudAttacksRef.current.some((f) => f.day - newDay <= 30);
+    if (!caravan && newDay >= nextCaravanDay && !enemyNear) {
       caravan = makeCaravan(newDay, mult, owned);
       nextCaravanDay = newDay + CARAVAN_STAY_DAYS + caravanInterval(structuresRef.current, owned);
       logEvent('🐫', `Fernhändler am Burgtor: ${Object.keys(caravan.offers).map((k) => GOODS[k].name).join(', ')}`, 'good');
@@ -11608,14 +11612,19 @@ export default function CastleBuilder() {
       militiaRef.current = { bauern: 0, buerger: 0 };
       if (fallen > 0) logEvent('⚰️', `${fallen} Mann der Landwehr sind gefallen`, 'bad');
     }
-    // The villagers fled into the castle; if it falls, many of them are killed or carried off.
-    if (keepDestroyed) {
-      const lost = Math.ceil(villagePopRef.current * 0.2);
-      setVillagePop((p) => Math.max(2, p - lost));
-      logEvent('🔥', `Die Sachsen plündern das Dorf — ${lost} Dorfbewohner verloren`, 'bad');
+    // A lost fight — the garrison overrun, or the keep torn down — means the Sachsen sack the
+    // place: buildings burn, the treasury is emptied, and many villagers are killed, carried
+    // off or simply flee for good.
+    const lostFight = keepDestroyed || (timedOut ? aliveDefenders < activeAttackers : activeAttackers > 0);
+    if (lostFight) {
+      const lostBauern = Math.ceil(Math.max(0, villagePopRef.current - buergerRef.current) * 0.3);
+      const lostBuerger = Math.ceil(buergerRef.current * 0.3);
+      setVillagePop((p) => Math.max(2, p - lostBauern - lostBuerger));
+      setBuerger((b) => Math.max(0, b - lostBuerger));
+      logEvent('🔥', `Die Sachsen plündern das Dorf — ${lostBauern} Bauern und ${lostBuerger} Bürger sind tot, verschleppt oder geflohen`, 'bad');
     }
 
-    if (keepDestroyed) {
+    if (lostFight) {
       // The walls have been breached and the defenders overrun — rather than an instant
       // game over, the Sachsen sack whatever's inside for a while and then withdraw. Every
       // finished amenity building burns (not just the stables and bakery), a third of the
@@ -11630,7 +11639,8 @@ export default function CastleBuilder() {
       const towerBurnCount = Math.ceil(doneTowers.length / 3);
       const shuffledTowers = [...doneTowers].sort(() => Math.random() - 0.5).slice(0, towerBurnCount);
       shuffledTowers.forEach(([tkey, s]) => burnTargets.push({ key: tkey, i: s.i, j: s.j, label: 'ein Wachturm' }));
-      if (structures.keep) burnTargets.push({ key: 'keep', i: structures.keep.i, j: structures.keep.j, label: 'der Burgfried' });
+      if (structures.keep && keepDestroyed) burnTargets.push({ key: 'keep', i: structures.keep.i, j: structures.keep.j, label: 'der Burgfried' });
+      const breachedKeys = battleObstacles.filter((o) => o.breached).map((o) => o.structureKey);
 
       // A successful raid risks more than just the buildings: any family member or resident
       // courtier still in the castle has a real (though far from certain) chance of being
@@ -11639,6 +11649,9 @@ export default function CastleBuilder() {
       // than one person, though most of the time everyone comes through unscathed.
       const CAPTURE_CHANCE = 0.30;
       const DEATH_CHANCE = 0.04;
+      // The court fares worse than the family: about half of it is lost.
+      const COURT_CAPTURE_CHANCE = 0.38;
+      const COURT_DEATH_CHANCE = 0.12;
       const capturedNames = [];
       const deadNames = [];
 
@@ -11676,8 +11689,8 @@ export default function CastleBuilder() {
       courtierCandidates.forEach((c) => {
         if (!c.hired || capturedCourtiers[c.key]) return;
         const roll = Math.random();
-        if (roll < DEATH_CHANCE) { deadNames.push(c.name); c.setHired(false); }
-        else if (roll < DEATH_CHANCE + CAPTURE_CHANCE) { capturedNames.push(c.name); nextCaptured[c.key] = true; }
+        if (roll < COURT_DEATH_CHANCE) { deadNames.push(c.name); c.setHired(false); }
+        else if (roll < COURT_DEATH_CHANCE + COURT_CAPTURE_CHANCE) { capturedNames.push(c.name); nextCaptured[c.key] = true; }
       });
       setCapturedCourtiers(nextCaptured);
       // The garrison's dead stay dead after a sack, too.
@@ -11688,7 +11701,7 @@ export default function CastleBuilder() {
 
       setBattlePhase('raiding');
       setSelectedUnitId(null);
-      setRaidEvent({ burnTargets, capturedNames, deadNames, totalAttackers, startedAt: Date.now() });
+      setRaidEvent({ burnTargets, breachedKeys, capturedNames, deadNames, totalAttackers, startedAt: Date.now() });
       return;
     }
 
@@ -11736,6 +11749,17 @@ export default function CastleBuilder() {
     }
 
     let destroyedCount = 0;
+    // What the attackers broke stays broken, won or not: the craftsmen rebuild it, with the
+    // wood and stone that takes.
+    if (won) {
+      const brokenKeys = battleObstacles.filter((o) => o.breached).map((o) => o.structureKey);
+      destroyedCount = brokenKeys.length;
+      if (brokenKeys.length) setStructures((prev) => {
+        const next = { ...prev };
+        brokenKeys.forEach((k) => { if (next[k]) next[k] = { ...next[k], stage: 'foundation', progress: 0, blocked: false, ruined: true }; });
+        return next;
+      });
+    }
     // Word of a victory (or a defeat) travels.
     setReputation((r) => Math.max(0, Math.min(100, r + (won ? 3 : -4))));
     if (!won) {
@@ -11790,6 +11814,7 @@ export default function CastleBuilder() {
     const timer = setTimeout(() => {
       setStructures((prev) => {
         const next = { ...prev };
+        (raidEvent.breachedKeys || []).forEach((k) => { if (next[k]) next[k] = { ...next[k], stage: 'foundation', progress: 0, blocked: false, ruined: true }; });
         raidEvent.burnTargets.forEach((bt) => {
           if (bt.key === 'keep' && next.keep) {
             next.keep = { ...next.keep, stage: 'foundation', progress: 0, blocked: false, ruined: true };
