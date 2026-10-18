@@ -6697,6 +6697,36 @@ function distance2(a, b) {
 
 const ENGAGE_RADIUS = 1.1;
 const MAX_BATTLE_TICKS = 600;
+// One defence fought out without drawing it: the same combat steps and the same verdict as the
+// real battle. A generator, so the war council can spread its runs over many short slices
+// and the game keeps running smoothly meanwhile.
+function* defenseSimRun(spawned, m) {
+  let { units, obstacles } = spawned;
+  let t = 0, keepDown = false;
+  for (; t < MAX_BATTLE_TICKS; t++) {
+    const r = battleTickStep(units, obstacles, spawned.keepPos, m.smith, t, m.morale, m.kapelle, m.moor, m.lowCourt, m.crossbow, m.knightRaise, m.pitch);
+    units = r.units; obstacles = r.obstacles;
+    const keep = obstacles.find((o) => o.type === 'keep');
+    if (keep && keep.hp <= 0) { keepDown = true; break; }
+    const att = units.filter((u) => u.side === 'attacker' && u.hp > 0 && !u.exited).length;
+    const def = units.filter((u) => u.side === 'defender' && u.hp > 0).length;
+    if (!att || !def) break;
+    if (t % 30 === 29) yield;
+  }
+  const att = units.filter((u) => u.side === 'attacker' && u.hp > 0 && !u.exited).length;
+  const def = units.filter((u) => u.side === 'defender' && u.hp > 0).length;
+  const dead = (type) => units.filter((u) => u.side === 'defender' && u.type === type && u.hp <= 0 && !u.merc && !u.militia).length;
+  return {
+    won: !keepDown && (t >= MAX_BATTLE_TICKS ? def >= att : att === 0),
+    lostSoldiers: dead('soldier'), lostArchers: dead('archer'), lostKnights: dead('champion'),
+    breached: obstacles.filter((o) => o.breached && o.type !== 'keep').length,
+  };
+}
+// Extra men the war council tries, smallest first, until the castle holds. The combat rules
+// play out the same way every time for the same castle and host, so one rehearsal per
+// step tells the whole story.
+const COUNCIL_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25];
+const menText = (s, a) => [s && `${s} ${s === 1 ? 'Soldat' : 'Soldaten'}`, a && `${a} ${a === 1 ? 'Bogenschütze' : 'Bogenschützen'}`].filter(Boolean).join(' und ');
 
 
 // Battle routing: the same tile graph as the workers', but walls, gates and ditches are not
@@ -8904,6 +8934,79 @@ export default function CastleBuilder() {
     for (let k = units.length - 1; k >= 0 && left > 0; k--) {
       if (units[k].side === 'defender' && units[k].type === 'soldier') { units[k].merc = true; left--; }
     }
+  };
+  // Everything at court and in the castle that bends the defenders' blows — read fresh at
+  // every combat step, and by the war council for its rehearsals.
+  const defenseBattleMods = () => {
+    // The crossbow bonus only holds while the Armbrustmacher is at court making bolts.
+    const armbrustPresent = armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust;
+    return {
+      smith: (SMITH_DAMAGE_MULT[smithTierRef.current] || 1) * smithyLevelDamageMult(structuresRef.current),
+      kapelle: kapelleCombatMult(structuresRef.current),
+      morale: soldierMoraleDebuffUntilYearRef.current != null && getCalendarDate(dayRef.current).year < soldierMoraleDebuffUntilYearRef.current,
+      moor: moorishHiredRef.current && !capturedCourtiersRef.current.moorish,
+      lowCourt: courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD,
+      crossbow: armbrustPresent ? ((crossbowUpgradedRef.current ? CROSSBOW_DAMAGE_MULT : 1) * (crossbowUpgraded2Ref.current ? CROSSBOW_DAMAGE_MULT_2 : 1)) : 1,
+      knightRaise: 1 + knightRaisesRef.current * 0.06,
+      pitch: researchRef.current.done.includes('pech'),
+    };
+  };
+  // Der Kriegsrat: the coming attack fought out a few times in advance with the castle and
+  // garrison as they stand, then again with more men until the castle would hold.
+  const [warCouncil, setWarCouncil] = useState(null);
+  const warCouncilRunRef = useRef(0);
+  const runWarCouncil = (key, attackerCount, yearIdx) => {
+    const runId = ++warCouncilRunRef.current;
+    const mods = defenseBattleMods();
+    const knights = knightIds().filter((id) => recruitedKnightsRef.current[id]);
+    const base = { ...soldiersRef.current };
+    const merc = mercenaryCountRef.current, mil = militiaTotal();
+    const spawn = (extraS, extraA) => {
+      const sp = spawnBattleUnits(structuresRef.current, { soldier: base.soldier + extraS + merc + mil, archer: base.archer + extraA }, attackerCount, yearIdx, knights);
+      markMercenaries(sp.units, merc);
+      markMilitia(sp.units, mil);
+      empowerSpawnRef.current(sp);
+      return sp;
+    };
+    const res = { key, running: true, done: 0, base: [], need: null, tried: [] };
+    let plan = [{ s: 0, a: 0 }];
+    let stepIdx = -1, stepRuns = [];
+    let gen = null, cur = null;
+    setWarCouncil({ ...res });
+    const slice = () => {
+      if (runId !== warCouncilRunRef.current) return;
+      const until = performance.now() + 12;
+      while (performance.now() < until) {
+        if (!gen) {
+          if (!plan.length) {
+            // Done with this stage: the base runs decide whether more men are tried at all.
+            const holds = (runs) => runs.length > 0 && runs.every((r) => r.won);
+            if (stepIdx === -1) {
+              if (holds(res.base)) { res.running = false; setWarCouncil({ ...res }); return; }
+            } else if (holds(stepRuns)) {
+              res.need = { soldier: cur.s, archer: cur.a }; res.running = false; setWarCouncil({ ...res }); return;
+            }
+            stepIdx++;
+            if (stepIdx >= COUNCIL_STEPS.length) { res.need = 'none'; res.running = false; setWarCouncil({ ...res }); return; }
+            const n = COUNCIL_STEPS[stepIdx];
+            const a = Math.ceil(n * 0.6);
+            plan = [{ s: n - a, a }];
+            stepRuns = [];
+          }
+          cur = plan.shift();
+          gen = defenseSimRun(spawn(cur.s, cur.a), mods);
+        }
+        const r = gen.next();
+        if (r.done) {
+          gen = null;
+          res.done++;
+          if (stepIdx === -1) res.base.push(r.value); else stepRuns.push(r.value);
+          setWarCouncil({ ...res });
+        }
+      }
+      setTimeout(slice, 0);
+    };
+    setTimeout(slice, 0);
   };
   // ---- Spielstände ---------------------------------------------------------------------------
   // Everything that makes up a running game; UI-only and in-battle state is left out (saving
@@ -11755,17 +11858,8 @@ export default function CastleBuilder() {
     if (battlePhase !== 'fighting') return;
     const id = setInterval(() => {
       if (isPausedRef.current) return; // Pause now genuinely freezes combat too.
-      const smithDamageMult = (SMITH_DAMAGE_MULT[smithTierRef.current] || 1) * smithyLevelDamageMult(structuresRef.current);
-      // The chapel's blessing as a damage multiplier (0 = no chapel).
-      const kapelleBonus = kapelleCombatMult(structuresRef.current);
-      const moraleDebuffActive = soldierMoraleDebuffUntilYearRef.current != null && getCalendarDate(dayRef.current).year < soldierMoraleDebuffUntilYearRef.current;
-      // The crossbow bonus only holds up while the Armbrustmacher himself is actually at
-      // court — he's the one making fresh bolts and maintaining the mechanisms, so once he's
-      // dismissed or captured, the bonus lapses right along with him (not a one-off purchase
-      // that just keeps paying off forever).
-      const armbrustPresent = armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust;
-      const crossbowMult = armbrustPresent ? ((crossbowUpgradedRef.current ? CROSSBOW_DAMAGE_MULT : 1) * (crossbowUpgraded2Ref.current ? CROSSBOW_DAMAGE_MULT_2 : 1)) : 1;
-      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, smithDamageMult, t, moraleDebuffActive, kapelleBonus, moorishHiredRef.current && !capturedCourtiersRef.current.moorish, courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD, crossbowMult, 1 + knightRaisesRef.current * 0.06, researchRef.current.done.includes('pech')));
+      const m = defenseBattleMods();
+      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, m.smith, t, m.morale, m.kapelle, m.moor, m.lowCourt, m.crossbow, m.knightRaise, m.pitch));
       setBattleUnits(units);
       setBattleObstacles(obstacles);
       setAttackerMorale(morale);
@@ -12978,6 +13072,20 @@ export default function CastleBuilder() {
     setPetitionEvent(buildPetitionEvent('geisel', calDate.year));
   }, [hostageOfferOpen, daysUntilAttack, court.hostageOfferYear, calDate.year, kingName, petitionEvent, gameOverEvent, dynastyEvent, eventOutcome, actEvent]);
   const expectedAttackers = Math.round(nextAttackerCount * nextAttackMult * queenFx(royalFamily).attackMult * (finaleThisYear ? finaleMultNow : 1));
+  // The war council's verdict holds only while castle, garrison and foe stay as they were.
+  const defenseSig = useMemo(() => Object.entries(structures)
+    .filter(([, st]) => st.type === 'wall' || st.type === 'tower' || st.type === 'gate' || st.type === 'graben' || st.type === 'keep')
+    .map(([k, st]) => `${k}${st.stage}${st.level || 1}${st.ruined ? 'r' : ''}`).join('|'), [structures]);
+  const councilKey = [yearNum, expectedAttackers, soldiers.soldier, soldiers.archer, mercenaryCount, militia.bauern + militia.buerger, recruitedKnightIds.join(','), smithTier, research.done.length, moorishHired, armbrustHired, ruler ? ruler.skills.join(',') : '', courtMorale < COURT_MORALE_LOW_THRESHOLD, defenseSig].join('#');
+  const councilFresh = !!warCouncil && warCouncil.key === councilKey;
+  const councilWins = warCouncil ? warCouncil.base.filter((r) => r.won).length : 0;
+  // When the scouts first sight the host, the council sits down by itself.
+  const autoCouncilYearRef = useRef(null);
+  useEffect(() => {
+    if (!warningActive || battlePhase || autoCouncilYearRef.current === calDate.year) return;
+    autoCouncilYearRef.current = calDate.year;
+    if (!councilFresh) runWarCouncil(councilKey, expectedAttackers, yearNum);
+  }, [warningActive, battlePhase, calDate.year]);
   const addReward = useCallback((r) => {
     if (r.gold) setResources((res) => ({ ...res, gold: res.gold + r.gold }));
     if (r.rep) setReputation((v) => Math.max(0, Math.min(100, v + r.rep)));
@@ -14878,12 +14986,51 @@ export default function CastleBuilder() {
         const missingBonuses = bonuses.filter((b) => !b.active && !b.warn);
         return (
           <Modal tabs title="🛡️ Garnison" onClose={() => setOpenPanel(null)} maxWidth={640}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, fontSize: '0.88rem', marginBottom: 10 }}>
-              <span>⚔️ Verteidigungswert <strong>{currentDefense}</strong></span>
-              <span style={{ color: warningActive ? '#7a2318' : '#5A5044', fontWeight: warningActive ? 700 : 400 }}>
-                {warningActive ? '🔥 Der Feind naht' : `Nächster Angriff in ${daysUntilAttack} Tagen`} · {nextAttackerCount} Angreifer erwartet
-              </span>
-            </div>
+            {(() => {
+              const report = scoutReport(yearNum, expectedAttackers);
+              const wc = warCouncil;
+              const show = wc && wc.base.length > 0;
+              const runs = show ? wc.base.length : 0;
+              const avg = (f) => (show ? wc.base.reduce((sum, r) => sum + r[f], 0) / runs : 0);
+              const lossText = show ? [menText(Math.round(avg('lostSoldiers')), Math.round(avg('lostArchers'))), avg('lostKnights') >= 0.5 && `${Math.round(avg('lostKnights'))} Ritter`].filter(Boolean).join(', ') : '';
+              const verdict = !show ? null : councilWins === runs ? ['Die Burg hält', '#3d5a2c'] : ['Die Burg fällt', '#7a2318'];
+              const needGold = wc && wc.need && wc.need !== 'none' ? wc.need.soldier * armsCost('soldier') + wc.need.archer * armsCost('archer') : 0;
+              return (
+                <div style={{ ...card, marginBottom: 10, borderColor: warningActive ? 'rgba(122,35,24,0.6)' : card.border }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6 }}>
+                    <span className="cb-section-title" style={{ margin: 0 }}>🔭 {finaleThisYear ? 'Das Akt-Finale' : 'Der nächste Angriff'}</span>
+                    <span style={{ fontSize: '0.84rem', color: warningActive ? '#7a2318' : '#5A5044', fontWeight: warningActive ? 700 : 400 }}>{warningActive ? '🔥 Der Feind naht — ' : ''}in {daysUntilAttack} Tagen</span>
+                  </div>
+                  <div style={{ fontSize: '0.88rem', marginTop: 4 }}>
+                    Etwa <strong>{expectedAttackers}</strong> Angreifer{report ? `: ${report}` : ' — einfaches Fußvolk'}{nextAttackMult !== 1 ? ' (durch Spione und Gerüchte verändert)' : ''}.
+                  </div>
+                  <div style={{ ...note, marginTop: 2 }}>Verteidigungswert {currentDefense} · Euer Aufgebot: {menText(soldiers.soldier, soldiers.archer) || 'niemand'}{recruitedKnightIds.length ? `, ${recruitedKnightIds.length} Ritter` : ''}{mercenaryCount ? `, ${mercenaryCount} Söldner` : ''}{militia.bauern + militia.buerger ? `, ${militia.bauern + militia.buerger} Landwehr` : ''}</div>
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(92,85,74,0.35)' }}>
+                    {wc && wc.running ? (
+                      <div style={{ fontSize: '0.86rem', fontStyle: 'italic' }}>⏳ Der Kriegsrat spielt die Schlacht durch … ({wc.done + 1}. Probe{wc.done ? ', mit mehr Männern' : ''})</div>
+                    ) : show ? (
+                      <div style={{ opacity: councilFresh ? 1 : 0.55 }}>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: verdict[1] }}>⚖️ Kriegsrat: {verdict[0]}{councilWins === runs && avg('lostSoldiers') + avg('lostArchers') + avg('lostKnights') >= (soldiers.soldier + soldiers.archer + recruitedKnightIds.length) * 0.6 ? ' — aber nur knapp' : ''}</div>
+                        <div style={note}>{lossText ? `Gefallen: ${lossText}.` : 'Kaum eigene Verluste.'}{avg('breached') >= 0.5 ? ` ${Math.round(avg('breached'))} ${Math.round(avg('breached')) === 1 ? 'Mauerstück oder Turm bricht' : 'Mauerstücke oder Türme brechen'}.` : ''}</div>
+                        {wc.need && wc.need !== 'none' && (
+                          <div style={{ fontSize: '0.84rem', marginTop: 4 }}>➕ Mit <strong>{menText(wc.need.soldier, wc.need.archer)}</strong> mehr hielte die Burg (≈ {needGold} 🪙{freeBauernNow < wc.need.soldier + wc.need.archer ? `, aber nur ${freeBauernNow} Bauern frei — Söldner oder Landwehr helfen` : ''}).</div>
+                        )}
+                        {wc.need === 'none' && (
+                          <div style={{ fontSize: '0.84rem', marginTop: 4, color: '#7a2318' }}>Selbst mit {COUNCIL_STEPS[COUNCIL_STEPS.length - 1]} Mann mehr hielte sie kaum. Baut Mauern, Türme und Gräben aus — oder verhandelt.</div>
+                        )}
+                        {!councilFresh && <div style={{ ...note, fontStyle: 'italic' }}>Die Lage hat sich seither geändert.</div>}
+                      </div>
+                    ) : (
+                      <div style={note}>Der Kriegsrat spielt die Schlacht mit Eurer Burg und Garnison, wie sie jetzt stehen, im Voraus durch — und, wenn sie fiele, so lange mit mehr Männern, bis sie hält.</div>
+                    )}
+                    {!(wc && wc.running) && (!show || !councilFresh) && (
+                      <button className="cb-btn" onClick={() => runWarCouncil(councilKey, expectedAttackers, yearNum)} style={{ marginTop: 6, padding: '4px 12px', fontSize: '0.84rem' }}>⚖️ {show ? 'Neu beraten' : 'Kriegsrat einberufen'}</button>
+                    )}
+                    <div style={{ ...note, fontSize: '0.7rem', marginTop: 4 }}>Die Probe nimmt Eure übliche Aufstellung an. Stellt Ihr die Männer im Kampf geschickter auf, reicht oft weniger.</div>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
               <div style={card}>
@@ -15899,7 +16046,8 @@ export default function CastleBuilder() {
             <div className="cb-section-title" style={{ marginTop: 12 }}>Verteidigung</div>
             {(() => {
               const expected = Math.max(1, expectedAttackers) * ATTACKER_STRENGTH;
-              const ratio = Math.min(1.5, currentDefense / expected);
+              // The war council's rehearsals, once held, beat the rough sum of walls and men.
+              const ratio = councilFresh && !warCouncil.running && warCouncil.base.length ? 1.5 * councilWins / warCouncil.base.length : Math.min(1.5, currentDefense / expected);
               return (
                 <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem' }}>
@@ -15909,7 +16057,9 @@ export default function CastleBuilder() {
                     <div style={{ width: `${(ratio / 1.5) * 100}%`, background: ratio >= 1.1 ? '#5d8a3c' : ratio >= 0.8 ? '#c9a24b' : '#a8402c' }} />
                   </div>
                   <div style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 4, lineHeight: 1.4 }}>
-                    Verteidigung {currentDefense} gegen etwa {expectedAttackers} Sachsen in {daysUntilAttack} Tagen — {ratio >= 1.1 ? 'gut gerüstet' : ratio >= 0.8 ? 'knapp' : 'zu schwach!'} (grobe Schätzung)
+                    {councilFresh && !warCouncil.running && warCouncil.base.length
+                      ? <>Etwa {expectedAttackers} Sachsen in {daysUntilAttack} Tagen — Kriegsrat: die Burg {councilWins === warCouncil.base.length ? 'hält' : 'fällt'}{warCouncil.need && warCouncil.need !== 'none' ? `; mit ${menText(warCouncil.need.soldier, warCouncil.need.archer)} mehr hielte sie` : warCouncil.need === 'none' ? '; Truppen allein reichen nicht' : ''}.</>
+                      : <>Verteidigung {currentDefense} gegen etwa {expectedAttackers} Sachsen in {daysUntilAttack} Tagen — {ratio >= 1.1 ? 'gut gerüstet' : ratio >= 0.8 ? 'knapp' : 'zu schwach!'} (grobe Schätzung — genauer: Kriegsrat in der Garnison)</>}
                   </div>
                 </>
               );
