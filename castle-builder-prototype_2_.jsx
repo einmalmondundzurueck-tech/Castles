@@ -7201,6 +7201,9 @@ const UI_CSS = `
   @keyframes cb-pulse-alert { 0%, 100% { box-shadow: 0 0 0 2px rgba(192,57,43,0.9), 0 2px 0 #0c0703; } 50% { box-shadow: 0 0 0 4px rgba(192,57,43,0.35), 0 2px 0 #0c0703; } }
   .cb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 14px; background: rgba(0,0,0,0.3); border: 1px solid rgba(201,162,75,0.32); color: #f1e6c8; font-size: 0.95rem; white-space: nowrap; cursor: default; flex-shrink: 0; }
   .cb-rep-label { display: inline-block; min-width: 4.6em; }
+  .cb-step { width: 24px; height: 24px; border-radius: 4px; border: 1px solid #5C554A; background: rgba(255,255,255,0.35); color: #2B2420; cursor: pointer; font-size: 0.95rem; line-height: 1; }
+  .cb-step:disabled { opacity: 0.35; cursor: not-allowed; }
+  .cb-step:hover:not(:disabled) { background: rgba(201,162,75,0.35); }
   .cb-chip strong { font-weight: 700; color: #fff4d6; font-variant-numeric: tabular-nums; display: inline-block; min-width: 2.2em; text-align: right; }
   .cb-chip .cb-delta-pos, .cb-chip .cb-delta-neg { font-variant-numeric: tabular-nums; display: inline-block; min-width: 3.4em; }
   .cb-chip .cb-cap { color: #b8a888; font-size: 0.8rem; }
@@ -10720,6 +10723,7 @@ export default function CastleBuilder() {
 
     // hochzeit — before the Palas stands, only a local lord comes with his daughter: a good
     // match and a purse of gold, but no great house's favour.
+    if (royalFamilyRef.current.married) return null;
     if (!hasDoneAmenity(structuresRef.current, 'palas')) {
       const spouseName = `${NOBLE_DAUGHTER_NAMES[Math.floor(Math.random() * NOBLE_DAUGHTER_NAMES.length)]} ${NOBLE_BRIDE_SEATS[Math.floor(Math.random() * NOBLE_BRIDE_SEATS.length)]}`;
       return {
@@ -10734,7 +10738,7 @@ export default function CastleBuilder() {
               setDynastyEvent({ type: 'wedding', spouseName });
             },
           },
-          { label: 'Ablehnen', desc: 'Ihr wartet auf eine bessere Partie — nach dem Bau eines Palas kommen die großen Häuser zur Brautschau.', apply: () => {} },
+          { label: 'Ablehnen', desc: 'Ihr wartet auf eine bessere Partie — im nächsten Jahr kommt ein neuer Antrag, mit einem Palas die Brautschau der großen Häuser.', apply: () => setStoryQueue((q) => [...q.filter((st) => st.type !== 'hochzeit'), { type: 'hochzeit', day: dayRef.current + 300 + Math.floor(Math.random() * 120), data: { kind: hasDoneAmenity(structuresRef.current, 'palas') ? 'brautschau' : 'tochter' } }]) },
         ],
       };
     }
@@ -10758,24 +10762,28 @@ export default function CastleBuilder() {
             },
           };
         }),
-        { label: 'Keine von ihnen', desc: 'Die Gesandten ziehen enttäuscht ab — es wird eine Weile dauern, bis neue kommen.', apply: () => {} },
+        { label: 'Keine von ihnen', desc: 'Die Gesandten ziehen enttäuscht ab — im nächsten Jahr kommen neue.', apply: () => setStoryQueue((q) => [...q.filter((st) => st.type !== 'hochzeit'), { type: 'hochzeit', day: dayRef.current + 300 + Math.floor(Math.random() * 120), data: { kind: hasDoneAmenity(structuresRef.current, 'palas') ? 'brautschau' : 'tochter' } }]) },
       ],
     };
   }, [triggerSuccession, hireCourtFigure]);
 
-  // Heiratsangebot: a finished Kemenate for an unmarried king brings the next audience close.
-  // Whether the first suitor and the first Brautschau have come already — kept in the court
-  // state so a loaded game remembers it.
-  const markCourtFlag = (key) => { courtRef.current = { ...courtRef.current, [key]: true }; setCourt((c) => ({ ...c, [key]: true })); };
+  // Heiratsangebot: once the Kemenate stands and the king is unmarried, a suitor is booked
+  // for some time within the next year (a noble's daughter; with a Palas, the Brautschau of
+  // the great houses). Turned down, the next one comes the year after. It travels in the
+  // story queue, so a saved game keeps the date.
   const kemenateReady = hasDoneAmenity(structures, 'kemenate') && !royalFamily.married;
-  useEffect(() => {
-    if (kemenateReady && !courtRef.current.marriageOffered) setNextPetitionDay((d) => Math.min(d, dayRef.current + 12));
-  }, [kemenateReady]);
-  // Once a Palas stands as well, the great houses send their daughters for a Brautschau.
   const brautschauReady = kemenateReady && hasDoneAmenity(structures, 'palas');
+  const bannedFromMarrying = !!(churchUnrestUntilYear && getCalendarDate(day).year < churchUnrestUntilYear);
   useEffect(() => {
-    if (brautschauReady && !courtRef.current.brautschauOffered) setNextPetitionDay((d) => Math.min(d, dayRef.current + 12));
-  }, [brautschauReady]);
+    if (!kemenateReady || bannedFromMarrying || (petitionEvent && petitionEvent.type === 'hochzeit')) return;
+    const pending = storyQueue.find((st) => st.type === 'hochzeit');
+    const kind = brautschauReady ? 'brautschau' : 'tochter';
+    // A Palas finished while a noble's daughter is still expected: the great houses come instead.
+    if (pending && (pending.data || {}).kind === kind) return;
+    if (pending && kind === 'tochter') return;
+    const inDays = 30 + Math.floor(Math.random() * 300);
+    setStoryQueue((q) => [...q.filter((st) => st.type !== 'hochzeit'), { type: 'hochzeit', day: dayRef.current + inDays, data: { kind } }]);
+  }, [kemenateReady, brautschauReady, bannedFromMarrying, storyQueue, petitionEvent]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (petitionEvent || battlePhase || gameOverEvent || !kingName || eventOutcome) return;
     // A follow-up from an earlier decision comes first, as soon as it's due.
@@ -10818,7 +10826,6 @@ export default function CastleBuilder() {
     // in a pool this size meant a built Kemenate barely nudged the odds of actually drawing a
     // marriage offer next. With the King's own bedchamber standing empty and unmarried, this
     // should come up noticeably more often, not just be "on the table" alongside everything else.
-    if (hasDoneAmenity(structures, 'kemenate') && !royalFamily.married && !(churchUnrestUntilYear && getCalendarDate(day).year < churchUnrestUntilYear)) eligible.push('hochzeit', 'hochzeit', 'hochzeit');
     if (hasDoneAmenity(structures, 'schmied') && !waffenschmiedHired) eligible.push('waffenschmied');
     // A noble sends his son to be brought up at a court with horses or a great hall.
     if ((hasDoneAmenity(structures, 'stallungen') || hasDoneAmenity(structures, 'palas')) && courtRef.current.youths.length < MAX_YOUTHS) eligible.push('page');
@@ -10843,15 +10850,6 @@ export default function CastleBuilder() {
     if (reputation >= 65) eligible.push('haendler', ...['turnier', 'gilde', 'ritter'].filter((t) => eligible.includes(t)));
     if (reputation < 35) eligible.push('wilderer_folge', ...['spion', 'delegation'].filter((t) => eligible.includes(t)));
     let ev = null;
-    // Once the Kemenate stands, the first suitor comes straight away rather than by chance.
-    if (eligible.includes('hochzeit') && !courtRef.current.marriageOffered) {
-      markCourtFlag('marriageOffered');
-      ev = buildPetitionEvent('hochzeit', currentYear);
-    } else if (eligible.includes('hochzeit') && hasDoneAmenity(structures, 'palas') && !courtRef.current.brautschauOffered) {
-      markCourtFlag('brautschauOffered');
-      ev = buildPetitionEvent('hochzeit', currentYear);
-    }
-    if (ev && ev.type === 'hochzeit' && hasDoneAmenity(structures, 'palas')) { markCourtFlag('marriageOffered'); markCourtFlag('brautschauOffered'); }
     for (let tries = 0; tries < 5 && !ev; tries++) {
       const type = eligible[Math.floor(Math.random() * eligible.length)];
       ev = buildPetitionEvent(type, currentYear);
@@ -13771,8 +13769,7 @@ export default function CastleBuilder() {
           {/* Panels */}
           {[
             { id: 'finanzen', icon: '💰', label: 'Finanzen' },
-            { id: 'dorf', icon: '👥', label: 'Dorf', alert: onStrike },
-            { id: 'arbeit', icon: '🛠️', label: 'Arbeit' },
+            { id: 'dorf', icon: '👥', label: 'Volk', alert: onStrike },
             { id: 'garnison', icon: '🛡️', label: 'Garnison', alert: warningActive },
             { id: 'dynastie', icon: '👑', label: 'Dynastie' },
             { id: 'hof', icon: '🎭', label: 'Hof' },
@@ -14637,121 +14634,106 @@ export default function CastleBuilder() {
         </Modal>
       )}
 
-      {openPanel === 'dorf' && (
-        <Modal title={`${vStage.icon} ${vStage.name} — Bevölkerung`} onClose={() => setOpenPanel(null)} maxWidth={420}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
-            <div style={{ padding: '6px 8px', border: '1px solid rgba(92,85,74,0.35)', borderRadius: 4 }}>
-              <div style={{ fontSize: '0.92rem' }}>🧑‍🌾 <strong>{bauernCount}</strong> Bauern</div>
-              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>{farmersCount} auf dem Feld · {frohndienstCount} im Frondienst{militia.bauern ? ` · ${militia.bauern} in der Landwehr` : ''}</div>
-              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>je {TAX_PER_BAUER} 🪙 Steuer bei 100 %</div>
-            </div>
-            <div style={{ padding: '6px 8px', border: '1px solid rgba(92,85,74,0.35)', borderRadius: 4 }}>
-              <div style={{ fontSize: '0.92rem' }}>🧑‍🔧 <strong>{buerger}</strong> Bürger</div>
-              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>{skilledWorkers} arbeiten, {Math.max(0, buerger - skilledWorkers)} frei</div>
-              <div style={{ fontSize: '0.74rem', color: '#5A5044' }}>je {TAX_PER_BUERGER} 🪙 Steuer bei 100 %</div>
-            </div>
+      {(openPanel === 'dorf' || openPanel === 'arbeit') && (() => {
+        // Das Volk at a glance: one bar showing what everybody is doing, then the Bauern on the
+        // left and the Bürger on the right, each with the controls that concern them.
+        const taxLocked = taxLockedUntilYear != null && calDate.year < taxLockedUntilYear;
+        const frohnLocked = frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear;
+        const freeBuerger = Math.max(0, buerger - skilledWorkers);
+        const segs = [
+          { k: 'feld', n: farmersCount, label: 'auf dem Feld', color: '#6f9a45' },
+          { k: 'fron', n: frohndienstCount, label: 'im Frondienst', color: '#b0884a' },
+          { k: 'wehr', n: militia.bauern + militia.buerger, label: 'in der Landwehr', color: '#8e4a3a' },
+          { k: 'hand', n: skilledWorkers, label: 'Handwerker', color: '#4f6f96' },
+          { k: 'frei', n: freeBuerger, label: 'Bürger ohne Arbeit', color: '#9fb5cf' },
+        ].filter((x) => x.n > 0);
+        const total = segs.reduce((sum, x) => sum + x.n, 0) || 1;
+        const step = (onMinus, value, onPlus, minusOff, plusOff, plusTitle) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="cb-step" onClick={onMinus} disabled={minusOff}>−</button>
+            <span style={{ minWidth: 18, textAlign: 'center', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{value}</span>
+            <button className="cb-step" onClick={onPlus} disabled={plusOff} title={plusTitle || ''}>+</button>
           </div>
-          <div style={{ fontSize: '0.84rem', marginBottom: 4 }}>👥 {villagePop} Einwohner, Platz für {villageCap} · {soldiers.soldier + soldiers.archer} unter Waffen</div>
-          <div style={{ fontSize: '0.78rem', color: '#5A5044', marginBottom: 8 }}>
-            Wachstum: {Math.round(villageGrowthChance(happiness, reputation, structures) * 100)} % Chance pro Monat{villagePop >= villageCap ? ' — das Dorf ist voll' : ''}{resources.food < 3 ? ' — Hunger! Familien ziehen fort' : ''}.
-            {' '}Bürger höchstens {Math.round(vStage.buergerShare * 100)} % ({Math.floor(villagePop * vStage.buergerShare)}).
-            {nextVStage && <> Nächste Stufe: <strong>{nextVStage.name}</strong> ab {nextVStage.minPop} Einwohnern{(nextVStage.needs || []).length ? ` mit ${nextVStage.needs.map((k) => AMENITY_TYPES[k].label).join(', ')}` : ''}.</>}
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 3 }}>
-              <span>😊 Zufriedenheit</span>
-              <span>{Math.round(happiness)} / 100</span>
+        );
+        const row = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: '0.9rem', padding: '4px 0' };
+        const card = { border: '1px solid rgba(92,85,74,0.35)', borderRadius: 6, padding: '10px 12px', background: 'rgba(255,255,255,0.22)', minWidth: 0 };
+        return (
+          <Modal title={`${vStage.icon} ${vStage.name} — das Volk`} onClose={() => setOpenPanel(null)} maxWidth={640}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, fontSize: '0.88rem', marginBottom: 6 }}>
+              <span>👥 <strong>{villagePop}</strong> Einwohner · Platz für {villageCap}{soldiers.soldier + soldiers.archer ? ` · ${soldiers.soldier + soldiers.archer} unter Waffen` : ''}</span>
+              <span style={{ color: '#5A5044' }}>Wachstum {Math.round(villageGrowthChance(happiness, reputation, structures) * 100)} % im Monat{villagePop >= villageCap ? ' — voll' : ''}{resources.food < 3 ? ' — Hunger!' : ''}</span>
             </div>
-            <div style={{ background: '#d9cba0', borderRadius: 3, height: 8, overflow: 'hidden', border: '1px solid #5C554A' }}>
-              <div style={{ width: `${happiness}%`, height: '100%', background: onStrike ? '#7a2318' : happiness < 45 ? '#b8752a' : '#4a6b2e', transition: 'width 0.3s' }} />
+            <div style={{ display: 'flex', height: 18, borderRadius: 4, overflow: 'hidden', border: '1px solid #5C554A' }}>
+              {segs.map((x) => <div key={x.k} title={`${x.n} ${x.label}`} style={{ width: `${(x.n / total) * 100}%`, background: x.color }} />)}
             </div>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: '0.85rem', display: 'block', marginBottom: 4 }}>Steuersatz: {taxRate}% (≈ +{villageGoldPerMonth} 🪙/Monat)</label>
-            <input type="range" min="0" max="100" step="10" value={taxRate}
-              onChange={(e) => { const v = Number(e.target.value); if (taxLockedUntilYear != null && calDate.year < taxLockedUntilYear && v > taxRate) return; setTaxRate(v); }} style={{ width: '100%' }} />
-            {taxLockedUntilYear != null && calDate.year < taxLockedUntilYear && (
-              <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: 2 }}>🔒 Den Bauern zugesichert — bis {taxLockedUntilYear} nicht höher (senken geht immer).</div>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: 6 }}>
-            <span>⚒️ Frondienste (Burg)</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button onClick={() => changeFrohndienst(-1)} disabled={frohndienstCount <= 0} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: (frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear) ? 0.5 : 1 }}>−</button>
-              <span style={{ width: 16, textAlign: 'center' }}>{frohndienstCount}</span>
-              <button onClick={() => changeFrohndienst(1)} disabled={frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: (frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear) ? 0.5 : 1 }}>+</button>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 14px', fontSize: '0.78rem', color: '#4a4034', margin: '5px 0 12px' }}>
+              {segs.map((x) => <span key={x.k}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: x.color, marginRight: 4 }} />{x.n} {x.label}</span>)}
             </div>
-          </div>
-          {frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear && (
-            <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: -4, marginBottom: 6 }}>🔒 Den Bauern zugesichert — bis {frohndienstLockedUntilYear} nicht mehr (weniger geht immer).</div>
-          )}
-          <div style={{ fontSize: '0.8rem', color: '#5A5044' }}>🌾 auf dem Hof: {farmersCount} (≈ +{farmFoodPerMonth.toFixed(0)} Nahrung/Monat{onStrike ? ' — Streik!' : ''})</div>
-          <div style={{ fontSize: '0.8rem', color: '#5A5044', marginTop: 2 }}>davon tragen gerade Vorräte zur Burg: {haulingCount}</div>
-          {(baeckereiActive || brunnenActive) && (
-            <div style={{ fontSize: '0.78rem', color: '#3d5a2c', marginTop: 4 }}>
-              {baeckereiActive && `🍞 Bäckerei aktiv: ×${bakeryMultNow.toFixed(2).replace('.', ',')} auf die Hof-Ernte. `}
-              {brunnenActive && `💧 Brunnen aktiv: +${brunnenFoodNow} Nahrung/Monat.`}
-            </div>
-          )}
-          <button className="cb-btn" disabled={!canGrantCitizenship} onClick={grantCitizenship}
-            style={{ width: '100%', marginTop: 10, padding: '6px 8px', fontSize: '0.84rem', opacity: canGrantCitizenship ? 1 : 0.5 }}>
-            📜 Bürgerrecht verleihen — ein Bauer wird Bürger ({CITIZENSHIP_GOLD} 🪙)
-          </button>
-          {(() => {
-            // In hard times a Bürger without work can go back to the fields.
-            const idle = Math.max(0, buerger - skilledWorkers);
-            return (
-              <button className="cb-btn" disabled={idle < 1} onClick={() => { setBuerger((b) => Math.max(0, b - 1)); SOUND.play('place'); }}
-                style={{ width: '100%', marginTop: 6, padding: '6px 8px', fontSize: '0.84rem', opacity: idle >= 1 ? 1 : 0.5 }}
-                title={idle < 1 ? 'Alle Bürger arbeiten gerade als Handwerker' : ''}>
-                🌾 Ein Bürger geht aufs Feld — wird wieder Bauer{resources.food < 30 ? ' (Nahrung knapp!)' : ''}
-              </button>
-            );
-          })()}
-          <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
-            Bauern ernähren das Dorf und stellen die Soldaten; Bürger arbeiten als Handwerker und zahlen mehr Steuern. Das Dorf wächst bei vollen Kornkammern, guter Stimmung und gutem Ruf — wer im Krieg fällt, fehlt. Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} streiken die Bauern.
-          </p>
-        </Modal>
-      )}
 
-      {openPanel === 'arbeit' && (
-        <Modal title="Arbeitskräfte" onClose={() => setOpenPanel(null)}>
-          <div className="cb-stepper flex flex-col gap-2">
-            {HIREABLE_TYPES.map((wt) => (
-              <div key={wt} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-                <span>{WORKER_EMOJI[wt]} {WORKER_LABEL[wt]}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <button onClick={() => fire(wt)} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent' }}>−</button>
-                  <span style={{ width: 16, textAlign: 'center' }}>{hired[wt]}</span>
-                  <button onClick={() => hire(wt)} disabled={skilledWorkers >= buerger} title={skilledWorkers >= buerger ? 'Kein Bürger frei' : 'Einen freien Bürger anstellen'}
-                    style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: skilledWorkers >= buerger ? 0.4 : 1, cursor: skilledWorkers >= buerger ? 'not-allowed' : 'pointer' }}>+</button>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+              <div style={card}>
+                <div className="cb-section-title" style={{ marginBottom: 4 }}>🧑‍🌾 {bauernCount} Bauern</div>
+                <div style={row}><span>Auf dem Feld</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>{farmersCount}</strong></div>
+                <div style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: -2, marginBottom: 4 }}>≈ +{farmFoodPerMonth.toFixed(0)} 🌾 im Monat{onStrike ? ' — Streik!' : ''}</div>
+                <div style={row}>
+                  <span>Frondienst an der Burg</span>
+                  {step(() => changeFrohndienst(-1), frohndienstCount, () => changeFrohndienst(1), frohndienstCount <= 0, frohnLocked || farmersCount <= 1, frohnLocked ? `Zugesichert bis ${frohndienstLockedUntilYear}` : 'Ein Bauer trägt Steine und Holz, ohne Lohn')}
                 </div>
+                {frohnLocked && <div style={{ fontSize: '0.74rem', color: '#7a2318' }}>🔒 bis {frohndienstLockedUntilYear} nicht mehr als jetzt</div>}
+                <div style={row}><span>Steuer je Kopf</span><span>{TAX_PER_BAUER} 🪙 bei 100 %</span></div>
+                <button className="cb-btn" onClick={() => setOpenPanel('garnison')} style={{ width: '100%', marginTop: 6, padding: '5px 8px', fontSize: '0.84rem' }}>🛡️ Soldaten ausheben …</button>
               </div>
-            ))}
-          </div>
-          <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
-            Alle Handwerker sind Bürger aus dem Dorf: {skilledWorkers} von {buerger} Bürgern arbeiten. Sie bekommen Lohn und arbeiten auch während eines Bauern-Streiks. Mehr Bürger gibt es, wenn das Dorf wächst und Bauern das Bürgerrecht erhalten.
-          </p>
-          <div style={{ marginTop: 12, borderTop: '1px solid #5C554A', paddingTop: 10 }}>
-            <div style={{ fontSize: '0.85rem', marginBottom: 6 }}>Nachschub-Priorität</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {[{ id: 'auto', label: 'Automatisch' }, { id: 'stone', label: '🪨 zuerst' }, { id: 'wood', label: '🪵 zuerst' }].map((opt) => (
-                <button key={opt.id} onClick={() => setHaulPriority(opt.id)}
-                  style={{
-                    flex: 1, padding: '5px 4px', borderRadius: 3, fontSize: '0.78rem', cursor: 'pointer',
-                    border: `2px solid ${haulPriority === opt.id ? '#C9A24B' : '#5C554A'}`,
-                    background: haulPriority === opt.id ? 'rgba(201,162,75,0.2)' : 'transparent',
-                  }}>
-                  {opt.label}
-                </button>
+              <div style={card}>
+                <div className="cb-section-title" style={{ marginBottom: 4 }}>🧑‍🔧 {buerger} Bürger</div>
+                {HIREABLE_TYPES.map((wt) => (
+                  <div key={wt} style={row}>
+                    <span>{WORKER_EMOJI[wt]} {WORKER_LABEL[wt]}</span>
+                    {step(() => fire(wt), hired[wt], () => hire(wt), hired[wt] <= 0, freeBuerger < 1, freeBuerger < 1 ? 'Kein Bürger frei' : 'Einen freien Bürger anstellen')}
+                  </div>
+                ))}
+                <div style={row}><span>Ohne Arbeit</span><strong>{freeBuerger}</strong></div>
+                <div style={row}><span>Steuer je Kopf</span><span>{TAX_PER_BUERGER} 🪙 bei 100 %</span></div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10, marginTop: 10 }}>
+              <button className="cb-btn" disabled={!canGrantCitizenship} onClick={grantCitizenship} style={{ padding: '6px 8px', fontSize: '0.84rem', opacity: canGrantCitizenship ? 1 : 0.5 }}
+                title={`Höchstens ${Math.round(vStage.buergerShare * 100)} % Bürger (${Math.floor(villagePop * vStage.buergerShare)})`}>
+                ➡️ Bürgerrecht verleihen ({CITIZENSHIP_GOLD} 🪙)
+              </button>
+              <button className="cb-btn" disabled={freeBuerger < 1} onClick={() => { setBuerger((b) => Math.max(0, b - 1)); SOUND.play('place'); }} style={{ padding: '6px 8px', fontSize: '0.84rem', opacity: freeBuerger >= 1 ? 1 : 0.5 }}
+                title={freeBuerger < 1 ? 'Alle Bürger arbeiten gerade als Handwerker' : ''}>
+                ⬅️ Ein Bürger geht aufs Feld{resources.food < 30 ? ' (Nahrung knapp!)' : ''}
+              </button>
+            </div>
+
+            <div style={{ ...card, marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.88rem' }}>
+                <span>😊 Zufriedenheit</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{Math.round(happiness)} / 100</span>
+              </div>
+              <div className="cb-meter" style={{ margin: '4px 0 10px' }}><div style={{ width: `${happiness}%`, background: onStrike ? '#7a2318' : happiness < 45 ? '#b8752a' : '#4a6b2e' }} /></div>
+              <label htmlFor="cb-tax" style={{ fontSize: '0.88rem', display: 'flex', justifyContent: 'space-between' }}><span>💰 Steuersatz {taxRate} %</span><span>≈ +{villageGoldPerMonth} 🪙 im Monat</span></label>
+              <input id="cb-tax" type="range" min="0" max="100" step="10" value={taxRate}
+                onChange={(e) => { const v = Number(e.target.value); if (taxLocked && v > taxRate) return; setTaxRate(v); }} style={{ width: '100%' }} />
+              {taxLocked && <div style={{ fontSize: '0.74rem', color: '#7a2318' }}>🔒 Den Bauern zugesichert — bis {taxLockedUntilYear} nicht höher (senken geht immer).</div>}
+              <div style={{ fontSize: '0.75rem', color: '#5A5044', marginTop: 4 }}>Hohe Steuern und viel Frondienst drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} streiken die Bauern.</div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12, fontSize: '0.84rem' }}>
+              <span>🧺 Träger holen zuerst:</span>
+              {[{ id: 'auto', label: 'was fehlt' }, { id: 'stone', label: '🪨 Stein' }, { id: 'wood', label: '🪵 Holz' }].map((opt) => (
+                <button key={opt.id} className={`cb-btn${haulPriority === opt.id ? ' is-active' : ''}`} onClick={() => setHaulPriority(opt.id)} style={{ padding: '3px 10px', fontSize: '0.8rem' }}>{opt.label}</button>
               ))}
             </div>
-            <p style={{ fontSize: '0.76rem', color: '#5A5044', marginTop: 6, fontStyle: 'italic' }}>
-              „Automatisch" holt immer den Rohstoff, von dem gerade am wenigsten im Lager ist.
-            </p>
-          </div>
-        </Modal>
-      )}
+            {nextVStage && (
+              <div style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10 }}>
+                Nächste Stufe: <strong>{nextVStage.name}</strong> ab {nextVStage.minPop} Einwohnern{(nextVStage.needs || []).length ? ` mit ${nextVStage.needs.map((k) => AMENITY_TYPES[k].label).join(', ')}` : ''}.
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
+
 
       {openPanel === 'garnison' && (
         <Modal title="Garnison" onClose={() => setOpenPanel(null)}>
