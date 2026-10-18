@@ -1566,7 +1566,11 @@ const KEEP_SIEGE_HP = 24;
 const GATE_DAMAGE_PER_TICK = 0.3;
 const RAM_DAMAGE_MULT = 2.6;
 const CATAPULT_RANGE = 5.2;
-const CATAPULT_DAMAGE_PER_TICK = 0.55;
+const CATAPULT_DAMAGE_PER_TICK = 0.55; // averaged: one throw every CATAPULT_RELOAD_TICKS
+const CATAPULT_RELOAD_TICKS = 12;
+const PITCH_RELOAD_TICKS = 18;
+const PITCH_DAMAGE = 1.6;
+const CHAMPION_CHARGE_MULT = 2.6; // a knight riding down bowmen in the open
 const CATAPULT_SPLASH_PER_TICK = 0.1; // the king's catapults: damage to the men around the target
 const ARROW_STEP = 0.07;
 const ARROW_ANIM_MS = 40;
@@ -5078,6 +5082,7 @@ const RESEARCH = {
   wehrturm: { name: 'Wehrtürme', icon: '🗼', gold: 140, days: 90, needs: ['steinbau'], text: 'Türme auf Stufe 3: höher, 3 Schützenplätze, +20 % Schaden.' },
   wehrgang: { name: 'Wehrgang', icon: '🏹', gold: 180, days: 120, needs: ['steinbau'], text: 'Wehrmauern: Die Bogenschützen laufen auf dem Wehrgang dorthin, wo der Feind angreift.' },
   palas: { name: 'Palasbau', icon: '🏛️', gold: 150, days: 100, needs: ['steinbau'], text: 'Der Palas — die große Halle für Feste, Brautschau und Gäste.' },
+  pech: { name: 'Pechnasen', icon: '🔥', gold: 140, days: 110, needs: ['steinbau'], text: 'Siedendes Pech: Verteidiger an Mauern und Toren gießen es auf die Angreifer darunter.' },
   belagerungskunst: { name: 'Belagerungskunst', icon: '🎯', gold: 180, days: 150, needs: ['steinbau'], text: 'Katapulte in der Belagerungswerkstatt bauen — sie schlagen aus der Ferne Breschen in Mauern und Tore.' },
   // Ausbau of the buildings (Stufe 2 and 3), in three trades.
   handwerk: { name: 'Handwerk', icon: '🔧', group: 'bauten', gold: 70, days: 60, needs: [], text: 'Stufe 2 für Bäckerei, Brauhaus, Brunnen und Lagerhaus.' },
@@ -5152,27 +5157,26 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
     .filter((s) => s.type === 'tower' && standsFinished(s))
     .map((t) => ({ t: { ...t, level: standingLevel(t) }, dist: frontDist({ i: t.i, j: t.j }) }))
     .sort((a, b) => a.dist - b.dist);
-  // Round-robin so every tower gets its first archer before any gets a second.
+  // Every spot an archer can stand on — tower tops, the keep, stone wall walks — taken in
+  // order of how close it lies to where the enemy comes from, so the bowmen gather on the
+  // side under attack instead of idling on a tower at the far end of the castle.
   const slotsOf = (t) => STRUCT_LEVELS.tower.slots[t.level || 1] || 2;
-  const maxSlots = Math.max(KEEP_ARCHER_SLOTS, ...towers.map(({ t }) => slotsOf(t)));
   const keepTop = keep ? keepHeightFor(keep.level) : 0;
-  for (let k = 0; k < maxSlots; k++) {
-    towers.forEach(({ t }) => {
-      if (k < slotsOf(t)) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level) });
-    });
-    if (keep && k < KEEP_ARCHER_SLOTS) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: keepTop + 3 });
-  }
+  towers.forEach(({ t, dist }) => {
+    for (let k = 0; k < slotsOf(t); k++) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level), dist: dist + k * 0.4 });
+  });
+  if (keep) for (let k = 0; k < KEEP_ARCHER_SLOTS; k++) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: keepTop + 3, dist: frontDist(keep) + 1 + k * 0.4 });
   // A palisade has no walk to stand on; stone walls do, and a Wehrmauer's archers can move
   // along it in battle (onWallWalk).
   Object.values(structures)
     .filter((s) => s.type === 'wall' && standsFinished(s) && standingLevel(s) >= 2)
     .map((w) => ({ i: (w.i1 + w.i2) / 2, j: (w.j1 + w.j2) / 2, level: standingLevel(w) }))
-    .sort((a, b) => frontDist(a) - frontDist(b))
-    .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: wallHeightFor(m.level) + 2, onWallWalk: m.level >= 3 }));
+    .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: wallHeightFor(m.level) + 2, onWallWalk: m.level >= 3, dist: frontDist(m) + 0.5 }));
+  platformSlots.sort((a, b) => a.dist - b.dist);
 
   const positions = [];
   for (let k = 0; k < soldiers.archer; k++) {
-    if (k < platformSlots.length) positions.push({ ...platformSlots[k], type: 'archer' });
+    if (k < platformSlots.length) { const { dist, ...slot } = platformSlots[k]; positions.push({ ...slot, type: 'archer' }); } // eslint-disable-line no-unused-vars
     else positions.push({ i: fallbackI + ((k % 6) - 2.5) * 0.24, j: fallbackJ + 0.6 + Math.floor(k / 6) * 0.25, type: 'archer', elev: 0 });
   }
 
@@ -6414,7 +6418,7 @@ const BATTLE_SOURCE_LABEL = {
 // on is a serious but survivable test rather than an instant defeat.
 function feudAttackerForce(feudType, reignYear = 10) {
   if (feudType === 'waldlaeufer') {
-    return Array.from({ length: Math.min(10, 3 + reignYear) }, () => ({ type: 'saxonArcher', hpMult: 1 }));
+    return Array.from({ length: Math.min(8, 2 + Math.ceil(reignYear * 0.7)) }, () => ({ type: 'saxonArcher', hpMult: 1 }));
   }
   // delegation: foot soldiers, archers and unusually tough mounted knights
   const n = Math.min(4, 1 + Math.floor(reignYear / 2));
@@ -6611,7 +6615,7 @@ function battleRoute(nav, u, dest) {
   return { waypoint, blocker, standPoint: pts[pts.length - 1] };
 }
 
-function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCount, moraleDebuffActive, kapelleBonus, moorishBonus, lowCourtMorale, crossbowMult, knightRaiseMult) {
+function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCount, moraleDebuffActive, kapelleBonus, moorishBonus, lowCourtMorale, crossbowMult, knightRaiseMult, pitch = false) {
   let units = unitsIn.map((u) => ({ ...u }));
   let obstacles = obstaclesIn.map((o) => ({ ...o }));
   const shots = [];
@@ -6722,6 +6726,9 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
   // multiple fronts rather than uselessly stacking blows on one poor soul.
   const MAX_MELEE_LOAD = 2;
   const targetLoad = {};
+  const liveAttackers = units.filter((u) => u.side === 'attacker' && u.hp > 0 && !u.exited && !u.routed);
+  const rangedShare = liveAttackers.length ? liveAttackers.filter((u) => ATTACKER_ARCHER_TYPES.has(u.type)).length / liveAttackers.length : 0;
+  const meleeDefenders = units.filter((u) => u.side === 'defender' && u.hp > 0 && !u.foe && (u.type === 'soldier' || u.type === 'champion')).length;
   units.forEach((u) => {
     if (u.hp <= 0 || u.exited) return;
     if (u.side === 'attacker' && (u.routed || u.type === 'saxonCatapult')) { u.targetId = null; return; }
@@ -6823,14 +6830,18 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         const mid = obstacleMidpoint(target);
         const d = distance2(u, mid);
         if (d <= CATAPULT_RANGE) {
-          target.hp = Math.max(0, target.hp - CATAPULT_DAMAGE_PER_TICK * moraleDmgMult * (u.strengthMult || 1));
+          // Winding the arm back takes a while: few throws, but each one a heavy blow.
+          u.reload = (u.reload || 0) - 1;
+          if (u.reload > 0) return;
+          u.reload = CATAPULT_RELOAD_TICKS;
+          target.hp = Math.max(0, target.hp - CATAPULT_DAMAGE_PER_TICK * CATAPULT_RELOAD_TICKS * moraleDmgMult * (u.strengthMult || 1));
           if (target.hp <= 0) target.breached = true;
           shots.push({ fromI: u.i, fromJ: u.j, fromElev: 4, toI: mid.i, toJ: mid.j, toElev: 0, heavy: true });
           if (u.own) {
             // Stones hit whoever stands up there, and a tower that comes down takes its archers with it.
             units.forEach((f) => {
               if (!f.foe || f.hp <= 0 || distance2(f, mid) > 0.7) return;
-              f.hp = target.breached && target.type === 'tower' && f.elev > 0 ? 0 : Math.max(0, f.hp - CATAPULT_SPLASH_PER_TICK);
+              f.hp = target.breached && target.type === 'tower' && f.elev > 0 ? 0 : Math.max(0, f.hp - CATAPULT_SPLASH_PER_TICK * CATAPULT_RELOAD_TICKS);
               if (f.hp <= 0) f.diedAtTick = tickCount || 0;
             });
           }
@@ -7021,8 +7032,14 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     // instant a distant attacker slips past the last wall.
     else if (!isArcher) {
       const targetBreachedIn = d <= archerRangeFor(u.elev || 0) && !findBlockingObstacle(target, keepPos, obstacles);
-      if (targetBreachedIn) {
-        const step = Math.min(1, UNIT_SPEED_PER_TICK / d);
+      // Against a host of bowmen (the Waldläufer) waiting behind the walls only gets the
+      // garrison shot to pieces: knights ride them down at once, and the foot soldiers sally
+      // out together as soon as there are enough of them to rush the archers.
+      const vsBowmen = ATTACKER_ARCHER_TYPES.has(target.type) && rangedShare >= 0.5 && !(u.elev > 0);
+      const sally = vsBowmen && (u.type === 'champion' || meleeDefenders >= 3);
+      if (targetBreachedIn || sally) {
+        const speed = UNIT_SPEED_PER_TICK * (u.type === 'champion' ? CHAMPION_CHARGE_MULT : 1);
+        const step = Math.min(1, speed / d);
         u.i += (target.i - u.i) * step;
         u.j += (target.j - u.j) * step;
       }
@@ -7053,6 +7070,22 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     if (o.breached && !p.breached) o.breachTick = tickCount || 0;
   });
 
+  // Pechnasen: wherever defenders hold a wall or gate, now and then a cauldron of pitch is tipped
+  // onto the attackers hacking at it from below.
+  if (pitch) {
+    obstacles.forEach((o) => {
+      if (o.isPoint || o.breached || o.hp <= 0 || (o.type !== 'wall' && o.type !== 'gate')) return;
+      o.pitchCd = Math.max(0, (o.pitchCd || 0) - 1);
+      if (o.pitchCd > 0) return;
+      const mid = obstacleMidpoint(o);
+      if (!units.some((d) => d.side === 'defender' && d.hp > 0 && distance2(d, mid) < 2.4)) return;
+      const below = units.filter((a) => a.side === 'attacker' && a.hp > 0 && !a.exited && distance2(a, mid) < 1.0);
+      if (!below.length) return;
+      o.pitchCd = PITCH_RELOAD_TICKS;
+      below.forEach((a) => { a.hp = Math.max(0, a.hp - PITCH_DAMAGE); if (a.hp <= 0) a.diedAtTick = tickCount || 0; });
+      shots.push({ fromI: mid.i, fromJ: mid.j, fromElev: 22, toI: below[0].i, toJ: below[0].j, toElev: 0, heavy: true, pitch: true });
+    });
+  }
   return { units, shots, obstacles, attackerMorale };
 }
 
@@ -11447,7 +11480,7 @@ export default function CastleBuilder() {
       // that just keeps paying off forever).
       const armbrustPresent = armbrustHiredRef.current && !capturedCourtiersRef.current.armbrust;
       const crossbowMult = armbrustPresent ? ((crossbowUpgradedRef.current ? CROSSBOW_DAMAGE_MULT : 1) * (crossbowUpgraded2Ref.current ? CROSSBOW_DAMAGE_MULT_2 : 1)) : 1;
-      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, smithDamageMult, t, moraleDebuffActive, kapelleBonus, moorishHiredRef.current && !capturedCourtiersRef.current.moorish, courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD, crossbowMult, 1 + knightRaisesRef.current * 0.06));
+      const { units, shots, obstacles, attackerMorale: morale, tickNow } = runBattleSteps((u, o, t) => battleTickStep(u, o, battleKeepPosRef.current, smithDamageMult, t, moraleDebuffActive, kapelleBonus, moorishHiredRef.current && !capturedCourtiersRef.current.moorish, courtMoraleRef.current < COURT_MORALE_LOW_THRESHOLD, crossbowMult, 1 + knightRaisesRef.current * 0.06, researchRef.current.done.includes('pech')));
       setBattleUnits(units);
       setBattleObstacles(obstacles);
       setAttackerMorale(morale);
@@ -11892,8 +11925,12 @@ export default function CastleBuilder() {
   // and auto-reopen once it flips back. Declared here (rather than nearer the effect that
   // reacts to it) because handleEdgeClick, defined just below, already needs it.
   const siegeActive = daysUntilYearEnd(day) <= 30 || !!battlePhase;
-  const prevSiegeActiveRef = useRef(siegeActive);
+  // The gates and drawbridges themselves stay open until the enemy is actually at the door,
+  // so the workers fleeing in from the fields still get inside.
+  const gatesShut = battlePhase === 'positioning' || battlePhase === 'fighting';
+  const prevSiegeActiveRef = useRef(gatesShut);
   useEffect(() => {
+    const siegeActive = gatesShut; // eslint-disable-line no-shadow
     if (siegeActive === prevSiegeActiveRef.current) return;
     prevSiegeActiveRef.current = siegeActive;
     setStructures((prev) => {
@@ -11907,7 +11944,7 @@ export default function CastleBuilder() {
       });
       return changed ? next : prev;
     });
-  }, [siegeActive]);
+  }, [gatesShut]);
 
   // Abriss always asks first — except for a bare construction site nobody has started on.
   const [demolishAsk, setDemolishAsk] = useState(null);
@@ -11942,7 +11979,7 @@ export default function CastleBuilder() {
     // closed automatically and manual toggling is locked out, so a stray click can't leave
     // the castle open in the middle of an attack.
     if (existing && existing.type === 'gate' && existing.stage === 'done' && tool !== 'delete') {
-      if (!siegeActive) setStructures((prev) => ({ ...prev, [key]: { ...prev[key], doorOpen: !prev[key].doorOpen } }));
+      if (!gatesShut) setStructures((prev) => ({ ...prev, [key]: { ...prev[key], doorOpen: !prev[key].doorOpen } }));
       return;
     }
     if (tool === null) {
@@ -11990,7 +12027,7 @@ export default function CastleBuilder() {
       }
       return next;
     });
-  }, [tool, moatUnlocked, siegeActive, diagonalMode, askDemolish]);
+  }, [tool, moatUnlocked, gatesShut, diagonalMode, askDemolish]);
 
   const handleVertexClick = useCallback((key) => {
     if (tool === null) {
@@ -12296,7 +12333,7 @@ export default function CastleBuilder() {
         // the tower's own base instead of poking out past it.
         if (towerAt1) gateDepth = Math.min(gateDepth, viewDepth(s.i1, s.j1) + 0.6 - 0.05);
         if (towerAt2) gateDepth = Math.min(gateDepth, viewDepth(s.i2, s.j2) + 0.6 - 0.05);
-        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={siegeActive} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOut={bridgeOut} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} level={s.level || 1} upgrading={!!s.upgrading} /> });
+        list.push({ depth: gateDepth, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind={s.type} showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} siegeActive={gatesShut} doorOpen={!!s.doorOpen} junction1={junction1} junction2={junction2} damageFrac={battleDamageByKey[key] || 0} bridgeOut={bridgeOut} bridgeSpansGraben={bridgeSpansGraben} ruined={!!s.ruined} towerAt1={towerAt1} towerAt2={towerAt2} level={s.level || 1} upgrading={!!s.upgrading} /> });
       } else if (s.type === 'graben') {
         list.push({ depth: (viewDepth(s.i1, s.j1) + viewDepth(s.i2, s.j2)) / 2 + 0.3, node: <WallNode key={key} i1={s.i1} j1={s.j1} i2={s.i2} j2={s.j2} kind="graben" showLabel={hoverKey === `edge:${key}`} stage={s.stage} progress={s.progress} blocked={s.blocked} filled={moatFilledKeys.has(key)} ruined={!!s.ruined} /> });
       } else if (s.type === 'tower') {
