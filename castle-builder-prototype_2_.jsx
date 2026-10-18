@@ -734,7 +734,7 @@ function eligibleForStage(stage, type, onStrike) {
 }
 const STAGE_LABEL = { foundation: 'Fundament', scaffold: 'Gerüst', masonry: 'Mauerwerk', done: 'Fertig' };
 const STAGE_EMOJI = { foundation: '⛏️', scaffold: '🪚', masonry: '🧱' };
-const WORKER_LABEL = { laborer: 'Bauern', arbeiter: 'Lohnarbeiter', carpenter: 'Zimmerleute', mason: 'Maurer', quarrier: 'Steinmetze', lumberjack: 'Holzfäller' };
+const WORKER_LABEL = { laborer: 'Bauern im Frondienst', arbeiter: 'Lohnarbeiter', carpenter: 'Zimmerleute', mason: 'Maurer', quarrier: 'Steinmetze', lumberjack: 'Holzfäller' };
 const WORKER_EMOJI = { laborer: '🧑\u200d🌾', arbeiter: '👷', carpenter: '🪚', mason: '🧱', quarrier: '⛏️', lumberjack: '🪓' };
 const HIREABLE_TYPES = ['arbeiter', 'carpenter', 'mason', 'quarrier', 'lumberjack'];
 const SOLDIER_LABEL = { soldier: 'Soldaten', archer: 'Bogenschützen', champion: 'Berühmter Ritter' };
@@ -5370,7 +5370,20 @@ function PortraitAvatar({ stage, dead = false, size = 56, src: face = null }) {
   );
 }
 
-function Modal({ title, onClose, children, maxWidth = 380, zIndex = 60 }) {
+// The menus come in a handful of areas; panels of the same area share a row of tabs.
+const PANEL_GROUPS = [
+  { id: 'volk', icon: '👥', label: 'Volk', panels: [['dorf', '👥 Volk'], ['finanzen', '💰 Finanzen']] },
+  { id: 'burg', icon: '🏰', label: 'Burg & Heer', panels: [['garnison', '🛡️ Garnison'], ['baukunst', '📐 Baukunst']] },
+  { id: 'hof', icon: '👑', label: 'Hof & Familie', panels: [['dynastie', '👑 Familie'], ['hof', '🎭 Hofstaat']] },
+  { id: 'reich', icon: '🗺️', label: 'Reich & Handel', panels: [['reich', '🗺️ Reich'], ['handel', '⚖️ Handel']] },
+];
+const groupOfPanel = (id) => PANEL_GROUPS.find((g) => g.panels.some(([p]) => p === id)) || null;
+const PanelNavContext = React.createContext({ openPanel: null, setOpenPanel: () => {} });
+function Modal({ title, onClose, children, maxWidth = 380, zIndex = 60, tabs = false }) {
+  const nav = React.useContext(PanelNavContext);
+  const group = tabs ? groupOfPanel(nav.openPanel) : null;
+  // All panels of one area share the same width, so switching tabs doesn't make the window jump.
+  if (group) maxWidth = 720;
   useEffect(() => { SOUND.play('open'); }, []);
   // Esc closes any panel.
   useEffect(() => {
@@ -5385,6 +5398,13 @@ function Modal({ title, onClose, children, maxWidth = 380, zIndex = 60 }) {
           <div className="cb-title" style={{ fontSize: '1.02rem', color: '#f1e6c8', letterSpacing: '0.05em' }}>{title}</div>
           <button onClick={onClose} className="cb-btn-dark" title="Schließen (Esc)" style={{ width: 28, height: 28, justifyContent: 'center', fontSize: '0.9rem' }}>✕</button>
         </div>
+        {group && (
+          <div className="cb-tabs" role="tablist">
+            {group.panels.map(([id, label]) => (
+              <button key={id} role="tab" aria-selected={nav.openPanel === id} className={`cb-tab${nav.openPanel === id ? ' is-active' : ''}`} onClick={() => nav.setOpenPanel(id)}>{label}</button>
+            ))}
+          </div>
+        )}
         <div style={{ padding: '16px 20px 20px' }}>{children}</div>
       </div>
     </div>
@@ -7209,6 +7229,10 @@ const UI_CSS = `
   @keyframes cb-pulse-alert { 0%, 100% { box-shadow: 0 0 0 2px rgba(192,57,43,0.9), 0 2px 0 #0c0703; } 50% { box-shadow: 0 0 0 4px rgba(192,57,43,0.35), 0 2px 0 #0c0703; } }
   .cb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 14px; background: rgba(0,0,0,0.3); border: 1px solid rgba(201,162,75,0.32); color: #f1e6c8; font-size: 0.95rem; white-space: nowrap; cursor: default; flex-shrink: 0; }
   .cb-rep-label { display: inline-block; min-width: 4.6em; }
+  .cb-tabs { display: flex; gap: 2px; padding: 6px 14px 0; background: #3a2c1c; border-bottom: 2px solid #c9a24b; }
+  .cb-tab { font-family: 'Cinzel', serif; font-size: 0.8rem; letter-spacing: 0.04em; padding: 6px 14px; border: 1px solid #6b5536; border-bottom: none; border-radius: 6px 6px 0 0; background: #2a2016; color: #c9b78f; cursor: pointer; }
+  .cb-tab.is-active { background: #efe3c4; color: #2B2420; border-color: #c9a24b; }
+  .cb-tab:hover:not(.is-active) { color: #f1e6c8; }
   .cb-step { width: 24px; height: 24px; border-radius: 4px; border: 1px solid #5C554A; background: rgba(255,255,255,0.35); color: #2B2420; cursor: pointer; font-size: 0.95rem; line-height: 1; }
   .cb-step:disabled { opacity: 0.35; cursor: not-allowed; }
   .cb-step:hover:not(:disabled) { background: rgba(201,162,75,0.35); }
@@ -7238,7 +7262,8 @@ const UI_CSS = `
   @keyframes cb-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
   .cb-modal-in { animation: cb-modal-in 0.22s ease-out; }
   @keyframes cb-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
-  @media (max-width: 2100px) { .cb-nav-label { display: none; } }
+  @media (max-width: 2050px) { .cb-nav-label { display: none; } }
+  .cb-nav-label { margin-left: 5px; }
   @media (max-width: 1500px) { .cb-navbtn { padding: 5px 4px !important; } .cb-topbar { gap: 5px !important; } .cb-chip { padding: 2px 6px; gap: 3px; } }
   @media (max-width: 1650px) { .cb-chip { font-size: 0.86rem; padding: 2px 7px; gap: 4px; } .cb-rep-label { display: none; } .cb-topbar { gap: 6px !important; } }
   @media (max-width: 1720px) { .cb-chip .cb-cap { display: none; } }
@@ -13121,7 +13146,12 @@ export default function CastleBuilder() {
     { label: SOLDIER_LABEL.archer, emoji: SOLDIER_EMOJI.archer, count: soldiers.archer, wage: effectiveArcherWage, food: FOOD_PER_SOLDIER },
   ].filter((r) => r.count > 0);
 
+  // Each area reopens on the tab last used in it.
+  const groupLastPanelRef = useRef({});
+  { const g = groupOfPanel(openPanel); if (g) groupLastPanelRef.current[g.id] = openPanel; }
+  const panelNav = { openPanel, setOpenPanel };
   return (
+    <PanelNavContext.Provider value={panelNav}>
     <div ref={gameRootRef} className={isPaused ? 'cb-game-paused' : ''} style={{ position: 'fixed', inset: 0, background: '#1E1A15', fontFamily: "'EB Garamond', serif", color: '#2B2420', display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
@@ -13751,24 +13781,23 @@ export default function CastleBuilder() {
 
           <div style={{ flex: 1 }} />
           {/* Panels */}
-          {[
-            { id: 'finanzen', icon: '💰', label: 'Finanzen' },
-            { id: 'dorf', icon: '👥', label: 'Volk', alert: onStrike },
-            { id: 'garnison', icon: '🛡️', label: 'Garnison', alert: warningActive },
-            { id: 'dynastie', icon: '👑', label: 'Dynastie' },
-            { id: 'hof', icon: '🎭', label: 'Hof' },
-            { id: 'handel', icon: '⚖️', label: 'Handel', alert: !!market.caravan },
-            { id: 'baukunst', icon: '📐', label: 'Baukunst', alert: !research.current && RESEARCH_IDS.some((id) => !research.done.includes(id) && RESEARCH[id].needs.every((n) => research.done.includes(n)) && resources.gold >= RESEARCH[id].gold) },
-            { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle },
-            { id: 'reich', icon: '🗺️', label: 'Reich' },
-            { id: 'speicher', icon: '💾', label: 'Spielstände' },
-          ].map((p) => (
-            <button key={p.id} onClick={() => setOpenPanel(p.id)} className={`cb-btn-dark cb-navbtn${openPanel === p.id ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
-              title={p.label} style={{ padding: '5px 9px', fontSize: '0.88rem', position: 'relative' }}>
-              <span>{p.icon}</span><span className="cb-nav-label">{p.label}</span>
-              {p.badge > 0 && <span style={{ position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, borderRadius: 8, background: '#c0392b', color: '#fff', fontSize: '0.66rem', lineHeight: '16px', textAlign: 'center', padding: '0 3px' }}>{p.badge > 9 ? '9+' : p.badge}</span>}
-            </button>
-          ))}
+          {(() => {
+            const researchReady = !research.current && RESEARCH_IDS.some((id) => !research.done.includes(id) && RESEARCH[id].needs.every((n) => research.done.includes(n)) && resources.gold >= RESEARCH[id].gold);
+            const alerts = { volk: onStrike, burg: warningActive || researchReady, hof: false, reich: !!market.caravan };
+            const lastOf = (g) => (groupLastPanelRef.current[g.id] || g.panels[0][0]);
+            const items = [
+              ...PANEL_GROUPS.map((g) => ({ id: g.id, icon: g.icon, label: g.label, alert: alerts[g.id], active: !!openPanel && g.panels.some(([pp]) => pp === openPanel), open: () => setOpenPanel(lastOf(g)) })),
+              { id: 'chronik', icon: '📜', label: 'Chronik', badge: unreadChronicle, active: openPanel === 'chronik', open: () => setOpenPanel('chronik') },
+              { id: 'speicher', icon: '💾', label: 'Spielstände', active: openPanel === 'speicher', open: () => setOpenPanel('speicher') },
+            ];
+            return items.map((p) => (
+              <button key={p.id} onClick={p.open} className={`cb-btn-dark cb-navbtn${p.active ? ' is-active' : ''}${p.alert ? ' is-alert' : ''}`}
+                title={p.label} style={{ padding: '5px 9px', fontSize: '0.88rem', position: 'relative' }}>
+                <span>{p.icon}</span><span className="cb-nav-label">{p.label}</span>
+                {p.badge > 0 && <span style={{ position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, borderRadius: 8, background: '#c0392b', color: '#fff', fontSize: '0.66rem', lineHeight: '16px', textAlign: 'center', padding: '0 3px' }}>{p.badge > 9 ? '9+' : p.badge}</span>}
+              </button>
+            ));
+          })()}
           <button onClick={() => setOpenPanel('einstellungen')} className={`cb-btn-dark cb-navbtn${openPanel === 'einstellungen' ? ' is-active' : ''}`} title="Klang & Einstellungen" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>⚙️</button>
           <button onClick={() => setHelpOpen(true)} className="cb-btn-dark cb-navbtn" title="Hilfe & Tastenkürzel (?)" style={{ padding: '5px 9px', fontSize: '0.88rem' }}>❔</button>
         </div>
@@ -14048,7 +14077,7 @@ export default function CastleBuilder() {
           return { type, known, list, gold };
         }).filter((u) => u.list.length);
         return (
-          <Modal title="📐 Baukunst — Forschung und Ausbau" onClose={() => setOpenPanel(null)} maxWidth={560}>
+          <Modal tabs title="📐 Baukunst — Forschung und Ausbau" onClose={() => setOpenPanel(null)} maxWidth={560}>
             <p style={{ fontSize: '0.82rem', color: '#5A5044', lineHeight: 1.5, marginTop: 0 }}>
               Eure Burg beginnt als Motte mit Holzpalisade. Steinbau und die Kunst der Befestigung müssen erst erlernt werden — immer ein Vorhaben nach dem anderen.
               {' '}{baumeisterHired
@@ -14389,7 +14418,7 @@ export default function CastleBuilder() {
       })()}
 
       {openPanel === 'reich' && (
-        <Modal title="🗺️ Das Reich" onClose={() => { setOpenPanel(null); setReichFocus(null); }} maxWidth={720}>
+        <Modal tabs title="🗺️ Das Reich" onClose={() => { setOpenPanel(null); setReichFocus(null); }} maxWidth={720}>
           {(() => {
             const year = calDate.year;
             const focus = reichFocus || REGION_IDS.find((id) => !ownedRegions.includes(id) && regionReachable(id, ownedRegions)) || REGION_IDS[0];
@@ -14584,7 +14613,7 @@ export default function CastleBuilder() {
       )}
 
       {openPanel === 'finanzen' && (
-        <Modal title="Finanzen" onClose={() => setOpenPanel(null)}>
+        <Modal tabs title="Finanzen" onClose={() => setOpenPanel(null)}>
           <div className="cb-title" style={{ fontSize: '0.8rem', color: '#5A5044', marginBottom: 6 }}>EINNAHMEN (pro Monat)</div>
           <div style={{ fontSize: '0.88rem', lineHeight: 1.7, marginBottom: 10 }}>
             <div>🏘️ Steuern ({villagePop} Bauern × {taxRate}%): <strong>+{villageGoldPerMonth} 🪙</strong></div>
@@ -14642,7 +14671,7 @@ export default function CastleBuilder() {
         const row = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: '0.9rem', padding: '4px 0' };
         const card = { border: '1px solid rgba(92,85,74,0.35)', borderRadius: 6, padding: '10px 12px', background: 'rgba(255,255,255,0.22)', minWidth: 0 };
         return (
-          <Modal title={`${vStage.icon} ${vStage.name} — das Volk`} onClose={() => setOpenPanel(null)} maxWidth={640}>
+          <Modal tabs title={`${vStage.icon} ${vStage.name} — das Volk`} onClose={() => setOpenPanel(null)} maxWidth={640}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, fontSize: '0.88rem', marginBottom: 6 }}>
               <span>👥 <strong>{villagePop}</strong> Einwohner · Platz für {villageCap}{soldiers.soldier + soldiers.archer ? ` · ${soldiers.soldier + soldiers.archer} unter Waffen` : ''}</span>
               <span style={{ color: '#5A5044' }}>Wachstum {Math.round(villageGrowthChance(happiness, reputation, structures) * 100)} % im Monat{villagePop >= villageCap ? ' — voll' : ''}{resources.food < 3 ? ' — Hunger!' : ''}</span>
@@ -14720,7 +14749,7 @@ export default function CastleBuilder() {
 
 
       {openPanel === 'garnison' && (
-        <Modal title="Garnison" onClose={() => setOpenPanel(null)}>
+        <Modal tabs title="Garnison" onClose={() => setOpenPanel(null)}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             <button onClick={() => setGarnisonTab('truppen')}
               style={{ flex: 1, padding: '6px 8px', borderRadius: 3, border: '2px solid #5C554A', background: garnisonTab === 'truppen' ? '#C9A24B' : 'transparent', fontFamily: "'Cinzel', serif", fontSize: '0.78rem', cursor: 'pointer' }}>
@@ -14850,7 +14879,7 @@ export default function CastleBuilder() {
         );
         const connector = (h = 16) => <div style={{ width: 2, height: h, background: '#5C554A' }} />;
         return (
-          <Modal title="👑 Stammbaum der königlichen Familie" maxWidth={600} onClose={() => { setOpenPanel(null); setAbdicateConfirm(false); }}>
+          <Modal tabs title="👑 Stammbaum der königlichen Familie" maxWidth={600} onClose={() => { setOpenPanel(null); setAbdicateConfirm(false); }}>
             {ruler && (() => {
               const next = RULER_RANK_XP[ruler.rank];
               const prevXp = ruler.rank > 0 ? RULER_RANK_XP[ruler.rank - 1] : 0;
@@ -15035,7 +15064,7 @@ export default function CastleBuilder() {
         const smallBtn = (enabled) => ({ padding: '2px 7px', marginLeft: 3, borderRadius: 3, border: '1px solid #5C554A', background: enabled ? '#EAE0C4' : 'rgba(0,0,0,0.05)', fontSize: '0.74rem', cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.45, fontFamily: "'EB Garamond', serif" });
         const trend = (k) => { const v = market.mult[k] || 1; return v > 1.15 ? { t: '▲ teuer', c: '#8a2d20' } : v < 0.87 ? { t: '▼ billig', c: '#3d6a24' } : { t: '·', c: '#8a8070' }; };
         return (
-          <Modal title="⚖️ Waren & Handel" onClose={() => setOpenPanel(null)} maxWidth={760}>
+          <Modal tabs title="⚖️ Waren & Handel" onClose={() => setOpenPanel(null)} maxWidth={760}>
             <p style={{ fontSize: '0.84rem', color: '#4a4034', marginTop: 0, lineHeight: 1.5 }}>
               Eroberte Regionen liefern jeden Monat ihre Ware. Gewürze, Seide und Weihrauch bringen nur die Fernhändler. Verkaufen könnt Ihr auf dem eigenen Marktplatz (oder an die Händler, solange sie da sind) — zu etwa zwei Dritteln ihres Preises.
             </p>
@@ -15293,7 +15322,7 @@ export default function CastleBuilder() {
         const shown = guests.filter((g) => (g.group || 'gesinde') === hofTab);
         const tabCount = (t) => guests.filter((g) => (g.group || 'gesinde') === t).length;
         return (
-          <Modal title="🎭 Der Hof" onClose={() => setOpenPanel(null)} maxWidth={640}>
+          <Modal tabs title="🎭 Der Hof" onClose={() => setOpenPanel(null)} maxWidth={640}>
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#5A5044', marginBottom: 3 }}>
                 <span>🎉 Stimmung bei Hofe</span>
@@ -15879,5 +15908,6 @@ export default function CastleBuilder() {
         </div>
       </div>
     </div>
+    </PanelNavContext.Provider>
   );
 }
