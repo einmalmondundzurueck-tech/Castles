@@ -1027,6 +1027,10 @@ const SIEGE_ENGINES = {
 const SIEGE_ENGINE_IDS = Object.keys(SIEGE_ENGINES);
 const SIEGE_WORKS_INIT = { ladder: 0, ram: 0, catapult: 0, queue: [] };
 const AMENITY_UPGRADE_GOODS = { kirche: { 3: { glas: 6 } }, kapelle: { 3: { glas: 3 } }, palas: { 3: { glas: 4, seide: 2 } } };
+// In a pinch timber and stone can be bought — dear, and dearer still without a market of
+// one's own, where every cartload has to be fetched from afar.
+const MATERIAL_PRICE = { wood: 3, stone: 5 };
+const materialPrice = (kind, structures) => Math.round(MATERIAL_PRICE[kind] * (hasDoneAmenity(structures, 'marktplatz') ? 1 : 1.5) * 10) / 10;
 const MARKET_INIT = { mult: Object.fromEntries(GOOD_IDS.map((g) => [g, 1])), caravan: null, nextCaravanDay: 75, supply: { hof: true, buerger: true }, status: { hof: [], buerger: [] }, auto: {}, autoReserve: 150 };
 function goodsProduction(owned) {
   const out = {};
@@ -2739,6 +2743,41 @@ function BackdropImage({ viewRot, ownedKey, outerProps }) {
     </>
   );
 }
+// The woods and rocks of conquered land, cut into small squares of the map, each shown as a
+// picture of its own: felling a tree out there redraws only its square, never the backdrop.
+const NATURE_CHUNK = 8;
+const NatureChunkImage = React.memo(function NatureChunkImage({ sig, items }) { // eslint-disable-line no-unused-vars
+  const holder = useRef(null);
+  const [src, setSrc] = useState(null);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  items.forEach((it) => {
+    const p = gridToScreen(it.i, it.j, 0);
+    x0 = Math.min(x0, p.x - 70); x1 = Math.max(x1, p.x + 70); y0 = Math.min(y0, p.y - 100); y1 = Math.max(y1, p.y + 30);
+  });
+  const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+  useEffect(() => {
+    const svg = holder.current && holder.current.querySelector('svg');
+    if (!svg) return;
+    try {
+      let text = new XMLSerializer().serializeToString(svg);
+      if (!text.includes('xmlns="http://www.w3.org/2000/svg"')) text = text.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      setSrc(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`);
+    } catch (e) {
+      setSrc(null);
+    }
+  }, [sig]);
+  if (!items.length) return null;
+  return (
+    <>
+      <div ref={holder} style={{ display: src ? 'none' : 'block', position: 'absolute', left: x0, top: y0 }}>
+        <svg width={w} height={h} viewBox={`${x0} ${y0} ${w} ${h}`} style={{ display: 'block' }} pointerEvents="none">
+          {items.map((it) => (it.kind === 'tree' ? <TreeProp key={`t${it.id}`} i={it.i - 0.5} j={it.j - 0.5} /> : <RockProp key={`r${it.id}`} i={it.i - 0.5} j={it.j - 0.5} />))}
+        </svg>
+      </div>
+      {src && <img src={src} alt="" width={w} height={h} draggable={false} style={{ position: 'absolute', left: x0, top: y0, pointerEvents: 'none', userSelect: 'none' }} />}
+    </>
+  );
+});
 // Cloud shadows drift over the land on a layer of their own, moved by the compositor — they
 // never make the map underneath redraw.
 const CLOUDS = [
@@ -6086,21 +6125,29 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     if (hasBlockedNeed) { assignHauling(); assignConstruction(); }
     else { assignConstruction(); assignHauling(); }
 
+    // Each tree and rock gets one worker while there are enough to go round; only when
+    // every one is taken do two share.
+    const takenNodes = { quarrier: new Set(), lumberjack: new Set() };
+    workingList.forEach((w) => { if (takenNodes[w.type] && w.targetNodeId != null) takenNodes[w.type].add(w.targetNodeId); });
+    const pickNode = (w, list, usable) => {
+      let best = null, bestD = Infinity, any = null, anyD = Infinity;
+      list.forEach((n) => {
+        if (!usable(n) || !OWNED_REGIONS.has(n.region || 'kern')) return;
+        const d = distance({ i: w.curI, j: w.curJ }, { i: n.i, j: n.j }) / (n.rate || 1);
+        if (d < anyD) { anyD = d; any = n; }
+        if (!takenNodes[w.type].has(n.id) && d < bestD) { bestD = d; best = n; }
+      });
+      const pick = best || any;
+      if (pick) takenNodes[w.type].add(pick.id);
+      return pick ? pick.id : null;
+    };
     workingList.forEach((w) => {
       if (w.type === 'quarrier') {
         let node = w.targetNodeId != null ? rocksIn.find((r) => r.id === w.targetNodeId && !r.depleted) : null;
-        if (!node) {
-          let best = null, bestD = Infinity;
-          rocksIn.forEach((r) => { if (!r.depleted && OWNED_REGIONS.has(r.region || 'kern')) { const d = distance({ i: w.curI, j: w.curJ }, { i: r.i, j: r.j }) / (r.rate || 1); if (d < bestD) { bestD = d; best = r; } } });
-          w.targetNodeId = best ? best.id : null;
-        }
+        if (!node) w.targetNodeId = pickNode(w, rocksIn, (r) => !r.depleted);
       } else if (w.type === 'lumberjack') {
         let node = w.targetNodeId != null ? treesIn.find((t) => t.id === w.targetNodeId && !t.felled) : null;
-        if (!node) {
-          let best = null, bestD = Infinity;
-          treesIn.forEach((t) => { if (!t.felled && OWNED_REGIONS.has(t.region || 'kern')) { const d = distance({ i: w.curI, j: w.curJ }, { i: t.i, j: t.j }) / (t.rate || 1); if (d < bestD) { bestD = d; best = t; } } });
-          w.targetNodeId = best ? best.id : null;
-        }
+        if (!node) w.targetNodeId = pickNode(w, treesIn, (t) => !t.felled);
       }
     });
   }
@@ -6157,7 +6204,8 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     let newI = w.curI, newJ = w.curJ;
     let forceReplan = false;
     if (d > 0.001) {
-      const t = Math.min(1, SPEED_PER_TICK * workerPace(w.id) / d);
+      // Fleeing from the Sachsen, everyone runs.
+      const t = Math.min(1, SPEED_PER_TICK * workerPace(w.id) * (fleeMode ? 1.8 : 1) / d);
       newI = w.curI + (moveTarget.i - w.curI) * t;
       newJ = w.curJ + (moveTarget.j - w.curJ) * t;
       // Never take a step through a wall, a shut gate or into a solid building. With proper
@@ -9420,6 +9468,14 @@ export default function CastleBuilder() {
     setMarket((mk) => ({ ...mk, caravan: { ...mk.caravan, offers: { ...mk.caravan.offers, [k]: { ...c, stock: c.stock - qty } } } }));
     SOUND.play('coin');
   };
+  const buyMaterial = (kind, n) => {
+    const price = materialPrice(kind, structures);
+    const room = Math.max(0, storageCapacity(structures) - Math.floor(resources[kind]));
+    const qty = Math.min(n, room, Math.floor(resources.gold / price));
+    if (qty <= 0) return;
+    setResources((r) => ({ ...r, gold: r.gold - Math.ceil(qty * price), [kind]: r[kind] + qty }));
+    SOUND.play('coin');
+  };
   const sellGood = (k, n) => {
     const canSell = hasDoneAmenity(structures, 'marktplatz') || !!market.caravan;
     const qty = Math.min(n, Math.floor(goods[k] || 0));
@@ -11864,12 +11920,15 @@ export default function CastleBuilder() {
     if (battlePhase !== 'fleeing') return;
     // A plain setTimeout would keep counting down even while paused, so the "Sachsen nähern
     // sich"-countdown is now a small poller that only advances while the game is running.
+    // The gates stay open until everyone from the fields is inside — or, for someone stuck
+    // out there, until the enemy simply can't be held off any longer.
     let elapsed = 0;
-    const target = 3200 / gameSpeed;
+    const minWait = 3200 / gameSpeed, maxWait = 30000 / gameSpeed;
     const id = setInterval(() => {
       if (isPausedRef.current) return;
       elapsed += 100;
-      if (elapsed >= target) setBattlePhase('positioning');
+      const allIn = workersRef.current.every((w) => distance({ i: w.curI, j: w.curJ }, { i: DEPOT_I, j: DEPOT_J + 0.3 }) < 1.2);
+      if (elapsed >= maxWait || (elapsed >= minWait && allIn)) setBattlePhase('positioning');
     }, 100);
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
@@ -12293,17 +12352,34 @@ export default function CastleBuilder() {
   // won). The heartland's props are sorted in with the buildings and people as before.
   // Only the outer regions' own trees and rocks matter here — the heartland's are felled and
   // quarried every day, and redrawing the whole backdrop for that would undo the point of it.
-  const outerNatureKey = forestTrees.filter((t) => t.region && !t.felled).length + '/' + hillRocks.filter((r) => r.region && !r.depleted).length;
+  // Conquered land's woods and rocks are worked every day, so they live in small squares of
+  // their own (see NatureChunkImage); the backdrop keeps only the untouched foreign ones.
+  const outerNatureKey = forestTrees.filter((t) => t.region && !t.felled && !OWNED_REGIONS.has(t.region)).length + '/' + hillRocks.filter((r) => r.region && !r.depleted && !OWNED_REGIONS.has(r.region)).length;
+  const natureChunks = useMemo(() => {
+    const chunks = new Map();
+    const add = (kind, n) => {
+      const key = `${Math.floor(n.i / NATURE_CHUNK)},${Math.floor(n.j / NATURE_CHUNK)}`;
+      if (!chunks.has(key)) chunks.set(key, []);
+      chunks.get(key).push({ kind, id: n.id, i: n.i, j: n.j });
+    };
+    forestTrees.forEach((t) => { if (!t.felled && t.region && OWNED_REGIONS.has(t.region)) add('tree', t); });
+    hillRocks.forEach((r) => { if (!r.depleted && r.region && OWNED_REGIONS.has(r.region)) add('rock', r); });
+    return [...chunks.entries()].map(([key, items]) => {
+      items.sort((a, b) => viewDepth(a.i, a.j) - viewDepth(b.i, b.j));
+      const [ci, cj] = key.split(',').map(Number);
+      return { key, items, depth: viewDepth((ci + 0.5) * NATURE_CHUNK, (cj + 0.5) * NATURE_CHUNK), sig: `${viewRot}|${items.map((x) => x.kind[0] + x.id).join(',')}` };
+    }).sort((a, b) => a.depth - b.depth);
+  }, [forestTrees, hillRocks, ownedKey, viewRot]); // eslint-disable-line react-hooks/exhaustive-deps
   const outerPropsVillage = OWNED_REGIONS.has('markt') ? -1 : Math.ceil(villagePop / 2);
   const outerProps = useMemo(() => {
     const list = [];
     forestTrees.forEach((t) => {
-      if (t.felled || !t.region) return;
+      if (t.felled || !t.region || OWNED_REGIONS.has(t.region)) return;
       const node = <TreeProp key={`tree-${t.id}`} i={t.i - 0.5} j={t.j - 0.5} />;
       list.push({ depth: viewDepth(t.i, t.j) + 0.5, node });
     });
     hillRocks.forEach((r) => {
-      if (r.depleted || !r.region) return;
+      if (r.depleted || !r.region || OWNED_REGIONS.has(r.region)) return;
       const node = <RockProp key={`rock-${r.id}`} i={r.i - 0.5} j={r.j - 0.5} />;
       list.push({ depth: viewDepth(r.i, r.j) + 0.5, node });
     });
@@ -14311,6 +14387,19 @@ export default function CastleBuilder() {
             <div style={{ fontSize: '0.9rem', lineHeight: 1.8 }}>
               <div>Beruf: <strong>{infoTarget.kind === 'worker' ? WORKER_LABEL[infoTarget.data.type] : SOLDIER_LABEL[infoTarget.data.type]}</strong></div>
               <div>Tätigkeit: {personActivity(infoTarget)}</div>
+              {!battlePhase && (
+                <button className="cb-btn" style={{ marginTop: 8, padding: '4px 14px', fontSize: '0.84rem', color: '#7a2318', borderColor: '#7a2318' }}
+                  title={infoTarget.kind === 'worker' ? 'Er legt die Arbeit nieder und ist wieder ein freier Bürger' : 'Er kehrt auf seinen Hof zurück'}
+                  onClick={() => {
+                    if (infoTarget.kind === 'worker') {
+                      const id = infoTarget.data.id;
+                      setWorkerUnits((prev) => prev.filter((w) => w.id !== id));
+                    } else fireSoldier(infoTarget.data.type);
+                    setInfoTarget(null);
+                  }}>
+                  Entlassen
+                </button>
+              )}
             </div>
           )}
         </Modal>
@@ -15325,6 +15414,27 @@ export default function CastleBuilder() {
                 })}
               </tbody>
             </table>
+            {(() => {
+              const room = (kind) => Math.max(0, storageCapacity(structures) - Math.floor(resources[kind]));
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 10px', marginBottom: 12, border: '1px solid rgba(92,85,74,0.3)', borderRadius: 5, background: 'rgba(255,255,255,0.2)', fontSize: '0.84rem' }}>
+                  <strong>🧱 Baustoffe kaufen</strong>
+                  {[['wood', '🪵 Holz'], ['stone', '🪨 Stein']].map(([kind, label]) => {
+                    const price = materialPrice(kind, structures);
+                    return (
+                      <span key={kind} style={{ whiteSpace: 'nowrap' }}>
+                        {label} {price} 🪙
+                        {[10, 25].map((n) => {
+                          const ok = room(kind) >= 1 && resources.gold >= price;
+                          return <button key={n} style={smallBtn(ok)} disabled={!ok} onClick={() => buyMaterial(kind, n)} title={room(kind) < 1 ? 'Das Lager ist voll' : `${n} für ${Math.ceil(n * price)} 🪙`}>+{n}</button>;
+                        })}
+                      </span>
+                    );
+                  })}
+                  <span style={{ fontSize: '0.74rem', color: '#5A5044' }}>{hasDoneAmenity(structures, 'marktplatz') ? 'vom eigenen Markt' : 'ohne Marktplatz anderthalbmal so teuer'} · Lagerplatz {storageCapacity(structures)}</span>
+                </div>
+              );
+            })()}
             {!canSell && <div style={{ fontSize: '0.76rem', color: '#7a5a20', marginTop: -6, marginBottom: 10, fontStyle: 'italic' }}>Ohne Marktplatz im Dorf verkauft Ihr nur an Fernhändler, solange sie da sind.</div>}
             <div style={{ fontSize: '0.78rem', color: '#4a4034', marginTop: -4, marginBottom: 12, lineHeight: 1.5 }}>
               📒 <strong>Verwalter:</strong> Hält bei jeder Ware mit Ziel den Vorrat — jeden Monat und wenn Fernhändler kommen verkauft er den Überschuss und kauft Fehlendes nach. Er gibt nie Gold unter
@@ -15604,6 +15714,7 @@ export default function CastleBuilder() {
             style={{ position: 'absolute', inset: 0, background: '#1b1f15', overflow: 'hidden', cursor: isPanning ? 'grabbing' : tool ? 'crosshair' : 'default' }}>
             <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
               <BackdropImage viewRot={viewRot} ownedKey={ownedKey} outerProps={outerProps} />
+              {natureChunks.map((c) => <NatureChunkImage key={`${viewRot}:${c.key}`} sig={c.sig} items={c.items} />)}
               <svg key={`view-${viewRot}`} width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: 'block', position: 'relative' }} onMouseUp={finishDrag} onMouseLeave={finishDrag}>
                 <SceneDefs />
                 <g>{drawables.map((d) => d.node)}</g>
