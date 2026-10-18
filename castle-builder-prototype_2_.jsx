@@ -656,7 +656,10 @@ function storageCapacity(structures) {
 // and masons like any other construction (the building's effect pauses meanwhile), and
 // strengthens what the building does. The strongest finished building of a kind counts.
 const AMENITY_MAX_LEVEL = 3;
-const AMENITY_UPGRADE_GOLD = { 2: 60, 3: 140 };
+const AMENITY_UPGRADE_GOLD = { 2: 80, 3: 180 };
+// What a new building costs in gold on top of its wood and stone: the master builder, tools
+// and hired hands.
+const AMENITY_GOLD = { kemenate: 30, stallungen: 30, schmied: 40, baeckerei: 25, lagerhaus: 20, brunnen: 15, kapelle: 40, brauhaus: 30, palas: 120, bogenmacher: 40, falknerei: 40, turnierplatz: 60, vogtei: 50, kirche: 80, kloster: 70, marktplatz: 50, belagerung: 50 };
 const AMENITY_LEVEL_COST_MULT = { 1: 1, 2: 1.5, 3: 2 };
 const LAGERHAUS_CAPACITY_PER_LEVEL = 150;
 function amenityLevel(structures, kind) {
@@ -860,7 +863,9 @@ function sicknessChancePerYear(age) {
 const COURT_MORALE_LOW_THRESHOLD = 30;
 // How much each resident special court figure (Hofnarr, Maurischer Kämpfer, Mönch, Medicus,
 // Hofdame, Falkner) adds to court morale per month, just by being there.
-const COURT_MORALE_PER_COURTIER = 2.2;
+const COURT_MORALE_PER_COURTIER = 1.2;
+const COURT_MORALE_DECAY = 2.5; // per month
+const COURT_MORALE_PER_NOBLE = 0.35; // per knight or youth at court, per month
 // Which cause-of-death (or cause-of-succession) clause opens the succession/end-of-dynasty
 // popup.
 const DEATH_CAUSE_TEXT = {
@@ -5029,8 +5034,8 @@ function computeGarrisonPositions(anchorI, anchorJ, soldierCount, archerCount) {
 // (`needs`) unlocks it.
 const STRUCT_LEVELS = {
   wall: {
-    names: ['Palisade', 'Steinmauer', 'Wehrmauer'], needs: [null, 'steinbau', 'wehrgang'], upgradeGold: { 2: 3, 3: 8 },
-    cost: { 1: { wood: 5, stone: 0 }, 2: { wood: 3, stone: 10 }, 3: { wood: 6, stone: 15 } },
+    names: ['Palisade', 'Steinmauer', 'Wehrmauer'], needs: [null, 'steinbau', 'wehrgang'], upgradeGold: { 2: 10, 3: 22 },
+    cost: { 1: { wood: 5, stone: 0 }, 2: { wood: 3, stone: 12 }, 3: { wood: 6, stone: 18 } },
     work: { 1: 1.4, 2: 3, 3: 3.4 }, siegeHp: { 1: 5, 2: 9, 3: 12 }, def: { 1: 0.6, 2: 1, 3: 1.4 },
     text: [
       'Palisade: Holzpfähle — schnell gebaut, hält aber nicht lange stand.',
@@ -5039,13 +5044,13 @@ const STRUCT_LEVELS = {
     ],
   },
   gate: {
-    names: ['Holztor', 'Torhaus'], needs: [null, 'steinbau'], upgradeGold: { 2: 20 },
+    names: ['Holztor', 'Torhaus'], needs: [null, 'steinbau'], upgradeGold: { 2: 45 },
     cost: { 1: { wood: 8, stone: 0 }, 2: { wood: 6, stone: 14 } },
     work: { 1: 1.6, 2: 3 }, siegeHp: { 1: 4, 2: 6 }, def: { 1: 0.6, 2: 1 },
     text: ['Holztor in der Palisade, mit Zugbrücke.', 'Steinernes Torhaus mit Fallgitter und Zinnen.'],
   },
   tower: {
-    names: ['Holzturm', 'Wachturm', 'Wehrturm', 'Bastion'], needs: [null, 'steinbau', 'wehrturm', 'bastion'], upgradeGold: { 2: 25, 3: 50, 4: 120 },
+    names: ['Holzturm', 'Wachturm', 'Wehrturm', 'Bastion'], needs: [null, 'steinbau', 'wehrturm', 'bastion'], upgradeGold: { 2: 45, 3: 90, 4: 180 },
     cost: { 1: { wood: 10, stone: 0 }, 2: { wood: 7, stone: 26 }, 3: { wood: 10, stone: 39 }, 4: { wood: 14, stone: 52 } },
     work: { 1: 2, 2: 3.6, 3: 3.6, 4: 3.6 }, siegeHp: { 1: 7, 2: 11, 3: 16, 4: 21 }, def: { 1: 0.6, 2: 1, 3: 1.5, 4: 2 },
     slots: { 1: 2, 2: 2, 3: 3, 4: 4 }, height: { 1: 32, 2: 42, 3: 54, 4: 68 },
@@ -5057,7 +5062,7 @@ const STRUCT_LEVELS = {
     ],
   },
   keep: {
-    names: ['Motte', 'Burgfried'], needs: [null, 'steinbau'], upgradeGold: { 2: 60 },
+    names: ['Motte', 'Burgfried'], needs: [null, 'steinbau'], upgradeGold: { 2: 120 },
     cost: { 1: { wood: 16, stone: 0 }, 2: { wood: 12, stone: 30 } },
     work: { 1: 1.6, 2: 2.2 }, siegeHp: { 1: 16, 2: 24 }, def: { 1: 0.6, 2: 1 }, height: { 1: 46, 2: KEEP_H },
     text: ['Motte: ein Holzturm auf einem aufgeschütteten Erdhügel.', 'Burgfried aus Stein: höher, stärker, mit Ecktürmchen.'],
@@ -11226,7 +11231,10 @@ export default function CastleBuilder() {
           const strikePenalty = onStrikeNow ? 2.5 : 0;
           const currentYearNow2 = getCalendarDate(newDay).year;
           const churchUnrestPenalty2 = (churchUnrestUntilYear && currentYearNow2 < churchUnrestUntilYear) ? 2.5 : 0;
-          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + rulerFx(rulerRef.current).courtPerMonth + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) + palasCourtPerMonth(structuresRef.current) + hofstaatCourtPerMonth(courtRef.current) + queenFx(royalFamilyRef.current).courtPerMonth - strikePenalty - churchUnrestPenalty2) / MONTH_LENGTH;
+          const delta = (residentCourtiers * COURT_MORALE_PER_COURTIER + rulerFx(rulerRef.current).courtPerMonth + hofnarrBonus + foodSurplusBonus + kemenateCourtMorale(structuresRef.current) + palasCourtPerMonth(structuresRef.current) + hofstaatCourtPerMonth(courtRef.current) + queenFx(royalFamilyRef.current).courtPerMonth - strikePenalty - churchUnrestPenalty2
+            // A court grows used to its comforts: the mood sinks by itself, the more so the larger
+            // the court and the higher it already is — feasts, hunts and fine goods keep it up.
+            - COURT_MORALE_DECAY - COURT_MORALE_PER_NOBLE * (knightIds().filter((id) => recruitedKnightsRef.current[id]).length + courtRef.current.youths.length) - Math.max(0, m - 50) * 0.08) / MONTH_LENGTH;
           return Math.max(0, Math.min(100, m + delta));
         });
 
@@ -12132,6 +12140,10 @@ export default function CastleBuilder() {
       // Every tile of the new building must be free grass.
       const okTerrain = (a, b) => amenityTerrainOk(tool, terrainAt(a, b));
       if (!removing && !amenityTiles(tool, i, j, amenityRot).every(([a, b]) => okTerrain(a, b) && isOwnedTile(a, b) && !structureKeyOnTile(structs, a, b))) return;
+      const goldNeed = AMENITY_GOLD[tool] || 0;
+      if (!removing && resourcesRef.current.gold < goldNeed) return;
+      // Paid up front; taken back unbuilt, the gold comes back.
+      if (goldNeed && (!removing || (current.stage === 'foundation' && !current.progress && !current.ruined))) setResources((r) => ({ ...r, gold: r.gold + (removing ? goldNeed : -goldNeed) }));
       SOUND.play('place');
       setStructures((prev) => {
         const next = { ...prev };
@@ -14479,22 +14491,22 @@ export default function CastleBuilder() {
           </div>
           <div style={{ marginBottom: 10 }}>
             <label style={{ fontSize: '0.85rem', display: 'block', marginBottom: 4 }}>Steuersatz: {taxRate}% (≈ +{villageGoldPerMonth} 🪙/Monat)</label>
-            <input type="range" min="0" max="100" step="10" value={taxRate} disabled={taxLockedUntilYear != null && calDate.year < taxLockedUntilYear}
-              onChange={(e) => setTaxRate(Number(e.target.value))} style={{ width: '100%', opacity: (taxLockedUntilYear != null && calDate.year < taxLockedUntilYear) ? 0.5 : 1 }} />
+            <input type="range" min="0" max="100" step="10" value={taxRate}
+              onChange={(e) => { const v = Number(e.target.value); if (taxLockedUntilYear != null && calDate.year < taxLockedUntilYear && v > taxRate) return; setTaxRate(v); }} style={{ width: '100%' }} />
             {taxLockedUntilYear != null && calDate.year < taxLockedUntilYear && (
-              <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: 2 }}>🔒 Den Bauern zugesichert — festgeschrieben bis {taxLockedUntilYear}.</div>
+              <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: 2 }}>🔒 Den Bauern zugesichert — bis {taxLockedUntilYear} nicht höher (senken geht immer).</div>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: 6 }}>
             <span>⚒️ Frondienste (Burg)</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button onClick={() => changeFrohndienst(-1)} disabled={frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: (frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear) ? 0.5 : 1 }}>−</button>
+              <button onClick={() => changeFrohndienst(-1)} disabled={frohndienstCount <= 0} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: (frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear) ? 0.5 : 1 }}>−</button>
               <span style={{ width: 16, textAlign: 'center' }}>{frohndienstCount}</span>
               <button onClick={() => changeFrohndienst(1)} disabled={frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear} style={{ width: 22, height: 22, borderRadius: 3, border: '1px solid #5C554A', background: 'transparent', opacity: (frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear) ? 0.5 : 1 }}>+</button>
             </div>
           </div>
           {frohndienstLockedUntilYear != null && calDate.year < frohndienstLockedUntilYear && (
-            <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: -4, marginBottom: 6 }}>🔒 Den Bauern zugesichert — festgeschrieben bis {frohndienstLockedUntilYear}.</div>
+            <div style={{ fontSize: '0.75rem', color: '#7a2318', marginTop: -4, marginBottom: 6 }}>🔒 Den Bauern zugesichert — bis {frohndienstLockedUntilYear} nicht mehr (weniger geht immer).</div>
           )}
           <div style={{ fontSize: '0.8rem', color: '#5A5044' }}>🌾 auf dem Hof: {farmersCount} (≈ +{farmFoodPerMonth.toFixed(0)} Nahrung/Monat{onStrike ? ' — Streik!' : ''})</div>
           <div style={{ fontSize: '0.8rem', color: '#5A5044', marginTop: 2 }}>davon tragen gerade Vorräte zur Burg: {haulingCount}</div>
@@ -14508,6 +14520,17 @@ export default function CastleBuilder() {
             style={{ width: '100%', marginTop: 10, padding: '6px 8px', fontSize: '0.84rem', opacity: canGrantCitizenship ? 1 : 0.5 }}>
             📜 Bürgerrecht verleihen — ein Bauer wird Bürger ({CITIZENSHIP_GOLD} 🪙)
           </button>
+          {(() => {
+            // In hard times a Bürger without work can go back to the fields.
+            const idle = Math.max(0, buerger - skilledWorkers);
+            return (
+              <button className="cb-btn" disabled={idle < 1} onClick={() => { setBuerger((b) => Math.max(0, b - 1)); SOUND.play('place'); }}
+                style={{ width: '100%', marginTop: 6, padding: '6px 8px', fontSize: '0.84rem', opacity: idle >= 1 ? 1 : 0.5 }}
+                title={idle < 1 ? 'Alle Bürger arbeiten gerade als Handwerker' : ''}>
+                🌾 Ein Bürger geht aufs Feld — wird wieder Bauer{resources.food < 30 ? ' (Nahrung knapp!)' : ''}
+              </button>
+            );
+          })()}
           <p style={{ fontSize: '0.78rem', color: '#5A5044', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>
             Bauern ernähren das Dorf und stellen die Soldaten; Bürger arbeiten als Handwerker und zahlen mehr Steuern. Das Dorf wächst bei vollen Kornkammern, guter Stimmung und gutem Ruf — wer im Krieg fällt, fehlt. Hohe Steuern und viele Frondienste drücken die Zufriedenheit; unter {STRIKE_THRESHOLD} streiken die Bauern.
           </p>
@@ -15569,6 +15592,7 @@ export default function CastleBuilder() {
               const card = (t, extraDisabled = false, why = '') => {
                 const lv = STRUCT_LEVELS[t.id];
                 const cost = lv ? lv.cost[chosenLevel(t.id)] : BUILD_COST[t.id];
+                const goldNeed = AMENITY_GOLD[t.id] || 0;
                 const disabled = extraDisabled;
                 const shortW = cost && resources.wood < cost.wood;
                 const shortS = cost && resources.stone < cost.stone;
@@ -15580,7 +15604,7 @@ export default function CastleBuilder() {
                     <span className="cb-tool-name">{lv ? levelName(t.id, chosenLevel(t.id)) : t.label}</span>
                     <span className="cb-tool-cost">
                       {why ? <em>{why}</em> : cost && (cost.wood || cost.stone)
-                        ? <><span className={shortW ? 'is-short' : ''}>🪵{cost.wood}</span> <span className={shortS ? 'is-short' : ''}>🪨{cost.stone}</span></>
+                        ? <>{goldNeed > 0 && <><span className={resources.gold < goldNeed ? 'is-short' : ''}>🪙{goldNeed}</span> </>}<span className={shortW ? 'is-short' : ''}>🪵{cost.wood}</span> <span className={shortS ? 'is-short' : ''}>🪨{cost.stone}</span></>
                         : 'kostenlos'}
                     </span>
                     {TOOL_HOTKEYS[t.id] && <span className="cb-key">{TOOL_HOTKEYS[t.id]}</span>}
