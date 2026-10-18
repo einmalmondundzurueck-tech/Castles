@@ -11938,12 +11938,21 @@ export default function CastleBuilder() {
     // The gates stay open until everyone from the fields is inside — or, for someone stuck
     // out there, until the enemy simply can't be held off any longer.
     let elapsed = 0;
-    const minWait = 3200 / gameSpeed, maxWait = 30000 / gameSpeed;
+    const minWait = 3200 / gameSpeed, maxWait = 10000 / gameSpeed;
+    const atDepot = (w) => distance({ i: w.curI, j: w.curJ }, { i: DEPOT_I, j: DEPOT_J + 0.3 }) < 1.2;
     const id = setInterval(() => {
       if (isPausedRef.current) return;
       elapsed += 100;
-      const allIn = workersRef.current.every((w) => distance({ i: w.curI, j: w.curJ }, { i: DEPOT_I, j: DEPOT_J + 0.3 }) < 1.2);
-      if (elapsed >= maxWait || (elapsed >= minWait && allIn)) setBattlePhase('positioning');
+      const allIn = workersRef.current.every(atDepot);
+      if (elapsed >= maxWait || (elapsed >= minWait && allIn)) {
+        // Whoever is still caught out there slips in by the postern before the gates shut.
+        if (!allIn) {
+          setWorkerUnits((prev) => prev.map((w) => (atDepot(w) ? w : {
+            ...w, curI: DEPOT_I + ((w.id % 5) - 2) * 0.3, curJ: DEPOT_J + 0.3, path: null, pathIdx: 0, pathTargetKey: null, atTarget: true, stuckTicks: 0, wading: false,
+          })));
+        }
+        setBattlePhase('positioning');
+      }
     }, 100);
     return () => clearInterval(id);
   }, [battlePhase, gameSpeed]);
