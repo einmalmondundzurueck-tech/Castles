@@ -753,7 +753,7 @@ const ARRIVE_EPS = 0.12;
 const PROGRESS_GAIN_PER_WORKER_PER_TICK = 0.02;
 const QUARRY_RATE_PER_TICK = 0.06;
 const LUMBER_RATE_PER_TICK = 0.05;
-const LOAD_AMOUNT = 3;
+const LOAD_AMOUNT = 4;
 const DEPOT_I = KI + 14;
 const DEPOT_J = KJ + 12;
 
@@ -1099,7 +1099,7 @@ const BATTLE_TICK_MS = 150;
 const UNIT_MAX_HP = 3;
 const DEATH_ANIM_TICKS = 9; // ~1.35s at BATTLE_TICK_MS, gameSpeed 1
 const BATTLE_END_DELAY_TICKS = 16; // ~2.4s pause on the battlefield after the last kill before the result popup
-const CHAMPION_MAX_HP = 16;
+const CHAMPION_MAX_HP = 24;
 const CHAMPION_DAMAGE_MULT = 3.4;
 // The Maurische Kämpfer's combat lessons: +25% damage for foot soldiers (soldiers and
 // archers) — not the mounted champions, who fight in an entirely different style.
@@ -1547,7 +1547,7 @@ const KNIGHTING_AGE = 19;
 const KNIGHTING_COST = 50;
 const COURT_WEDDING_COST = 40;
 const FEUD_CHANCE = 0.35; // a year, from the third year of the reign on
-const YOUTH_NAMES = ['Konrad', 'Dietrich', 'Hartmut', 'Ulrich', 'Gottfried', 'Eberhard', 'Rupert', 'Wolfram', 'Bernhard', 'Siegfried', 'Gerold', 'Heinrich', 'Arnold', 'Kuno'];
+const YOUTH_NAMES = ['Konrad', 'Dietrich', 'Hartmut', 'Ulrich', 'Gottfried', 'Eberhard', 'Rupert', 'Wolfram', 'Bernhard', 'Siegfried', 'Gerold', 'Heinrich', 'Arnold', 'Kuno', 'Albrecht', 'Anselm', 'Berthold', 'Diepold', 'Engelbert', 'Folkmar', 'Gebhard', 'Hildebrand', 'Isenbart', 'Lambert', 'Leopold', 'Meinhard', 'Norbert', 'Ortwin', 'Poppo', 'Rainald', 'Rüdiger', 'Sigismund', 'Tankred', 'Volkwin', 'Wigand', 'Wilbrand', 'Adalbert', 'Egino', 'Hermann', 'Markward'];
 const LADY_NAMES = ['Agnes', 'Gisela', 'Hedwig', 'Jutta', 'Liutgard', 'Mechthild'];
 const COURT_INIT = { ladyName: null, ladyHusband: null, wives: {}, youths: [], extraKnights: {}, nextYouthId: 1, fallen: [] };
 // Knights who ride in from elsewhere once one of the first three has fallen.
@@ -1643,6 +1643,12 @@ const CATAPULT_RELOAD_TICKS = 12;
 const PITCH_RELOAD_TICKS = 18;
 const PITCH_DAMAGE = 1.6;
 const CHAMPION_CHARGE_MULT = 2.6; // a knight riding down bowmen in the open
+// Knights hunt stragglers within this distance of their post, pull back below a third of
+// their strength and ride out again once they've recovered most of it.
+const KNIGHT_HUNT_RADIUS = 9;
+const KNIGHT_RETREAT_AT = 0.33;
+const KNIGHT_RETURN_AT = 0.75;
+const KNIGHT_RECOVER_PER_TICK = 0.012;
 const CATAPULT_SPLASH_PER_TICK = 0.1; // the king's catapults: damage to the men around the target
 const ARROW_STEP = 0.07;
 const ARROW_ANIM_MS = 40;
@@ -5317,6 +5323,9 @@ function migrateLegacyStructures(structures) {
 // attackers — the enemy has to break through first.
 // The fronts the coming host marches in from, and roughly what share of it each one brings —
 // the same split spawnBattleUnits uses.
+// A tower's second bowman counts as this many tiles further from the enemy than its first:
+// the archers spread over the towers and walls of a side before doubling up anywhere.
+const ARCHER_SPREAD = 5;
 function activeFronts(y) {
   const f = attackOrigins();
   if (f.third && y >= FLANK_YEAR) return [f.main, f.flank, f.third].map((o) => ({ ...originEntry(o), share: 1 / 3 }));
@@ -5340,9 +5349,9 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
   const slotsOf = (t) => STRUCT_LEVELS.tower.slots[t.level || 1] || 2;
   const keepTop = keep ? keepHeightFor(keep.level) : 0;
   towers.forEach(({ t, dist }) => {
-    for (let k = 0; k < slotsOf(t); k++) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level), dist: dist + k * 0.4 });
+    for (let k = 0; k < slotsOf(t); k++) platformSlots.push({ i: t.i + slotOffsets[k][0], j: t.j + slotOffsets[k][1], elev: towerHeightFor(t.level) + 3, dmgMult: towerDmgMult(t.level), dist: dist + k * ARCHER_SPREAD });
   });
-  if (keep) for (let k = 0; k < KEEP_ARCHER_SLOTS; k++) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: keepTop + 3, dist: frontDist(keep) + 1 + k * 0.4 });
+  if (keep) for (let k = 0; k < KEEP_ARCHER_SLOTS; k++) platformSlots.push({ i: keep.i + slotOffsets[k][0] * 2, j: keep.j + slotOffsets[k][1] * 2, elev: keepTop + 3, dist: frontDist(keep) + 1 + k * ARCHER_SPREAD });
   // A palisade has no walk to stand on; stone walls do, and a Wehrmauer's archers can move
   // along it in battle (onWallWalk).
   Object.values(structures)
@@ -5351,9 +5360,23 @@ function computeSiegePositions(structures, soldiers, fallbackI, fallbackJ, knigh
     .forEach((m) => platformSlots.push({ i: m.i, j: m.j, elev: wallHeightFor(m.level) + 2, onWallWalk: m.level >= 3, dist: frontDist(m) + 0.5 }));
   platformSlots.sort((a, b) => a.dist - b.dist);
 
+  // Each front gets bowmen in proportion to the share of the host coming that way, on the
+  // spots nearest to it; whatever a side has no room for goes to the best spots left anywhere.
+  const nearestFront = (pt) => fronts.reduce((b, f, idx) => (distance(pt, f) < distance(pt, fronts[b]) ? idx : b), 0);
+  platformSlots.forEach((sl) => { sl.front = nearestFront(sl); });
+  const quota = fronts.map((f) => Math.floor(soldiers.archer * f.share));
+  let spare = soldiers.archer - quota.reduce((a, b) => a + b, 0);
+  fronts.map((f, idx) => ({ idx, rem: soldiers.archer * f.share - quota[idx] })).sort((a, b) => b.rem - a.rem).forEach(({ idx }) => { if (spare > 0) { quota[idx]++; spare--; } });
+  const chosen = [];
+  const taken = new Set();
+  fronts.forEach((f, idx) => {
+    platformSlots.filter((sl) => sl.front === idx).slice(0, quota[idx]).forEach((sl) => { chosen.push(sl); taken.add(sl); });
+  });
+  platformSlots.forEach((sl) => { if (chosen.length < soldiers.archer && !taken.has(sl)) { chosen.push(sl); taken.add(sl); } });
+
   const positions = [];
   for (let k = 0; k < soldiers.archer; k++) {
-    if (k < platformSlots.length) { const { dist, ...slot } = platformSlots[k]; positions.push({ ...slot, type: 'archer' }); } // eslint-disable-line no-unused-vars
+    if (k < chosen.length) { const { dist, front, ...slot } = chosen[k]; positions.push({ ...slot, type: 'archer' }); } // eslint-disable-line no-unused-vars
     else positions.push({ i: fallbackI + ((k % 6) - 2.5) * 0.24, j: fallbackJ + 0.6 + Math.floor(k / 6) * 0.25, type: 'archer', elev: 0 });
   }
 
@@ -5467,7 +5490,7 @@ function PortraitAvatar({ stage, dead = false, size = 56, src: face = null }) {
 const PANEL_GROUPS = [
   { id: 'volk', icon: '👥', label: 'Volk', panels: [['dorf', '👥 Volk'], ['finanzen', '💰 Finanzen']] },
   { id: 'burg', icon: '🏰', label: 'Burg & Heer', panels: [['garnison', '🛡️ Garnison'], ['baukunst', '📐 Baukunst']] },
-  { id: 'hof', icon: '👑', label: 'Hof & Familie', panels: [['dynastie', '👑 Familie'], ['hof', '🎭 Hofstaat']] },
+  { id: 'hof', icon: '👑', label: 'Hof & Familie', panels: [['dynastie', '👑 Familie'], ['hof', '🎭 Hofstaat'], ['gesinde', '🔨 Gesinde']] },
   { id: 'reich', icon: '🗺️', label: 'Reich & Handel', panels: [['reich', '🗺️ Reich'], ['handel', '⚖️ Handel']] },
 ];
 const groupOfPanel = (id) => PANEL_GROUPS.find((g) => g.panels.some(([p]) => p === id)) || null;
@@ -6019,13 +6042,16 @@ function computeWorkerPath(fromI, fromJ, toI, toJ, nav) {
   return path;
 }
 
+// Who gets the workers and the materials first: sites the player marked, then repairs of what
+// the enemy broke, then new building, and improvements to what already stands last.
+function siteRank(s) { return s.priority ? 0 : s.ruined ? 1 : s.upgrading ? 3 : 2; }
 function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, haulPriority, fleeMode, treesIn, rocksIn, currentDay, buildSpeed = 1) {
   let structures = { ...structuresIn };
   let avail = { ...resourcesIn };
   const storageCap = storageCapacity(structures);
 
   if (!fleeMode) {
-    Object.keys(structures).forEach((key) => {
+    Object.keys(structures).sort((a, b) => siteRank(structures[a]) - siteRank(structures[b])).forEach((key) => {
       const site = structures[key];
       if (site.blocked) {
         const cost = getBuildCost(site);
@@ -6045,7 +6071,7 @@ function computeTick(structuresIn, workersIn, resourcesIn, pilesIn, onStrike, ha
     // Priority sites (set by the player via the info panel) get first pick of both
     // workers and the materials they bring — a stable sort keeps everything else in
     // its original order.
-    .sort((a, b) => (structures[b].priority ? 1 : 0) - (structures[a].priority ? 1 : 0));
+    .sort((a, b) => siteRank(structures[a]) - siteRank(structures[b]));
 
   let workingList = workersIn.map((w) => ({ ...w }));
 
@@ -6756,7 +6782,10 @@ function spawnBattleUnits(structures, soldiers, attackerCount, year, recruitedKn
     const spawnI0 = Math.max(0.3, Math.min(GRID_COLS - 0.3, entry.i + front.side[0] * offI + front.in[0] * offJ));
     const spawnJ0 = Math.max(0.3, Math.min(GRID_ROWS - 0.3, entry.j + front.side[1] * offI + front.in[1] * offJ));
     const { i: spawnI, j: spawnJ } = dryPointNear(spawnI0, spawnJ0);
-    units.push({ id: battleUnitIdSeq++, side: 'attacker', type, origin: fromStone ? 'stone' : 'wood', homeI: entry.i, homeJ: entry.j, i: spawnI, j: spawnJ, hp: maxHp, maxHp, elev: 0, targetId: null, strengthMult });
+    // The host sets off in small bands one after another, not as one great heap: every
+    // third man waits a little longer, mixed across the kinds of troops.
+    const waitTicks = forcedAttackers ? 0 : Math.floor(((k * 7) % n) / 3) * ATTACK_STAGGER_TICKS;
+    units.push({ id: battleUnitIdSeq++, side: 'attacker', type, origin: fromStone ? 'stone' : 'wood', homeI: entry.i, homeJ: entry.j, i: spawnI, j: spawnJ, hp: maxHp, maxHp, elev: 0, targetId: null, strengthMult, waitTicks });
   }
   return { units, obstacles, keepPos };
 }
@@ -6784,6 +6813,7 @@ function distance2(a, b) {
 }
 
 const ENGAGE_RADIUS = 1.1;
+const ATTACK_STAGGER_TICKS = 9;
 const MAX_BATTLE_TICKS = 600;
 // One defence fought out without drawing it: the same combat steps and the same verdict as the
 // real battle. A generator, so the war council can spread its runs over many short slices
@@ -6991,7 +7021,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     }
   });
   units.forEach((u) => {
-    if (u.hp <= 0 || u.exited) return;
+    if (u.hp <= 0 || u.exited || u.waitTicks > 0) return;
     if (u.side === 'attacker' && (u.routed || u.type === 'saxonCatapult' || u.type === 'saxonSapper' || u.type === 'saxonSiegeTower')) return;
     if (u.targetId != null) {
       if (isMeleeUnit(u)) targetLoad[u.targetId] = (targetLoad[u.targetId] || 0) + 1;
@@ -7010,7 +7040,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
         // fixes.
         if (isMeleeUnit(u) && u.type !== 'saxonLadder' && o.elev > 0) return;
       }
-      else { if (o.side === u.side || o.hp <= 0 || o.routed) return; }
+      else { if (o.side === u.side || o.hp <= 0 || o.routed || o.waitTicks > 0) return; }
       const d = distance2(u, o);
       if (d > engageDist) return;
       candidates.push({ o, d });
@@ -7060,6 +7090,7 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
     }
 
     if (u.side === 'attacker') {
+      if (u.waitTicks > 0) { u.waitTicks -= 1; return; }
       // Reset each tick; the blocker-battering branch below re-marks a unit as exposed
       // only while it's actually shovelling dirt into a ditch this tick.
       u.fillingDitch = false;
@@ -7227,6 +7258,44 @@ function battleTickStep(unitsIn, obstaclesIn, keepPos, smithDamageMult, tickCoun
       // On a Wehrmauer: if the enemy is out of bow range, walk the wall toward them.
       const foe = u.targetId != null ? units.find((o) => o.id === u.targetId) : null;
       if (foe && foe.hp > 0 && distance2(u, foe) > archerRangeFor(u.elev) * 0.85) wallWalkStep(u, foe, walkNet, UNIT_SPEED_PER_TICK * 0.9);
+    }
+    // Knights don't stand and wait to be swarmed: they ride out after stragglers, picking
+    // off whoever is furthest from his fellows, and fall back to their post to catch their
+    // breath once badly hurt.
+    if (u.type === 'champion' && !u.foe) {
+      if (u.homeI == null) { u.homeI = u.i; u.homeJ = u.j; }
+      const home = { i: u.homeI, j: u.homeJ };
+      if (u.retreating || u.hp < u.maxHp * KNIGHT_RETREAT_AT) {
+        u.retreating = u.hp < u.maxHp * KNIGHT_RETURN_AT;
+        u.targetId = null;
+        const dh = distance2(u, home);
+        if (dh > 0.15) { const st = Math.min(1, UNIT_SPEED_PER_TICK * CHAMPION_CHARGE_MULT / dh); u.i += (home.i - u.i) * st; u.j += (home.j - u.j) * st; }
+        else u.hp = Math.min(u.maxHp, u.hp + u.maxHp * KNIGHT_RECOVER_PER_TICK);
+        return;
+      }
+      const cur = u.targetId != null ? units.find((o) => o.id === u.targetId) : null;
+      if (!cur || cur.hp <= 0 || distance2(u, cur) > MELEE_RANGE) {
+        let best = null, bestScore = Infinity;
+        units.forEach((o) => {
+          if (o.side !== 'attacker' || o.hp <= 0 || o.exited || o.routed || o.waitTicks > 0 || o.type === 'saxonSiegeTower') return;
+          if (distance2(o, home) > KNIGHT_HUNT_RADIUS) return;
+          const crowd = units.filter((x) => x !== o && x.side === 'attacker' && x.hp > 0 && !x.exited && !x.routed && distance2(x, o) < 1.4).length;
+          const score = distance2(u, o) + crowd * 2.5;
+          if (score < bestScore) { bestScore = score; best = o; }
+        });
+        u.targetId = best ? best.id : null;
+        if (!best) {
+          const dh = distance2(u, home);
+          if (dh > 0.15) { const st = Math.min(1, UNIT_SPEED_PER_TICK * CHAMPION_CHARGE_MULT / dh); u.i += (home.i - u.i) * st; u.j += (home.j - u.j) * st; }
+          return;
+        }
+        const db = distance2(u, best);
+        if (db > MELEE_RANGE) {
+          const st = Math.min(1, UNIT_SPEED_PER_TICK * CHAMPION_CHARGE_MULT / db, (db - MELEE_RANGE * 0.8) / db);
+          u.i += (best.i - u.i) * st; u.j += (best.j - u.j) * st;
+          return;
+        }
+      }
     }
     if (u.targetId == null) return;
     const target = units.find((o) => o.id === u.targetId);
@@ -7696,7 +7765,8 @@ function knightBattleStats(prog) {
     rank,
     hpMult: (1 + 0.12 * (rank - 1)) * (t === 'zaeh' ? 1.3 : 1),
     dmgMult: (1 + 0.1 * (rank - 1)) * (t === 'sturm' ? 1.25 : 1),
-    armor: t === 'schildwall' ? 0.75 : 1,
+    // Plate and mail turn a good share of every blow; the Schildwall talent more still.
+    armor: (t === 'schildwall' ? 0.75 : 1) * 0.7,
   };
 }
 
@@ -9824,8 +9894,10 @@ export default function CastleBuilder() {
     if (type === 'page') {
       const c = courtRef.current;
       if (c.youths.length >= MAX_YOUTHS) return null;
-      const used = new Set(c.youths.map((y) => y.name));
-      const name = [...YOUTH_NAMES].sort(() => Math.random() - 0.5).find((n) => !used.has(n)) || 'Kuno';
+      // No two noblemen at court share a name: pages, squires and knights (dubbed pages
+      // among them) all count.
+      const used = new Set([...c.youths.map((y) => y.name), ...Object.values(KNIGHT_DEFS).map((k) => k.name)]);
+      const name = [...YOUTH_NAMES].sort(() => Math.random() - 0.5).find((n) => !used.has(n)) || `${YOUTH_NAMES[used.size % YOUTH_NAMES.length]} der Jüngere`;
       const parentId = data && data.parent && recruitedKnightsRef.current[data.parent] ? data.parent : null;
       const parent = parentId ? KNIGHT_DEFS[parentId].name : null;
       const age = 8 + Math.floor(Math.random() * 3);
@@ -10055,8 +10127,8 @@ export default function CastleBuilder() {
         const ready = fallen.filter((f) => dayRef.current - f.day >= KNIGHT_SUCCESSOR_YEARS * 360);
         if (!ready.length) return null;
         const slot = ready[Math.floor(Math.random() * ready.length)];
-        const used = new Set(Object.values(KNIGHT_DEFS).map((k) => k.name));
-        const name = KNIGHT_SUCCESSOR_NAMES.find((n) => !used.has(n)) || `Konrad ${used.size}`;
+        const used = new Set([...Object.values(KNIGHT_DEFS).map((k) => k.name), ...courtRef.current.youths.map((y) => y.name)]);
+        const name = [...KNIGHT_SUCCESSOR_NAMES, ...YOUTH_NAMES].find((n) => !used.has(n)) || `Konrad ${used.size}`;
         const joinCost = data && data.discount ? Math.round(CHAMPION_JOIN_COST / 2) : CHAMPION_JOIN_COST;
         return {
           type, ...def, image: BASE_KNIGHT_LOOKS[slot.look].image,
@@ -12169,7 +12241,7 @@ export default function CastleBuilder() {
 
       const courtierCandidates = [
         { key: 'hofnarr', hired: hofnarrHired, name: 'Der Hofnarr', setHired: setHofnarrHired },
-        { key: 'moorish', hired: moorishHired, name: 'Der Maurische Kämpfer', setHired: setMoorishHired },
+        // The Moor is no courtier to be dragged off: a fighter, he cuts his way out of the sack.
         { key: 'monk', hired: monkHired, name: 'Der Mönch', setHired: setMonkHired },
         { key: 'medicus', hired: medicusHired, name: 'Der Medicus', setHired: setMedicusHired },
         { key: 'lady', hired: ladyHired, name: 'Die Hofdame', setHired: setLadyHired },
@@ -15533,7 +15605,7 @@ export default function CastleBuilder() {
         );
       })()}
 
-      {openPanel === 'hof' && (() => {
+      {(openPanel === 'hof' || openPanel === 'gesinde') && (() => {
         const smithWageMult = SMITH_WAGE_MULT[smithTier] || 1;
         const guests = [];
         const stables = hasDoneAmenity(structures, 'stallungen');
@@ -15701,7 +15773,7 @@ export default function CastleBuilder() {
           </div>
         );
         return (
-          <Modal tabs title="🎭 Der Hofstaat" onClose={() => setOpenPanel(null)} maxWidth={680}>
+          <Modal tabs title={openPanel === 'hof' ? '🎭 Der Hofstaat' : '🔨 Gesinde & Handwerk'} onClose={() => setOpenPanel(null)} maxWidth={680}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem' }}>
               <span style={{ minWidth: 150 }}>🎉 Stimmung bei Hofe <strong>{Math.round(courtMorale)} %</strong></span>
               <div className="cb-meter" style={{ flex: 1 }}><div style={{ width: `${Math.round(courtMorale)}%`, background: courtMorale < COURT_MORALE_LOW_THRESHOLD ? '#a8402c' : courtMorale < 60 ? '#c9a24b' : '#4a7a3c' }} /></div>
@@ -15716,7 +15788,7 @@ export default function CastleBuilder() {
                 ⚖️ Kirchenbann bis Jahr {churchUnrestUntilYear}: Zufriedenheit und Stimmung leiden, keine Heirat möglich.
               </div>
             )}
-            {sections.map(([t, label, empty]) => {
+            {sections.filter(([t]) => t === (openPanel === 'hof' ? 'adel' : 'gesinde')).map(([t, label, empty]) => {
               const list = guests.filter((g) => (g.group || 'gesinde') === t);
               return (
                 <div key={t} style={{ ...card, marginBottom: 10 }}>
